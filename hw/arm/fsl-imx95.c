@@ -7,17 +7,19 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * v0.0.1 scope:
+ * v0.0.2 scope:
  *   - 6x Cortex-A55 cluster instantiated
  *   - GIC-600 (GICv3) wired to all cores including timer PPIs
  *   - DDR mapped at 0x8000_0000
  *   - All non-CPU/GIC peripherals are create_unimplemented_device() stubs
  *     so accesses log instead of faulting
- *   - No LPUART model yet (next step in v0.0.2)
  *
- * Addresses marked TODO must be verified against the i.MX 95 RM before
- * production use. They are placeholders sufficient to get the machine to
- * compile and to instantiate without overlap.
+ * Memory-map addresses and IRQ numbers below are extracted from
+ * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+ * in the NXP BSP. Peripherals reachable only via SCMI -> M33 SM firmware
+ * (CCM, ANATOP, IOMUXC, SRC, GPC, AONMIX/WAKEUPMIX block-control, TRDC,
+ * WDOG1/2) are not in the Linux DTS and are intentionally omitted here;
+ * they return in v0.1 with RM-sourced bases when U-Boot SPL needs them.
  */
 
 #include "qemu/osdep.h"
@@ -38,9 +40,9 @@
 /*
  * Single source of truth for the SoC memory map. Each entry maps a region
  * ID (from enum FslImx95MemoryRegions) to its physical base address, size,
- * and a debug name. v0.0.1 uses placeholders for peripheral addresses -
- * see the TODO comments. The DDR, OCRAM, and GIC addresses are the only
- * ones we count on being correct at this stage.
+ * and a debug name. Values are taken from the NXP BSP device tree at
+ * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi unless
+ * otherwise noted.
  */
 static const struct {
     hwaddr      addr;
@@ -49,49 +51,49 @@ static const struct {
 } fsl_imx95_memmap[FSL_IMX95_NUM_REGIONS] = {
     [FSL_IMX95_RAM]                  = { FSL_IMX95_RAM_START, FSL_IMX95_RAM_SIZE_MAX, "ram" },
 
-    /* GIC-600. TODO: confirm distributor/redistributor bases from RM. */
-    [FSL_IMX95_GIC_DIST]             = { 0x48000000, 64 * KiB,  "gic_dist" },
-    [FSL_IMX95_GIC_REDIST]           = { 0x48060000, 1 * MiB,   "gic_redist" },
-    [FSL_IMX95_GIC_ITS]              = { 0x48040000, 128 * KiB, "gic_its" },
+    /* GIC-600. dtsi: interrupt-controller@48000000 (dist + redist + its). */
+    [FSL_IMX95_GIC_DIST]             = { 0x48000000, 64 * KiB,   "gic_dist" },
+    [FSL_IMX95_GIC_REDIST]           = { 0x48060000, 768 * KiB,  "gic_redist" },
+    [FSL_IMX95_GIC_ITS]              = { 0x48040000, 128 * KiB,  "gic_its" },
 
-    /* On-chip RAM. TODO: confirm OCRAM base and size from RM. */
-    [FSL_IMX95_OCRAM]                = { 0x20480000, 1 * MiB,   "ocram" },
+    /* On-chip SRAM "sram1". dtsi: sram@204c0000. */
+    [FSL_IMX95_OCRAM]                = { 0x204c0000, 96 * KiB,   "ocram" },
 
     /*
-     * LPUARTs in the Wakeup / AON domains.
-     * TODO: pull exact bases from RM. Placeholder bases below are spaced
-     * 0x10000 apart in a plausible Wakeup-domain window so accesses log
-     * cleanly during early bring-up.
+     * LPUART block. compatible: "fsl,imx95-lpuart". Each instance is
+     * a 4 KiB MMIO window. LPUART1/2 sit in the AON aips1 bus,
+     * LPUART3-6 in the Wakeup aips2 bus, LPUART7/8 in aips3.
+     * LPUART1 is the 19x19 EVK console (stdout-path = &lpuart1).
      */
-    [FSL_IMX95_LPUART1]              = { 0x44380000, 64 * KiB,  "lpuart1" },
-    [FSL_IMX95_LPUART2]              = { 0x44390000, 64 * KiB,  "lpuart2" },
-    [FSL_IMX95_LPUART3]              = { 0x42570000, 64 * KiB,  "lpuart3" },
+    [FSL_IMX95_LPUART1]              = { 0x44380000, 4 * KiB,    "lpuart1" },
+    [FSL_IMX95_LPUART2]              = { 0x44390000, 4 * KiB,    "lpuart2" },
+    [FSL_IMX95_LPUART3]              = { 0x42570000, 4 * KiB,    "lpuart3" },
+    [FSL_IMX95_LPUART4]              = { 0x42580000, 4 * KiB,    "lpuart4" },
+    [FSL_IMX95_LPUART5]              = { 0x42590000, 4 * KiB,    "lpuart5" },
+    [FSL_IMX95_LPUART6]              = { 0x425a0000, 4 * KiB,    "lpuart6" },
+    [FSL_IMX95_LPUART7]              = { 0x42690000, 4 * KiB,    "lpuart7" },
+    [FSL_IMX95_LPUART8]              = { 0x426a0000, 4 * KiB,    "lpuart8" },
 
-    /* Clock / reset / pinmux. TODO: verify all bases. */
-    [FSL_IMX95_CCM]                  = { 0x44450000, 64 * KiB,  "ccm" },
-    [FSL_IMX95_ANATOP]               = { 0x44480000, 64 * KiB,  "anatop" },
-    [FSL_IMX95_IOMUXC]               = { 0x443c0000, 64 * KiB,  "iomuxc" },
-    [FSL_IMX95_SRC]                  = { 0x44460000, 64 * KiB,  "src" },
-    [FSL_IMX95_GPC]                  = { 0x44470000, 64 * KiB,  "gpc" },
+    /*
+     * NETCMIX block-control syscon. dtsi: syscon@4c810000 with reg = 8.
+     * Stub window widened to one peripheral slot (64 KiB) to catch any
+     * register probes outside the two registers Linux currently uses.
+     */
+    [FSL_IMX95_BLK_CTRL_NETCMIX]     = { 0x4c810000, 64 * KiB,   "blk_ctrl_netcmix" },
 
-    /* BLK_CTRL regions per power domain. TODO: verify. */
-    [FSL_IMX95_BLK_CTRL_AONMIX]      = { 0x44410000, 64 * KiB,  "blk_ctrl_aonmix" },
-    [FSL_IMX95_BLK_CTRL_WAKEUPMIX]   = { 0x42420000, 64 * KiB,  "blk_ctrl_wakeupmix" },
-    [FSL_IMX95_BLK_CTRL_NETCMIX]     = { 0x4c810000, 64 * KiB,  "blk_ctrl_netcmix" },
+    /*
+     * System Manager SCMI channel. dtsi: mu2 mailbox@445b0000 (4 KiB) with
+     * a 1 KiB sram0 child at 0x445b1000 holding the two SCMI A2P/P2A
+     * shared-memory buffers.
+     */
+    [FSL_IMX95_SM_MU]                = { 0x445b0000, 4 * KiB,    "sm_mu" },
+    [FSL_IMX95_SM_SHMEM]             = { 0x445b1000, 1 * KiB,    "sm_shmem" },
 
-    /* System Manager mailbox / shared memory (Cortex-M33 firmware target). */
-    [FSL_IMX95_SM_MU]                = { 0x47540000, 64 * KiB,  "sm_mu" },
-    [FSL_IMX95_SM_SHMEM]             = { 0x445b1000, 4 * KiB,   "sm_shmem" },
+    /* EdgeLock Secure Enclave mailbox (elemu0). dtsi: mailbox@47520000. */
+    [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,   "ele_mu" },
 
-    /* EdgeLock Secure Enclave mailbox. */
-    [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,  "ele_mu" },
-
-    /* TRDC central. */
-    [FSL_IMX95_TRDC]                 = { 0x44270000, 64 * KiB,  "trdc" },
-
-    /* Watchdogs. */
-    [FSL_IMX95_WDOG1]                = { 0x442d0000, 64 * KiB,  "wdog1" },
-    [FSL_IMX95_WDOG2]                = { 0x442e0000, 64 * KiB,  "wdog2" },
+    /* Wakeup-domain watchdog. dtsi: watchdog@42490000. */
+    [FSL_IMX95_WDOG3]                = { 0x42490000, 64 * KiB,   "wdog3" },
 };
 
 /*
@@ -103,13 +105,12 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
         FSL_IMX95_LPUART1, FSL_IMX95_LPUART2, FSL_IMX95_LPUART3,
-        FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
-        FSL_IMX95_SRC, FSL_IMX95_GPC,
-        FSL_IMX95_BLK_CTRL_AONMIX, FSL_IMX95_BLK_CTRL_WAKEUPMIX,
+        FSL_IMX95_LPUART4, FSL_IMX95_LPUART5, FSL_IMX95_LPUART6,
+        FSL_IMX95_LPUART7, FSL_IMX95_LPUART8,
         FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_SM_MU, FSL_IMX95_SM_SHMEM,
-        FSL_IMX95_ELE_MU, FSL_IMX95_TRDC,
-        FSL_IMX95_WDOG1, FSL_IMX95_WDOG2,
+        FSL_IMX95_ELE_MU,
+        FSL_IMX95_WDOG3,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {

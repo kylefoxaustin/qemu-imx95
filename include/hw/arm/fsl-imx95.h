@@ -7,9 +7,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * NOTE: This is v0.0.1 scaffolding. Addresses marked TODO are placeholders
- * that need to be verified against the i.MX 95 Reference Manual,
- * sections "System Address Map" and "Interrupt Mapping".
+ * Address and IRQ ground truth comes from the NXP BSP device tree at
+ *   arch/arm64/boot/dts/freescale/imx95.dtsi
+ * (kernel commit pinned in the NXP linux-imx fork). Peripherals that the
+ * kernel reaches through SCMI -> M33 SM firmware (CCM, ANATOP, IOMUXC,
+ * SRC, GPC, AONMIX/WAKEUPMIX block-control, TRDC, WDOG1/2) are not present
+ * in the Linux DTS and are intentionally absent here; they will be added
+ * back in v0.1 with RM-sourced bases when U-Boot SPL bring-up begins.
  */
 
 #ifndef FSL_IMX95_H
@@ -56,8 +60,7 @@ struct FslImx95State {
 
 /*
  * Memory map region identifiers. The actual addresses live in the memmap
- * table in fsl-imx95.c. Anything tagged TODO is a placeholder; verify
- * against the RM before promoting beyond v0.0.1.
+ * table in fsl-imx95.c.
  */
 enum FslImx95MemoryRegions {
     FSL_IMX95_RAM,
@@ -67,52 +70,49 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_GIC_REDIST,
     FSL_IMX95_GIC_ITS,
 
-    /* On-chip RAM */
+    /* On-chip SRAM "sram1" */
     FSL_IMX95_OCRAM,
 
-    /* AON / Wakeup domain peripherals - LPUART block */
+    /* LPUART block (8 instances; all currently stubbed) */
     FSL_IMX95_LPUART1,
     FSL_IMX95_LPUART2,
     FSL_IMX95_LPUART3,
+    FSL_IMX95_LPUART4,
+    FSL_IMX95_LPUART5,
+    FSL_IMX95_LPUART6,
+    FSL_IMX95_LPUART7,
+    FSL_IMX95_LPUART8,
 
-    /* Clock / reset / pinmux infrastructure (stubbed as unimplemented) */
-    FSL_IMX95_CCM,
-    FSL_IMX95_IOMUXC,
-    FSL_IMX95_SRC,
-    FSL_IMX95_GPC,
-    FSL_IMX95_ANATOP,
-
-    /* BLK_CTRL aggregates (one per power domain - stubbed) */
-    FSL_IMX95_BLK_CTRL_AONMIX,
-    FSL_IMX95_BLK_CTRL_WAKEUPMIX,
+    /* NETCMIX block control (the only BLK_CTRL the kernel touches directly) */
     FSL_IMX95_BLK_CTRL_NETCMIX,
 
-    /* System Manager interface: M33 mailbox + SCMI shared memory */
+    /* System Manager SCMI: mu2 mailbox + sram0 shared-memory buffer */
     FSL_IMX95_SM_MU,
     FSL_IMX95_SM_SHMEM,
 
-    /* EdgeLock Secure Enclave - stubbed; full model deferred */
+    /* EdgeLock Secure Enclave mailbox (elemu0) */
     FSL_IMX95_ELE_MU,
 
-    /* Trusted Resource Domain Controller - stubbed */
-    FSL_IMX95_TRDC,
+    /* Wakeup-domain watchdog (WDOG1/WDOG2 are M33-domain, not modeled) */
+    FSL_IMX95_WDOG3,
 
-    /* Watchdogs */
-    FSL_IMX95_WDOG1,
-    FSL_IMX95_WDOG2,
-
-    /* Reserved for future expansion */
     FSL_IMX95_NUM_REGIONS,
 };
 
 /*
- * IRQ assignments. All values are TODO until cross-referenced with the
- * RM's "GIC interrupt assignments" table.
+ * IRQ assignments. All values are GIC SPI numbers extracted from
+ * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi.
  */
 enum FslImx95Irqs {
-    FSL_IMX95_LPUART1_IRQ   = 19,   /* TODO: verify */
-    FSL_IMX95_LPUART2_IRQ   = 20,   /* TODO: verify */
-    FSL_IMX95_LPUART3_IRQ   = 21,   /* TODO: verify */
+    FSL_IMX95_LPUART1_IRQ   = 19,
+    FSL_IMX95_LPUART2_IRQ   = 20,
+    FSL_IMX95_LPUART3_IRQ   = 64,
+    FSL_IMX95_LPUART4_IRQ   = 65,
+    FSL_IMX95_LPUART5_IRQ   = 66,
+    FSL_IMX95_LPUART6_IRQ   = 67,
+    FSL_IMX95_LPUART7_IRQ   = 68,
+    FSL_IMX95_LPUART8_IRQ   = 69,
+    FSL_IMX95_WDOG3_IRQ     = 77,
 };
 
 #endif /* FSL_IMX95_H */
