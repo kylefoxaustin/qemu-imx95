@@ -620,6 +620,19 @@ config FSL_IMX8MP_EVK
     depends on TCG
     select FSL_IMX8MP
 
+config FSL_IMX95
+    bool
+    select ARM_GIC
+    select ARM_GICV3
+    select UNIMP
+
+config FSL_IMX95_EVK
+    bool
+    default y
+    depends on AARCH64
+    depends on TCG
+    select FSL_IMX95
+
 config FSL_IMX8MM
     bool
     imply PCI_DEVICES
