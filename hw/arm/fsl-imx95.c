@@ -70,6 +70,15 @@ static const struct {
     [FSL_IMX95_OCRAM]                = { 0x204c0000, 96 * KiB,   "ocram" },
 
     /*
+     * System counter. dtsi: timer@44290000 reg = <... 0x30000>.
+     * Logging stub for v0.1; the ARM generic timer in QEMU's CPU
+     * model already provides time, and U-Boot SPL's timer_init()
+     * reads CNTFRQ_EL0 rather than this MMIO block. Promote to a
+     * real model if any guest write to this region surfaces.
+     */
+    [FSL_IMX95_SYSCNT]               = { 0x44290000, 192 * KiB,  "sysctr" },
+
+    /*
      * LPUART block. compatible: "fsl,imx95-lpuart". Each instance is
      * a 4 KiB MMIO window. LPUART1/2 sit in the AON aips1 bus,
      * LPUART3-6 in the Wakeup aips2 bus, LPUART7/8 in aips3.
@@ -128,6 +137,7 @@ static const struct {
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
+        FSL_IMX95_SYSCNT,
         FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
         FSL_IMX95_SRC, FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
