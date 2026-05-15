@@ -133,8 +133,9 @@ static const struct {
     [FSL_IMX95_SM_MU]                = { 0x445b0000, 4 * KiB,    "sm_mu" },
     [FSL_IMX95_SM_SHMEM]             = { 0x445b1000, 1 * KiB,    "sm_shmem" },
 
-    /* EdgeLock Secure Enclave mailbox (elemu0). dtsi: mailbox@47520000. */
-    [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,   "ele_mu" },
+    /* EdgeLock Secure Enclave mailboxes. dtsi: mailbox@47520000.. */
+    [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,   "elemu0" },
+    [FSL_IMX95_ELE_MU1]              = { 0x47530000, 64 * KiB,   "elemu1" },
 
     /* Wakeup-domain watchdog. dtsi: watchdog@42490000. */
     [FSL_IMX95_WDOG3]                = { 0x42490000, 64 * KiB,   "wdog3" },
@@ -154,7 +155,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
-        FSL_IMX95_WDOG3,
+        FSL_IMX95_ELE_MU1,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
@@ -347,6 +348,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->scmi_server), errp)) {
         return;
     }
+
+    /*
+     * Watchdog 3 (the Wakeup-domain wdog the kernel sees). U-Boot SPL
+     * also disables it in arch_cpu_init() before the console comes up.
+     * Stub model is enough to satisfy disable_wdog().
+     */
+    s->wdog3 = qdev_new("imx95.wdog");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog3), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog3), 0,
+                    fsl_imx95_memmap[FSL_IMX95_WDOG3].addr);
 
     /* All peripherals not yet modeled get logging stubs. */
     fsl_imx95_install_unimplemented(s);
