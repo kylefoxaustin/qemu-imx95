@@ -66,8 +66,19 @@ static const struct {
     [FSL_IMX95_GIC_REDIST]           = { 0x48060000, 768 * KiB,  "gic_redist" },
     [FSL_IMX95_GIC_ITS]              = { 0x48040000, 128 * KiB,  "gic_its" },
 
-    /* On-chip SRAM "sram1". dtsi: sram@204c0000. */
-    [FSL_IMX95_OCRAM]                = { 0x204c0000, 96 * KiB,   "ocram" },
+    /*
+     * On-chip RAM (OCRAM-A). The Linux DTS only declares a 96 KiB
+     * sram1 slice at 0x204C0000, but U-Boot SPL is linked for
+     * CONFIG_SPL_TEXT_BASE=0x20480000 with BSS+stack at 0x204D6000
+     * (see references/uboot-imx/configs/imx95_19x19_evk_defconfig).
+     * Cover the full SPL run + stack area as one writable region
+     * spanning 0x20480000-0x204D8000. Linux's sram1 slice sits
+     * inside this range and continues to work unchanged.
+     * TODO: confirm precise OCRAM-A size against the i.MX 95 RM
+     * "Memory Map" chapter; 384 KiB is sufficient for SPL but may
+     * be smaller than real silicon.
+     */
+    [FSL_IMX95_OCRAM]                = { 0x20480000, 384 * KiB,  "ocram" },
 
     /*
      * System counter. dtsi: timer@44290000 reg = <... 0x30000>.
