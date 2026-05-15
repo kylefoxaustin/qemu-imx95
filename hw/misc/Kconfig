@@ -111,6 +111,10 @@ config IMX95_SCMI_SERVER
 config IMX95_WDOG
     bool
 
+config IMX95_ELE_SERVER
+    bool
+    select IMX_MU
+
 config STM32_RCC
     bool
 
