@@ -78,6 +78,9 @@ enum FslImx95MemoryRegions {
     /* On-chip SRAM "sram1" */
     FSL_IMX95_OCRAM,
 
+    /* System counter (drives the ARM generic timer). */
+    FSL_IMX95_SYSCNT,
+
     /* LPUART block (8 instances; all currently stubbed) */
     FSL_IMX95_LPUART1,
     FSL_IMX95_LPUART2,
