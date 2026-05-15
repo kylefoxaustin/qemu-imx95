@@ -137,8 +137,25 @@ static const struct {
     [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,   "elemu0" },
     [FSL_IMX95_ELE_MU1]              = { 0x47530000, 64 * KiB,   "elemu1" },
 
-    /* Wakeup-domain watchdog. dtsi: watchdog@42490000. */
+    /*
+     * Watchdogs. WDG3 is in the Linux DTS (the kernel sees it); WDG4
+     * and WDG5 are SPL-only - U-Boot's arch_cpu_init() disables all
+     * three. Bases from references/uboot-imx/arch/arm/include/asm/
+     * arch-imx9/imx-regs.h.
+     */
     [FSL_IMX95_WDOG3]                = { 0x42490000, 64 * KiB,   "wdog3" },
+    [FSL_IMX95_WDOG4]                = { 0x424a0000, 64 * KiB,   "wdog4" },
+    [FSL_IMX95_WDOG5]                = { 0x424b0000, 64 * KiB,   "wdog5" },
+
+    /*
+     * GPIO bases from dtsi (gpio1@47400000) and U-Boot imx-regs.h
+     * (GPIO2-5 at 0x43810000, 0x43820000, 0x43840000, 0x43850000).
+     */
+    [FSL_IMX95_GPIO1]                = { 0x47400000, 64 * KiB,   "gpio1" },
+    [FSL_IMX95_GPIO2]                = { 0x43810000, 64 * KiB,   "gpio2" },
+    [FSL_IMX95_GPIO3]                = { 0x43820000, 64 * KiB,   "gpio3" },
+    [FSL_IMX95_GPIO4]                = { 0x43840000, 64 * KiB,   "gpio4" },
+    [FSL_IMX95_GPIO5]                = { 0x43850000, 64 * KiB,   "gpio5" },
 };
 
 /*
@@ -155,6 +172,9 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
+        FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
+        FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
+        FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
@@ -349,12 +369,11 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * ELE mailbox 1. v0.1 has no ELE responder; this instance is a
-     * plain MU register file so that SPL's mu_hal_init (which reads
-     * PAR / writes xCR / polls TSR) sees coherent register values
-     * and progresses past the bare init. ele_get_info() will still
-     * sit waiting for an RX response without a responder, but the
-     * point at which that happens moves further into SPL.
+     * ELE mailbox 1 and its responder stub. The MU is a plain
+     * register file; the ele-server hangs off the MU's TR-write hook
+     * and answers ELE-protocol commands from SPL with stub responses.
+     * v0.1 only needs ele_get_info() to succeed for U-Boot SPL's
+     * imx9_probe_mu() to complete.
      */
     {
         SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->ele_mu1);
@@ -364,6 +383,12 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(mu_sbd, 0,
                         fsl_imx95_memmap[FSL_IMX95_ELE_MU1].addr);
+    }
+
+    object_property_set_link(OBJECT(&s->ele_server), "mu",
+                             OBJECT(&s->ele_mu1), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server), errp)) {
+        return;
     }
 
     /*
@@ -396,6 +421,8 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "ele_mu1", &s->ele_mu1, TYPE_IMX_MU);
     object_initialize_child(obj, "scmi-server", &s->scmi_server,
                             TYPE_IMX95_SCMI_SERVER);
+    object_initialize_child(obj, "ele-server", &s->ele_server,
+                            TYPE_IMX95_ELE_SERVER);
 }
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)

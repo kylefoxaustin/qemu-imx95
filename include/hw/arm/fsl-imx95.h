@@ -26,6 +26,7 @@
 #include "target/arm/cpu.h"
 #include "hw/char/imx_lpuart.h"
 #include "hw/intc/arm_gicv3_common.h"
+#include "hw/misc/imx95_ele_server.h"
 #include "hw/misc/imx95_scmi_server.h"
 #include "hw/misc/imx_mu.h"
 #include "hw/core/sysbus.h"
@@ -67,6 +68,7 @@ struct FslImx95State {
     IMXMUState              sm_mu;
     IMXMUState              ele_mu1;
     IMX95SCMIServerState    scmi_server;
+    IMX95ELEServerState     ele_server;
     DeviceState            *wdog3;
 };
 
@@ -123,8 +125,17 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_ELE_MU,
     FSL_IMX95_ELE_MU1,
 
-    /* Wakeup-domain watchdog (WDOG1/WDOG2 are M33-domain, not modeled) */
+    /* Watchdogs. SPL disables WDG3/4/5 in arch_cpu_init(). */
     FSL_IMX95_WDOG3,
+    FSL_IMX95_WDOG4,
+    FSL_IMX95_WDOG5,
+
+    /* GPIO controllers (1..5). SPL gpio_reset()s 2..5; #1 added for symmetry. */
+    FSL_IMX95_GPIO1,
+    FSL_IMX95_GPIO2,
+    FSL_IMX95_GPIO3,
+    FSL_IMX95_GPIO4,
+    FSL_IMX95_GPIO5,
 
     FSL_IMX95_NUM_REGIONS,
 };
