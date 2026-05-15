@@ -627,6 +627,7 @@ config FSL_IMX95
     select IMX_LPUART
     select IMX_MU
     select IMX95_SCMI_SERVER
+    select IMX95_WDOG
     select UNIMP
 
 config FSL_IMX95_EVK
