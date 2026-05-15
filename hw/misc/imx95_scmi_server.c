@@ -172,13 +172,14 @@ static void scmi_base(IMX95SCMIServerState *s, unsigned int idx,
  * answers so consumers don't error out.
  */
 /*
- * Advertise zero clocks so scmi_clk_probe() doesn't register CCF
- * children (which would all get the same name and clash). U-Boot
- * consumers that call imx_clk_scmi_enable() / set_rate() / etc.
- * directly bypass CCF and go straight through SCMI, so they still
- * succeed via the RATE_SET / CONFIG_SET / PARENT_SET handlers below.
+ * Advertise enough clocks to cover IMX95_CLK_* indices used by SPL
+ * (LPUART1 is index 52 = IMX95_CCM_NUM_CLK_SRC + 11). Each clock
+ * must have a UNIQUE name when CCF (CONFIG_SPL_CLK_CCF) registers
+ * it; without that, clk_register() rejects duplicates and CCF ends
+ * up with zero clocks, which makes clk_enable("ipg") fail -ENOENT
+ * inside the LPUART serial driver's probe.
  */
-#define SCMI_CLOCK_NUM              0
+#define SCMI_CLOCK_NUM              80
 #define SCMI_CLOCK_DEFAULT_RATE     24000000
 
 #define SCMI_MSG_CLOCK_ATTRIBUTES       0x03
@@ -209,12 +210,19 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
     }
     case SCMI_MSG_CLOCK_ATTRIBUTES: {
         /*
-         * Response: attributes (u32) + name (16 bytes). attributes
-         * field has the clock-enabled bit (0) and other flags; keep
-         * it 0 (nothing special). Name is generic.
+         * Request payload (1 word): clock_id.
+         * Response: attributes (u32) + name (16 bytes). Each clock
+         * needs a unique name for CCF's clk_register() not to reject
+         * duplicates. Pull clock_id from shmem and embed in the name.
          */
-        uint8_t reply[4 + 16] = {0};
-        snprintf((char *)(reply + 4), 16, "clk_stub");
+        uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
+        uint8_t  reply[4 + 16] = {0};
+
+        if (clock_id >= SCMI_CLOCK_NUM) {
+            scmi_complete(s, idx, SCMI_NOT_SUPPORTED, NULL, 0);
+            return;
+        }
+        snprintf((char *)(reply + 4), 16, "clk_%u", clock_id);
         scmi_complete(s, idx, SCMI_SUCCESS, reply, sizeof(reply));
         return;
     }
