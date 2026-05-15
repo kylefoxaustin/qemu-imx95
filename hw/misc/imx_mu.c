@@ -105,6 +105,24 @@ void imx_mu_set_doorbell_handler(IMXMUState *s,
     s->doorbell_opaque  = opaque;
 }
 
+void imx_mu_set_tr_write_handler(IMXMUState *s,
+                                 IMXMUTRWriteHandler handler,
+                                 void *opaque)
+{
+    s->tr_write_handler = handler;
+    s->tr_write_opaque  = opaque;
+}
+
+void imx_mu_deliver_rr(IMXMUState *s, unsigned int idx, uint32_t value)
+{
+    if (idx >= IMX_MU_NUM_CHANNELS) {
+        return;
+    }
+    s->rr[idx]  = value;
+    s->rsr     |= IMX_MU_V2_BIT(idx);
+    imx_mu_update_irq(s);
+}
+
 static uint64_t imx_mu_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMXMUState *s = opaque;
@@ -192,12 +210,17 @@ static void imx_mu_write(void *opaque, hwaddr offset,
         unsigned idx = (offset - IMX_MU_TR_BASE) / 4;
         s->tr[idx] = value;
         /*
-         * Writing TR[n] clears TSR.TEn (TX empty) until something
-         * else consumes the slot. The SCMI server stub will pull
-         * the value out and clear it; absent a consumer the slot
-         * stays "full" forever, which is correct stub behaviour.
+         * Writing TR[n] clears TSR.TEn (TX empty). If a TR-write
+         * handler is registered, it consumes the word synchronously
+         * and we re-set TEn so subsequent writes to the same slot
+         * succeed without polling. Absent a handler the slot stays
+         * "full" forever, which is correct for an unattached MU.
          */
         s->tsr &= ~IMX_MU_V2_BIT(idx);
+        if (s->tr_write_handler) {
+            s->tr_write_handler(s->tr_write_opaque, idx, value);
+            s->tsr |= IMX_MU_V2_BIT(idx);
+        }
         imx_mu_update_irq(s);
         return;
     }
