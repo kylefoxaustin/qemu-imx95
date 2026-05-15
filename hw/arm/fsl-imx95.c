@@ -51,7 +51,9 @@ static const struct {
     size_t      size;
     const char *name;
 } fsl_imx95_memmap[FSL_IMX95_NUM_REGIONS] = {
-    [FSL_IMX95_RAM]                  = { FSL_IMX95_RAM_START, FSL_IMX95_RAM_SIZE_MAX, "ram" },
+    [FSL_IMX95_RAM]                  = {
+        FSL_IMX95_RAM_START, FSL_IMX95_RAM_SIZE_MAX, "ram"
+    },
 
     /* GIC-600. dtsi: interrupt-controller@48000000 (dist + redist + its). */
     [FSL_IMX95_GIC_DIST]             = { 0x48000000, 64 * KiB,   "gic_dist" },
@@ -197,7 +199,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(gicsbd, 0, fsl_imx95_memmap[FSL_IMX95_GIC_DIST].addr);
         sysbus_mmio_map(gicsbd, 1, fsl_imx95_memmap[FSL_IMX95_GIC_REDIST].addr);
 
-        /* Wire the per-CPU timer PPIs and IRQ/FIQ lines (same pattern as 8MP). */
+        /* Wire the per-CPU timer PPIs and IRQ/FIQ lines. */
         for (i = 0; i < ms->smp.cpus; i++) {
             DeviceState *cpudev = DEVICE(&s->cpu[i]);
             int intidbase = FSL_IMX95_NUM_IRQS + i * GIC_INTERNAL;
