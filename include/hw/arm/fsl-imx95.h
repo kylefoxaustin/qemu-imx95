@@ -47,8 +47,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslImx95State, FSL_IMX95)
 enum FslImx95Configuration {
     FSL_IMX95_NUM_A55_CPUS  = 6,
     FSL_IMX95_NUM_LPUARTS   = 8,    /* LPUART1..LPUART8 */
-    FSL_IMX95_NUM_IRQS      = 320,  /* GIC-600 supports up to 1020 SPIs; this
-                                     * is a conservative budget for v0.0.1 */
+    FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
 };
 
 struct FslImx95State {
