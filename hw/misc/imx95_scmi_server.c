@@ -257,6 +257,20 @@ static const Property imx95_scmi_server_properties[] = {
                        inbound_channels, 0x3),
 };
 
+static void imx95_scmi_server_reset(DeviceState *dev)
+{
+    IMX95SCMIServerState *s = IMX95_SCMI_SERVER(dev);
+
+    /*
+     * Real silicon has the M33 SM firmware initialise the SCMI shared
+     * memory before releasing the A55 cluster: channel_status is set
+     * with the CHANNEL_FREE bit so the agent's first
+     * scmi_write_msg_to_smt() finds the channel ready. With no M33
+     * actually running, our stub takes that responsibility.
+     */
+    smt_write32(s, SMT_CHAN_STATUS, SMT_CHAN_FREE);
+}
+
 static void imx95_scmi_server_realize(DeviceState *dev, Error **errp)
 {
     IMX95SCMIServerState *s = IMX95_SCMI_SERVER(dev);
@@ -290,6 +304,7 @@ static void imx95_scmi_server_class_init(ObjectClass *klass, const void *data)
 
     dc->realize = imx95_scmi_server_realize;
     dc->vmsd = &vmstate_imx95_scmi_server;
+    device_class_set_legacy_reset(dc, imx95_scmi_server_reset);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "qemu-imx95 SCMI server stub (v0.1, base + clock + pinctrl)";
     device_class_set_props(dc, imx95_scmi_server_properties);
