@@ -156,6 +156,14 @@ static const struct {
     [FSL_IMX95_GPIO3]                = { 0x43820000, 64 * KiB,   "gpio3" },
     [FSL_IMX95_GPIO4]                = { 0x43840000, 64 * KiB,   "gpio4" },
     [FSL_IMX95_GPIO5]                = { 0x43850000, 64 * KiB,   "gpio5" },
+
+    /*
+     * ARM SMMU-v3 at 0x490d0000 (U-Boot imx-regs.h SMMU_BASE_ADDR).
+     * 128 KiB window covers CR0 / CR0_ACK / GBPA + the SMMU programming
+     * page. Stub returns 0 on read so SPL's disable_smmuv3() sees
+     * CR0.SMMUEN clear and early-exits.
+     */
+    [FSL_IMX95_SMMU]                 = { 0x490d0000, 128 * KiB,  "smmu" },
 };
 
 /*
@@ -175,6 +183,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
+        FSL_IMX95_SMMU,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {

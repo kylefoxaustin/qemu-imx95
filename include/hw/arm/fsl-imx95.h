@@ -137,6 +137,9 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_GPIO4,
     FSL_IMX95_GPIO5,
 
+    /* ARM SMMU-v3 - SPL's disable_smmuv3() reads CR0; stub returns 0. */
+    FSL_IMX95_SMMU,
+
     FSL_IMX95_NUM_REGIONS,
 };
 
