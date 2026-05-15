@@ -7,13 +7,17 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Address and IRQ ground truth comes from the NXP BSP device tree at
- *   arch/arm64/boot/dts/freescale/imx95.dtsi
- * (kernel commit pinned in the NXP linux-imx fork). Peripherals that the
- * kernel reaches through SCMI -> M33 SM firmware (CCM, ANATOP, IOMUXC,
- * SRC, GPC, AONMIX/WAKEUPMIX block-control, TRDC, WDOG1/2) are not present
- * in the Linux DTS and are intentionally absent here; they will be added
- * back in v0.1 with RM-sourced bases when U-Boot SPL bring-up begins.
+ * Address and IRQ ground truth comes from two sources:
+ *   - Linux DTS for everything Linux probes directly:
+ *     arch/arm64/boot/dts/freescale/imx95.dtsi
+ *   - NXP U-Boot's RM-derived header for the SCMI-routed peripherals
+ *     U-Boot SPL pokes before SCMI is up:
+ *     arch/arm/include/asm/arch-imx9/imx-regs.h
+ * The latter set (CCM, ANATOP, IOMUXC, SRC, TRDC, the BLK_CTRL
+ * aggregates) is currently logging-stub only - they are not modelled
+ * because the NXP imx95-evk SPL routes all clock/pinmux/power-domain
+ * access through SCMI to the M33 SM (and the SCMI server stub lands
+ * elsewhere in v0.1).
  */
 
 #ifndef FSL_IMX95_H
@@ -84,7 +88,21 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_LPUART7,
     FSL_IMX95_LPUART8,
 
-    /* NETCMIX block control (the only BLK_CTRL the kernel touches directly) */
+    /*
+     * Clock / reset / pinmux infrastructure. SCMI-routed when M33 SM
+     * is up; SPL touches them only before SCMI, kernel never. Logging
+     * stubs in v0.1.
+     */
+    FSL_IMX95_CCM,
+    FSL_IMX95_ANATOP,
+    FSL_IMX95_IOMUXC,
+    FSL_IMX95_SRC,
+    FSL_IMX95_TRDC_AON,
+
+    /* BLK_CTRL aggregates per power domain. Logging stubs in v0.1. */
+    FSL_IMX95_BLK_CTRL_S_AONMIX,
+    FSL_IMX95_BLK_CTRL_NS_ANOMIX,
+    FSL_IMX95_BLK_CTRL_WAKEUPMIX,
     FSL_IMX95_BLK_CTRL_NETCMIX,
 
     /* System Manager SCMI: mu2 mailbox + sram0 shared-memory buffer */
