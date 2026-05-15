@@ -66,6 +66,7 @@ struct FslImx95State {
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
     IMX95SCMIServerState    scmi_server;
+    DeviceState            *wdog3;
 };
 
 /*
@@ -117,8 +118,9 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_SM_MU,
     FSL_IMX95_SM_SHMEM,
 
-    /* EdgeLock Secure Enclave mailbox (elemu0) */
+    /* EdgeLock Secure Enclave mailboxes (elemu0/elemu1 needed for SPL) */
     FSL_IMX95_ELE_MU,
+    FSL_IMX95_ELE_MU1,
 
     /* Wakeup-domain watchdog (WDOG1/WDOG2 are M33-domain, not modeled) */
     FSL_IMX95_WDOG3,
