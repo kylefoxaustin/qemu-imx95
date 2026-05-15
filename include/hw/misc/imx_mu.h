@@ -51,6 +51,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXMUState, IMX_MU)
 /* CR.RST clears all state when written (V2 bit 0). */
 #define IMX_MU_CR_RST           BIT(0)
 
+/*
+ * Optional callback invoked when the guest writes a 0->1 transition
+ * on any GCR.GIRn bit (a doorbell trigger from the agent side). The
+ * SCMI server stub registers itself here to process inbound SCMI
+ * messages. Unset by default; the model functions as a plain register
+ * file when no handler is registered.
+ */
+typedef void (*IMXMUDoorbellHandler)(void *opaque, unsigned int idx);
+
 struct IMXMUState {
     SysBusDevice    parent_obj;
 
@@ -74,7 +83,19 @@ struct IMXMUState {
     uint32_t        rsr;
     uint32_t        tr[IMX_MU_NUM_CHANNELS];
     uint32_t        rr[IMX_MU_NUM_CHANNELS];
+
+    /* Doorbell forwarding (see typedef above). */
+    IMXMUDoorbellHandler doorbell_handler;
+    void                *doorbell_opaque;
 };
+
+/*
+ * Register a doorbell handler. Replaces any previously registered
+ * handler. Call with handler = NULL to deregister.
+ */
+void imx_mu_set_doorbell_handler(IMXMUState *s,
+                                 IMXMUDoorbellHandler handler,
+                                 void *opaque);
 
 /*
  * External hook: peripheral code (e.g. an SCMI server stub) can call

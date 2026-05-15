@@ -97,6 +97,14 @@ void imx_mu_assert_gip(IMXMUState *s, unsigned int idx)
     imx_mu_update_irq(s);
 }
 
+void imx_mu_set_doorbell_handler(IMXMUState *s,
+                                 IMXMUDoorbellHandler handler,
+                                 void *opaque)
+{
+    s->doorbell_handler = handler;
+    s->doorbell_opaque  = opaque;
+}
+
 static uint64_t imx_mu_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMXMUState *s = opaque;
@@ -243,17 +251,28 @@ static void imx_mu_write(void *opaque, hwaddr offset,
         imx_mu_update_irq(s);
         break;
 
-    case IMX_MU_GCR:
+    case IMX_MU_GCR: {
         /*
-         * GCR.GIRn writes are doorbell triggers. The convention in
-         * this V2 layout is "write 1 to assert", and HW clears the
-         * bit once the peer ACKs. With no peer in v0.1 we store the
-         * value as-is; an SCMI server stub will read it, do work,
-         * and call imx_mu_assert_gip() on the response side.
+         * GCR.GIRn writes are doorbell triggers. Detect 0->1 transitions
+         * and dispatch each newly-asserted channel to the registered
+         * handler (typically the SCMI server stub). The handler runs
+         * synchronously and is expected to "consume" the request, after
+         * which the model auto-clears the bit - mirroring real HW where
+         * the bit clears once the peer ACKs.
          */
+        uint32_t mask  = (1u << IMX_MU_NUM_CHANNELS) - 1u;
+        uint32_t newly = (value & ~s->gcr) & mask;
         s->gcr = value;
+        for (unsigned i = 0; i < IMX_MU_NUM_CHANNELS; i++) {
+            if ((newly & IMX_MU_V2_BIT(i)) && s->doorbell_handler) {
+                s->doorbell_handler(s->doorbell_opaque, i);
+                /* Auto-clear: handler has processed the doorbell. */
+                s->gcr &= ~IMX_MU_V2_BIT(i);
+            }
+        }
         imx_mu_update_irq(s);
         break;
+    }
 
     case IMX_MU_GSR:
         /* Write-1-to-clear of GIP bits. */
