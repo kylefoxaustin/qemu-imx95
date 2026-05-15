@@ -1,6 +1,6 @@
 # qemu-imx95 — v0.0.2
 
-A QEMU machine type for the NXP **i.MX 95 19x19 EVK** (LPDDR5).
+A QEMU machine type for the NXP **i.MX 95 Application Processor, specifically the 19x19 EVK** (LPDDR5).
 
 Goal: a non-cycle-accurate software-development emulator for the i.MX 95
 so software developers don't have to wait for silicon. Long-term aim is
