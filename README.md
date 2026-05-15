@@ -108,11 +108,18 @@ no compiler needed, just `as` and `ld`. See
   peripherals as unimplemented stubs ✅
 - **v0.0.2** — real memmap from DTS, LPUART device model, LPUART1
   console, bare-metal hello binary ✅
-- **v0.1** — U-Boot SPL boots, prints banner, hands off to U-Boot
-  proper (will need CCM/ANATOP/IOMUXC/SRC/GPC modelled, sourced from
-  the i.MX 95 RM)
-- **v0.2** — U-Boot command line, uSDHC, EQOS
-- **v0.3** — Linux boots to login (SCMI server stubbed in C)
-- **v0.4+** — Accelerator stubs, ELE stub
+- **v0.1** — U-Boot SPL prints banner over LPUART1. Requires
+  pulling SCMI server stubbing forward from the originally planned
+  v0.3 (the NXP imx95-evk SPL is fully SCMI-based, including for
+  clocks and pinmux), so v0.1 grows: System Manager MU model,
+  minimal SCMI server stub (clk/pinctrl/power-domain protocols
+  return success), system counter, plus logging stubs for the
+  direct-MMIO peripherals SPL still pokes (SRC, SMMU, TRDC,
+  CCM/ANATOP/IOMUXC bases for canary visibility).
+- **v0.2** — Full SPL → U-Boot proper handoff, command line,
+  uSDHC, EQOS.
+- **v0.3** — Linux boots to login.
+- **v0.4+** — Accelerator stubs, ELE stub, real M33 SM firmware
+  in place of the SCMI server stub.
 
 TTA.
