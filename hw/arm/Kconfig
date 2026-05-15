@@ -626,6 +626,7 @@ config FSL_IMX95
     select ARM_GICV3
     select IMX_LPUART
     select IMX_MU
+    select IMX95_SCMI_SERVER
     select UNIMP
 
 config FSL_IMX95_EVK
