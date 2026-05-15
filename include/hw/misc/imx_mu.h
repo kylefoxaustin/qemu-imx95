@@ -60,6 +60,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXMUState, IMX_MU)
  */
 typedef void (*IMXMUDoorbellHandler)(void *opaque, unsigned int idx);
 
+/*
+ * Optional callback invoked when the guest writes to a TR[idx] register.
+ * The ELE responder stub uses this to accumulate incoming ELE-protocol
+ * message words and react when a full message has arrived. Unset by
+ * default; the model is a plain register file with no consumer.
+ */
+typedef void (*IMXMUTRWriteHandler)(void *opaque, unsigned int idx,
+                                    uint32_t value);
+
 struct IMXMUState {
     SysBusDevice    parent_obj;
 
@@ -87,6 +96,10 @@ struct IMXMUState {
     /* Doorbell forwarding (see typedef above). */
     IMXMUDoorbellHandler doorbell_handler;
     void                *doorbell_opaque;
+
+    /* TR-write forwarding (see typedef above). */
+    IMXMUTRWriteHandler  tr_write_handler;
+    void                *tr_write_opaque;
 };
 
 /*
@@ -96,6 +109,18 @@ struct IMXMUState {
 void imx_mu_set_doorbell_handler(IMXMUState *s,
                                  IMXMUDoorbellHandler handler,
                                  void *opaque);
+
+/* Register a TR-write handler. NULL to deregister. */
+void imx_mu_set_tr_write_handler(IMXMUState *s,
+                                 IMXMUTRWriteHandler handler,
+                                 void *opaque);
+
+/*
+ * Deliver a response word into RR[idx] and assert RSR.RFn so the
+ * agent's mu_hal_receivemsg() poll loop exits. Used by responder
+ * stubs (e.g. ELE) to push a message back to the agent.
+ */
+void imx_mu_deliver_rr(IMXMUState *s, unsigned int idx, uint32_t value);
 
 /*
  * External hook: peripheral code (e.g. an SCMI server stub) can call
