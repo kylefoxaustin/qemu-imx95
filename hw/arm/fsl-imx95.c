@@ -155,7 +155,6 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
-        FSL_IMX95_ELE_MU1,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
@@ -350,6 +349,24 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * ELE mailbox 1. v0.1 has no ELE responder; this instance is a
+     * plain MU register file so that SPL's mu_hal_init (which reads
+     * PAR / writes xCR / polls TSR) sees coherent register values
+     * and progresses past the bare init. ele_get_info() will still
+     * sit waiting for an RX response without a responder, but the
+     * point at which that happens moves further into SPL.
+     */
+    {
+        SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->ele_mu1);
+
+        if (!sysbus_realize(mu_sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mu_sbd, 0,
+                        fsl_imx95_memmap[FSL_IMX95_ELE_MU1].addr);
+    }
+
+    /*
      * Watchdog 3 (the Wakeup-domain wdog the kernel sees). U-Boot SPL
      * also disables it in arch_cpu_init() before the console comes up.
      * Stub model is enough to satisfy disable_wdog().
@@ -376,6 +393,7 @@ static void fsl_imx95_init(Object *obj)
     }
 
     object_initialize_child(obj, "sm_mu", &s->sm_mu, TYPE_IMX_MU);
+    object_initialize_child(obj, "ele_mu1", &s->ele_mu1, TYPE_IMX_MU);
     object_initialize_child(obj, "scmi-server", &s->scmi_server,
                             TYPE_IMX95_SCMI_SERVER);
 }

@@ -65,6 +65,7 @@ struct FslImx95State {
     MemoryRegion            sm_shmem;
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
+    IMXMUState              ele_mu1;
     IMX95SCMIServerState    scmi_server;
     DeviceState            *wdog3;
 };
