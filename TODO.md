@@ -17,15 +17,30 @@ review doc as "wontfix" with rationale.
     chardev byte-arrival in `imx_lpuart_receive`),
     `include/hw/char/imx_lpuart.h` (add `LPUART_CTRL_ORIE`).
 
-## Before v0.1 (U-Boot SPL bring-up)
+## In progress: v0.1 (SCMI stub + SPL banner)
 
-- **CCM / ANATOP / IOMUXC / SRC / GPC / TRDC / BLK_CTRL_AONMIX /
-  BLK_CTRL_WAKEUPMIX base addresses.** Dropped from the v0.0.2
-  memmap because they are not present as direct-MMIO nodes in the
-  Linux DTS (kernel reaches them via SCMI → M33 SM firmware).
-  U-Boot SPL pokes them directly before SCMI is up, so v0.1 needs
-  real bases. Source from the i.MX 95 RM "System Address Map"
-  chapter (`95_docs/IMX95RM.pdf`).
+The original "v0.1 SPL banner" plan assumed direct CCM/ANATOP/IOMUXC
+modelling. Investigation showed the NXP imx95-evk SPL is fully SCMI-
+based even at the SPL stage, so the SCMI server stub work originally
+planned for v0.3 has been pulled forward into v0.1. The "before
+v0.1" entry that used to live here listing those base addresses is
+now superseded by `references/uboot-imx/arch/arm/include/asm/arch-imx9/imx-regs.h`,
+which has the RM-sourced bases; SPL won't poke them directly because
+of SCMI, but they're added as logging stubs as a canary.
+
+Items below remain for future milestones; v0.1's own scope sits in
+the milestone review doc once it tags.
+
+## Before v0.3 (Linux to login)
+
+- **SCMI protocols beyond what v0.1 stubs.** v0.1 will respond to
+  the SCMI protocols U-Boot SPL exercises (base, clk, pinctrl,
+  power-domain). Linux exercises more: perf (DVFS), sensor
+  (thermal), system-power, plus the imx-vendor extensions
+  (`scmi_lmm`, `scmi_bbm`, `scmi_cpu`, `scmi_misc`) seen in
+  `imx95.dtsi:406-420`. Audit gaps before Linux bring-up; either
+  extend the stub or accept that Linux probes will log
+  "unsupported protocol" entries and degrade.
 
 ## Before v0.5 (PCIe + MSI consumers arrive)
 
