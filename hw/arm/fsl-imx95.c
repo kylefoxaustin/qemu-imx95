@@ -14,12 +14,18 @@
  *   - All non-CPU/GIC peripherals are create_unimplemented_device() stubs
  *     so accesses log instead of faulting
  *
- * Memory-map addresses and IRQ numbers below are extracted from
- * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
- * in the NXP BSP. Peripherals reachable only via SCMI -> M33 SM firmware
- * (CCM, ANATOP, IOMUXC, SRC, GPC, AONMIX/WAKEUPMIX block-control, TRDC,
- * WDOG1/2) are not in the Linux DTS and are intentionally omitted here;
- * they return in v0.1 with RM-sourced bases when U-Boot SPL needs them.
+ * Memory-map addresses and IRQ numbers below come from two sources:
+ *   - Linux DTS for direct-MMIO peripherals (LPUART, GIC, SM mailbox,
+ *     ELE mailbox, OCRAM, watchdogs):
+ *       references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+ *   - NXP U-Boot's imx-regs.h for the SCMI-routed peripherals the SPL
+ *     pokes before SCMI is up (CCM, ANATOP, IOMUXC, SRC, TRDC, the
+ *     BLK_CTRL aggregates):
+ *       references/uboot-imx/arch/arm/include/asm/arch-imx9/imx-regs.h
+ *
+ * The SCMI-routed set is logging-stub only at this milestone; the
+ * SCMI server stub that takes their place at runtime lands in
+ * later v0.1 commits.
  */
 
 #include "qemu/osdep.h"
@@ -79,10 +85,24 @@ static const struct {
     [FSL_IMX95_LPUART8]              = { 0x426a0000, 4 * KiB,    "lpuart8" },
 
     /*
-     * NETCMIX block-control syscon. dtsi: syscon@4c810000 with reg = 8.
-     * Stub window widened to one peripheral slot (64 KiB) to catch any
-     * register probes outside the two registers Linux currently uses.
+     * SCMI-routed peripherals. Bases from U-Boot imx-regs.h. Logging
+     * stubs only; SPL doesn't reach them through direct MMIO once the
+     * SCMI server stub is up, but stubs catch any unexpected probing.
      */
+    [FSL_IMX95_CCM]                  = { 0x44450000, 64 * KiB,   "ccm" },
+    [FSL_IMX95_ANATOP]               = { 0x44480000, 64 * KiB,   "anatop" },
+    [FSL_IMX95_IOMUXC]               = { 0x443c0000, 64 * KiB,   "iomuxc" },
+    [FSL_IMX95_SRC]                  = { 0x44460000, 64 * KiB,   "src" },
+    [FSL_IMX95_TRDC_AON]             = { 0x44270000, 64 * KiB,   "trdc_aon" },
+
+    /*
+     * BLK_CTRL aggregates per power domain. NETCMIX is Linux-visible
+     * (kernel touches it directly per imx95.dtsi:2874); the other three
+     * are SCMI-routed from U-Boot imx-regs.h.
+     */
+    [FSL_IMX95_BLK_CTRL_S_AONMIX]    = { 0x444f0000, 64 * KiB,   "blk_ctrl_s_aonmix" },
+    [FSL_IMX95_BLK_CTRL_NS_ANOMIX]   = { 0x44210000, 64 * KiB,   "blk_ctrl_ns_anomix" },
+    [FSL_IMX95_BLK_CTRL_WAKEUPMIX]   = { 0x42420000, 64 * KiB,   "blk_ctrl_wakeupmix" },
     [FSL_IMX95_BLK_CTRL_NETCMIX]     = { 0x4c810000, 64 * KiB,   "blk_ctrl_netcmix" },
 
     /*
@@ -108,7 +128,10 @@ static const struct {
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
-        FSL_IMX95_BLK_CTRL_NETCMIX,
+        FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
+        FSL_IMX95_SRC, FSL_IMX95_TRDC_AON,
+        FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
+        FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_SM_MU, FSL_IMX95_SM_SHMEM,
         FSL_IMX95_ELE_MU,
         FSL_IMX95_WDOG3,
