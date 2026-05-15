@@ -58,6 +58,13 @@ the milestone review doc once it tags.
 These are fabricated values that don't break current functionality
 but a maintainer will flag in review.
 
+- **OCRAM-A total size.** `FSL_IMX95_OCRAM` covers
+  `0x20480000-0x204DFFFF` (384 KiB), sized to fit U-Boot SPL's
+  TEXT base through its BSS+stack. The Linux DTS only exposes a
+  96 KiB sram1 slice within this range, so the real silicon
+  OCRAM-A is at least 384 KiB but likely larger. Cross-check
+  against the i.MX 95 RM "Memory Map" chapter and right-size.
+
 - **`VERID = 0x04040007`** in `include/hw/char/imx_lpuart.h:88`.
   Plausible but not from the RM. The Linux driver does not branch
   on VERID for `imx*ulp` variants so v0.0.2 functions fine, but
