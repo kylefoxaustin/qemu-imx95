@@ -161,6 +161,89 @@ static void scmi_base(IMX95SCMIServerState *s, unsigned int idx,
     }
 }
 
+/* ----- Clock protocol (0x14) ----- */
+
+/*
+ * The clock SCMI client (drivers/clk/clk_scmi.c) walks 0..num_clocks-1
+ * at probe time, registering a CCF clock for each. Then U-Boot drivers
+ * that consume clocks via DT phandle look them up by ID and call
+ * RATE_GET / CONFIG_SET / etc. Advertise enough clocks to cover the
+ * largest IMX95_CLK_* index, plus reasonable RATE_GET / SET / CONFIG
+ * answers so consumers don't error out.
+ */
+/*
+ * Advertise zero clocks so scmi_clk_probe() doesn't register CCF
+ * children (which would all get the same name and clash). U-Boot
+ * consumers that call imx_clk_scmi_enable() / set_rate() / etc.
+ * directly bypass CCF and go straight through SCMI, so they still
+ * succeed via the RATE_SET / CONFIG_SET / PARENT_SET handlers below.
+ */
+#define SCMI_CLOCK_NUM              0
+#define SCMI_CLOCK_DEFAULT_RATE     24000000
+
+#define SCMI_MSG_CLOCK_ATTRIBUTES       0x03
+#define SCMI_MSG_CLOCK_RATE_SET         0x05
+#define SCMI_MSG_CLOCK_RATE_GET         0x06
+#define SCMI_MSG_CLOCK_CONFIG_SET       0x07
+#define SCMI_MSG_CLOCK_NAME_GET         0x08
+#define SCMI_MSG_CLOCK_PARENT_SET       0x0D
+
+static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
+                       uint8_t msg_id, uint16_t token)
+{
+    switch (msg_id) {
+    case SCMI_MSG_PROTOCOL_VERSION: {
+        uint32_t version = cpu_to_le32(0x00030000);
+        scmi_complete(s, idx, SCMI_SUCCESS, &version, sizeof(version));
+        return;
+    }
+    case SCMI_MSG_PROTOCOL_ATTRIBUTES: {
+        uint32_t attrs = cpu_to_le32(SCMI_CLOCK_NUM);
+        scmi_complete(s, idx, SCMI_SUCCESS, &attrs, sizeof(attrs));
+        return;
+    }
+    case SCMI_MSG_PROTOCOL_MESSAGE_ATTRIBUTES: {
+        uint32_t mattr = 0;
+        scmi_complete(s, idx, SCMI_SUCCESS, &mattr, sizeof(mattr));
+        return;
+    }
+    case SCMI_MSG_CLOCK_ATTRIBUTES: {
+        /*
+         * Response: attributes (u32) + name (16 bytes). attributes
+         * field has the clock-enabled bit (0) and other flags; keep
+         * it 0 (nothing special). Name is generic.
+         */
+        uint8_t reply[4 + 16] = {0};
+        snprintf((char *)(reply + 4), 16, "clk_stub");
+        scmi_complete(s, idx, SCMI_SUCCESS, reply, sizeof(reply));
+        return;
+    }
+    case SCMI_MSG_CLOCK_RATE_GET: {
+        uint32_t rate[2];
+        rate[0] = cpu_to_le32(SCMI_CLOCK_DEFAULT_RATE);  /* lsb */
+        rate[1] = 0;                                     /* msb */
+        scmi_complete(s, idx, SCMI_SUCCESS, rate, sizeof(rate));
+        return;
+    }
+    case SCMI_MSG_CLOCK_RATE_SET: {
+        /* Response: status only. The achieved rate is read back by GET. */
+        scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+        return;
+    }
+    case SCMI_MSG_CLOCK_CONFIG_SET:
+    case SCMI_MSG_CLOCK_PARENT_SET:
+    case SCMI_MSG_CLOCK_NAME_GET:
+        scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+        return;
+    default:
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: CLOCK unhandled msg_id 0x%02x token 0x%x\n",
+                      __func__, msg_id, token);
+        scmi_complete(s, idx, SCMI_NOT_SUPPORTED, NULL, 0);
+        return;
+    }
+}
+
 /* ----- Common stub for any other advertised protocol ----- */
 
 static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
@@ -176,7 +259,7 @@ static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
     }
     case SCMI_MSG_PROTOCOL_ATTRIBUTES: {
         /*
-         * Stub: report zero clocks / zero pins. U-Boot SPL probes the
+         * Stub: report zero resources. U-Boot SPL probes the
          * protocol and then asks for specific resources by ID; with
          * zero advertised, those follow-ups will fall into the
          * NOT_SUPPORTED path below and surface in logs for option-C
@@ -232,6 +315,8 @@ static void scmi_doorbell(void *opaque, unsigned int idx)
         scmi_base(s, idx, msg_id, token);
         return;
     case SCMI_PROTOCOL_CLOCK:
+        scmi_clock(s, idx, msg_id, token);
+        return;
     case SCMI_PROTOCOL_PINCTRL:
         scmi_protocol_stub(s, idx, protocol_id, msg_id, token);
         return;
