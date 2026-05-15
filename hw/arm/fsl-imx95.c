@@ -28,6 +28,8 @@
 #include "hw/arm/bsa.h"
 #include "hw/arm/fsl-imx95.h"
 #include "hw/core/boards.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/misc/unimp.h"
 #include "system/kvm.h"
@@ -104,9 +106,6 @@ static const struct {
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
-        FSL_IMX95_LPUART1, FSL_IMX95_LPUART2, FSL_IMX95_LPUART3,
-        FSL_IMX95_LPUART4, FSL_IMX95_LPUART5, FSL_IMX95_LPUART6,
-        FSL_IMX95_LPUART7, FSL_IMX95_LPUART8,
         FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_SM_MU, FSL_IMX95_SM_SHMEM,
         FSL_IMX95_ELE_MU,
@@ -234,6 +233,37 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                 fsl_imx95_memmap[FSL_IMX95_OCRAM].addr,
                                 &s->ocram);
 
+    /* LPUARTs. LPUART1 is the 19x19 EVK console. */
+    {
+        static const struct {
+            int region;
+            int irq;
+        } lpuart_table[FSL_IMX95_NUM_LPUARTS] = {
+            { FSL_IMX95_LPUART1, FSL_IMX95_LPUART1_IRQ },
+            { FSL_IMX95_LPUART2, FSL_IMX95_LPUART2_IRQ },
+            { FSL_IMX95_LPUART3, FSL_IMX95_LPUART3_IRQ },
+            { FSL_IMX95_LPUART4, FSL_IMX95_LPUART4_IRQ },
+            { FSL_IMX95_LPUART5, FSL_IMX95_LPUART5_IRQ },
+            { FSL_IMX95_LPUART6, FSL_IMX95_LPUART6_IRQ },
+            { FSL_IMX95_LPUART7, FSL_IMX95_LPUART7_IRQ },
+            { FSL_IMX95_LPUART8, FSL_IMX95_LPUART8_IRQ },
+        };
+
+        for (i = 0; i < FSL_IMX95_NUM_LPUARTS; i++) {
+            SysBusDevice *sbd = SYS_BUS_DEVICE(&s->lpuart[i]);
+
+            qdev_prop_set_chr(DEVICE(&s->lpuart[i]), "chardev",
+                              serial_hd(i));
+            if (!sysbus_realize(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0,
+                            fsl_imx95_memmap[lpuart_table[i].region].addr);
+            sysbus_connect_irq(sbd, 0,
+                qdev_get_gpio_in(gicdev, lpuart_table[i].irq));
+        }
+    }
+
     /* All peripherals not yet modeled get logging stubs. */
     fsl_imx95_install_unimplemented(s);
 }
@@ -241,8 +271,14 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 static void fsl_imx95_init(Object *obj)
 {
     FslImx95State *s = FSL_IMX95(obj);
+    int i;
 
     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GICV3);
+
+    for (i = 0; i < FSL_IMX95_NUM_LPUARTS; i++) {
+        g_autofree char *name = g_strdup_printf("lpuart%d", i + 1);
+        object_initialize_child(obj, name, &s->lpuart[i], TYPE_IMX_LPUART);
+    }
 }
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)

@@ -20,6 +20,7 @@
 #define FSL_IMX95_H
 
 #include "target/arm/cpu.h"
+#include "hw/char/imx_lpuart.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
@@ -56,6 +57,7 @@ struct FslImx95State {
     ARMCPU          cpu[FSL_IMX95_NUM_A55_CPUS];
     GICv3State      gic;
     MemoryRegion    ocram;
+    IMXLPUARTState  lpuart[FSL_IMX95_NUM_LPUARTS];
 };
 
 /*
