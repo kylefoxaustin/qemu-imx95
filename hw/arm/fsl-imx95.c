@@ -142,7 +142,6 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_SRC, FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
-        FSL_IMX95_SM_MU, FSL_IMX95_SM_SHMEM,
         FSL_IMX95_ELE_MU,
         FSL_IMX95_WDOG3,
     };
@@ -299,6 +298,45 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    /*
+     * System Manager mailbox (MU2) and SCMI server stub.
+     *
+     * Real silicon has the Cortex-M33 SM firmware on the far side of
+     * MU2, talking SCMI back to whoever's running on the A55s
+     * (U-Boot SPL, U-Boot proper, Linux). v0.1 replaces the M33 with
+     * a C-side SCMI server stub that handles enough of the base /
+     * clock / pinctrl protocols to get past U-Boot SPL's
+     * imx9_probe_mu(). Replaced by a real M33 + SM firmware in v0.4+.
+     *
+     * Convert SM_SHMEM (sram0) from an unimplemented logging stub to
+     * a real RAM region so the SMT shared-memory transport can be
+     * read and written by both sides.
+     */
+    memory_region_init_ram(&s->sm_shmem, OBJECT(dev), "imx95-sm-shmem",
+                           fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].addr,
+                                &s->sm_shmem);
+
+    {
+        SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->sm_mu);
+
+        if (!sysbus_realize(mu_sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mu_sbd, 0,
+                        fsl_imx95_memmap[FSL_IMX95_SM_MU].addr);
+        sysbus_connect_irq(mu_sbd, 0,
+            qdev_get_gpio_in(gicdev, FSL_IMX95_SM_MU_IRQ));
+    }
+
+    object_property_set_link(OBJECT(&s->scmi_server), "mu",
+                             OBJECT(&s->sm_mu), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->scmi_server), errp)) {
+        return;
+    }
+
     /* All peripherals not yet modeled get logging stubs. */
     fsl_imx95_install_unimplemented(s);
 }
@@ -314,6 +352,10 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("lpuart%d", i + 1);
         object_initialize_child(obj, name, &s->lpuart[i], TYPE_IMX_LPUART);
     }
+
+    object_initialize_child(obj, "sm_mu", &s->sm_mu, TYPE_IMX_MU);
+    object_initialize_child(obj, "scmi-server", &s->scmi_server,
+                            TYPE_IMX95_SCMI_SERVER);
 }
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
