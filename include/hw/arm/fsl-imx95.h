@@ -26,6 +26,8 @@
 #include "target/arm/cpu.h"
 #include "hw/char/imx_lpuart.h"
 #include "hw/intc/arm_gicv3_common.h"
+#include "hw/misc/imx95_scmi_server.h"
+#include "hw/misc/imx_mu.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/units.h"
@@ -55,12 +57,15 @@ enum FslImx95Configuration {
 };
 
 struct FslImx95State {
-    SysBusDevice    parent_obj;
+    SysBusDevice            parent_obj;
 
-    ARMCPU          cpu[FSL_IMX95_NUM_A55_CPUS];
-    GICv3State      gic;
-    MemoryRegion    ocram;
-    IMXLPUARTState  lpuart[FSL_IMX95_NUM_LPUARTS];
+    ARMCPU                  cpu[FSL_IMX95_NUM_A55_CPUS];
+    GICv3State              gic;
+    MemoryRegion            ocram;
+    MemoryRegion            sm_shmem;
+    IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
+    IMXMUState              sm_mu;
+    IMX95SCMIServerState    scmi_server;
 };
 
 /*
@@ -135,6 +140,8 @@ enum FslImx95Irqs {
     FSL_IMX95_LPUART7_IRQ   = 68,
     FSL_IMX95_LPUART8_IRQ   = 69,
     FSL_IMX95_WDOG3_IRQ     = 77,
+    /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */
+    FSL_IMX95_SM_MU_IRQ     = 226,
 };
 
 #endif /* FSL_IMX95_H */
