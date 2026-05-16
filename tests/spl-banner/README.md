@@ -91,12 +91,24 @@ all-zero data as not a valid container. Closing the v0.2
 milestone needs an actual NXP AHAB / SECO container on the SD
 image at offset 32 KiB (`CONTAINER_HDR_MMCSD_OFFSET`).
 
-## Booting from SD
+## Booting a payload from SD
 
-Create a backing image and attach it via QEMU's generic
-`-drive` + `-device sd-card` plumbing:
+`tests/sd-boot/build-container.py` wraps an arbitrary raw binary in
+the SECO / V2X / SCU / U-Boot-proper container chain that SPL
+expects on imx95-A0 silicon (see the script header for the SD
+layout). With a real payload landing at the right offset, SPL
+parses through SECO->V2X->SCU and then loads + jumps into the
+target.
 
-    truncate -s 64M tests/sd-boot/sd.img
+End-to-end demo using the existing `tests/hello-imx95/hello.bin`
+as a placeholder payload (it just prints "Hello from i.MX 95!"
+on LPUART1 and halts):
+
+    ./tests/sd-boot/build-container.py \
+        --payload tests/hello-imx95/hello.bin \
+        --dst-addr 0x90200000 \
+        --entry-addr 0x90200000 \
+        --output tests/sd-boot/sd.img
 
     ./build/qemu-system-aarch64 \
         -M imx95-19x19-evk \
@@ -106,11 +118,26 @@ Create a backing image and attach it via QEMU's generic
         -drive if=none,format=raw,file=tests/sd-boot/sd.img,id=sd0 \
         -device sd-card,drive=sd0
 
+Expected end-state for the v0.2 milestone:
+
+    U-Boot SPL 2025.04-... (May 15 2026 - 12:37:01 -0500)
+    Normal Boot
+    Trying to boot from MMC1
+    Boot stage: Primary
+    Image set: 0, offset: 0x8000
+    Load image from MMC/SD 0x8c00
+    Hello from i.MX 95!
+
 The bare `-device sd-card,drive=sd0` (no explicit `bus=`) lands
 on uSDHC1's anonymous sd-bus, because `fsl-imx95.c` realises the
 three uSDHC instances in reverse order so usdhc1 ends up at the
 top of the unnamed-bus stack — see the comment in
 `fsl_imx95_realize()`.
+
+Pointing the payload at U-Boot proper (`u-boot.bin`) currently
+does *not* reach the U-Boot prompt: the SD read stalls at ~512 KiB
+into the 1.3 MiB transfer (still under investigation; tracked in
+TODO.md under "Before v0.3").
 
 ## Loading SPL via `-device loader`
 
