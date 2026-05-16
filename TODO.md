@@ -21,34 +21,6 @@ review doc as "wontfix" with rationale.
 
 Open items remaining for the v0.2 milestone:
 
-- **AHAB / SECO container on the SD image** — with the uSDHC
-  stack landed, SPL now successfully reads sector 0 of the SD
-  card and immediately rejects an all-zero image with
-  `Parse seco container failed -14`. v0.2 closes when we can
-  point `-drive` at a disk image that contains either a real
-  NXP AHAB container or a minimal hand-rolled fake whose layout
-  satisfies `parse_container_hdr_v3()` enough to let SPL load
-  *some* payload and jump to it. The artifact lives in
-  `tests/spl-banner/uboot-build/spl/u-boot.itb` for the FIT
-  path, but the i.MX95 SPL build is configured for AHAB.
-
-- **`scmi_pinctrl` SET should SUCCESS-no-op** (not return -1).
-  v0.1's `scmi_protocol_stub` returns `NOT_SUPPORTED` for any
-  message_id it doesn't know, including `PINCTRL_SETTINGS_CONFIGURE`
-  (msg 0x06). SPL logs "Failed to set PAD = X" for every pad
-  it tries to mux for uSDHC. Cosmetic since SPL doesn't bail
-  on the failure, but noisy. Move pinctrl into the same
-  warn_report_once + LOG_GUEST_ERROR pattern as the clock
-  no-op handlers.
-
-- **Banner-text smoke regression script.** `tests/spl-banner/` has
-  a `README.md` documenting the run; v0.2 should add an actual
-  script that runs SPL with a wallclock timeout, greps for the
-  expected banner line, and exits non-zero if it's not there
-  within 30s. Catches both functional regressions and the
-  `-device loader` / `arm_load_kernel` ordering invariant
-  (whichever is last-write-wins on the reset PC).
-
 - **VMState snapshot/restore test.** Every v0.1 device declares
   VMState; none of it is exercised. Add a savevm/loadvm round-
   trip during SPL execution (savevm mid-boot, loadvm, verify SPL
@@ -56,6 +28,18 @@ Open items remaining for the v0.2 milestone:
   become "every snapshot is corrupted" surprises later.
 
 ## Before v0.3 (Linux to login)
+
+- **SDHCI long-transfer stall.** With the v0.2 SD-boot chain
+  landed, SPL successfully reads ~512 KiB then stops mid-transfer
+  when the payload is the 1.3 MiB `u-boot.bin` — the next stage
+  never receives control. A small (85-byte) payload from
+  `tests/hello-imx95/hello.bin` runs end-to-end, so the chain
+  itself works. Investigation candidates: SDHCI emulation's
+  block-count / DMA-buffer behavior on multi-block transfers
+  larger than `CONFIG_SPL_SYS_MALLOC_SIZE = 0x80000`, or an
+  off-by-one in fsl_esdhc's `b_max` chunking under our PRNSTS
+  semantics. Without this, "boot real U-Boot proper" stays a
+  v0.3 prerequisite.
 
 - **SCMI protocols beyond what v0.1 stubs.** v0.1 will respond to
   the SCMI protocols U-Boot SPL exercises (base, clk, pinctrl,

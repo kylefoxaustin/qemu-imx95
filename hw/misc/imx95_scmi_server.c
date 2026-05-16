@@ -433,11 +433,22 @@ static void scmi_imx_misc(IMX95SCMIServerState *s, unsigned int idx,
          * rom_passover_t (per sys_proto.h:244) that points SPL at
          * SD1 (uSDHC1, mmc@42850000). Field offsets within the 60-byte
          * passover area:
-         *   off 0-1   tag (u16) - nonzero so SPL accepts the data
+         *   off 0-1   tag (u16)               - nonzero so SPL accepts
          *   off 2     len (u8 = 0x80, fixed)
          *   off 3     ver (u8)
-         *   off 37    boot_dev_inst (u8) - SD instance 0
-         *   off 38    boot_dev_type (u8) - BT_DEV_TYPE_SD (1)
+         *   off 24    boot_stage (u8 = 0x06)  - "Primary"
+         *   off 37    boot_dev_inst (u8)      - SD instance 0
+         *   off 38    boot_dev_type (u8 = 1)  - BT_DEV_TYPE_SD
+         *   off 44    cnt_header_ofs (u32)    - container @ 32 KiB
+         *   off 48    img_ofs (u32 = 0x8000)  - SPL reads here
+         *
+         * `img_ofs` matches CONTAINER_HDR_MMCSD_OFFSET from
+         * include/imx_container.h:16 (SZ_32K). SPL's
+         * scmi_get_boot_device_offset() returns rom_data.img_ofs
+         * directly to get_imageset_end(), so this is the byte offset
+         * where the SD reader starts pulling the AHAB container. With
+         * img_ofs=0, SPL was reading sector 0 (which contains nothing)
+         * and rejecting it with "Parse seco container failed -14".
          *
          * BT_DEV_TYPE_SD is enum boot_dev_type_e in sys_proto.h:205.
          * SPL's get_boot_device() maps {SD, inst 0} -> SD1_BOOT, then
@@ -446,16 +457,20 @@ static void scmi_imx_misc(IMX95SCMIServerState *s, unsigned int idx,
          */
         uint8_t extra[4 + 60] = {0};
         uint32_t one = cpu_to_le32(1);
+        uint32_t img_off = cpu_to_le32(0x8000);
         memcpy(&extra[0], &one, sizeof(one));    /* numPassover = 1 */
         extra[4 + 0]  = 0xCD;                    /* tag low byte */
         extra[4 + 1]  = 0xAB;                    /* tag high byte */
         extra[4 + 2]  = 0x80;                    /* len = fixed 0x80 */
         extra[4 + 3]  = 0x01;                    /* ver */
+        extra[4 + 24] = 0x06;                    /* boot_stage = Primary */
         extra[4 + 37] = 0x00;                    /* boot_dev_inst = 0 */
         extra[4 + 38] = 0x01;                    /* boot_dev_type = SD */
+        memcpy(&extra[4 + 44], &img_off, sizeof(img_off)); /* cnt_header_ofs */
+        memcpy(&extra[4 + 48], &img_off, sizeof(img_off)); /* img_ofs */
         warn_report_once("scmi-server: imx-misc ROM_PASSOVER_GET stub "
-                         "pointing SPL at SD1 (uSDHC1 @ 0x42850000); "
-                         "promote when storage backend lands.");
+                         "pointing SPL at SD1 (uSDHC1 @ 0x42850000), "
+                         "container at 0x8000.");
         scmi_complete(s, idx, SCMI_SUCCESS, extra, sizeof(extra));
         return;
     }
