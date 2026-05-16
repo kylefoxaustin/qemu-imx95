@@ -23,6 +23,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -296,7 +297,18 @@ static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
 static void scmi_doorbell(void *opaque, unsigned int idx)
 {
     IMX95SCMIServerState *s = opaque;
-    uint32_t chan_status = smt_read32(s, SMT_CHAN_STATUS);
+    uint32_t chan_status;
+
+    /*
+     * The MU model invokes this from inside its MMIO write callback,
+     * which runs with the BQL held. dma_memory_read/write below
+     * require the BQL; assert here so any future refactor that moves
+     * the MU dispatch off-thread (e.g., per-vCPU dispatch under
+     * -icount) trips loudly instead of silently corrupting memory.
+     */
+    g_assert(bql_locked());
+
+    chan_status = smt_read32(s, SMT_CHAN_STATUS);
 
     /*
      * The agent clears the channel-free bit before doorbelling. If the
@@ -361,6 +373,7 @@ static void imx95_scmi_server_reset(DeviceState *dev)
      * scmi_write_msg_to_smt() finds the channel ready. With no M33
      * actually running, our stub takes that responsibility.
      */
+    g_assert(bql_locked());
     smt_write32(s, SMT_CHAN_STATUS, SMT_CHAN_FREE);
 }
 

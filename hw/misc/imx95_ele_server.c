@@ -27,6 +27,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "hw/misc/imx95_ele_server.h"
@@ -34,6 +35,40 @@
 #include "hw/core/qdev-properties-system.h"
 #include "system/dma.h"
 #include "migration/vmstate.h"
+
+/*
+ * struct ele_get_info_data layout (u32 word offsets), pinned to the
+ * U-Boot ele_api.h definition at
+ * references/uboot-imx/arch/arm/include/asm/mach-imx/ele_api.h:168.
+ * Using named offsets here so a future U-Boot rev that reorders or
+ * adds fields trips a build/runtime mismatch instead of silently
+ * writing into the wrong slot.
+ *
+ * Reference layout:
+ *   u32 hdr;                  // word 0
+ *   u32 soc;                  // word 1
+ *   u32 lc;                   // word 2
+ *   u32 uid[4];               // words 3..6
+ *   u32 sha256_rom_patch[8];  // words 7..14
+ *   u32 sha_fw[8];            // words 15..22
+ *   u32 oem_srkh[16];         // words 23..38
+ *   u32 state;                // word 39
+ *   u32 oem_pqc_srkh[16];     // words 40..55
+ *   u32 reserved[8];          // words 56..63
+ * Total: 64 u32 = 256 bytes.
+ */
+#define ELE_INFO_OFFSET_HDR             0
+#define ELE_INFO_OFFSET_SOC             1
+#define ELE_INFO_OFFSET_LC              2
+#define ELE_INFO_OFFSET_UID             3
+#define ELE_INFO_OFFSET_SHA256_ROM      7
+#define ELE_INFO_OFFSET_SHA_FW          15
+#define ELE_INFO_OFFSET_OEM_SRKH        23
+#define ELE_INFO_OFFSET_STATE           39
+#define ELE_INFO_OFFSET_OEM_PQC_SRKH    40
+#define ELE_INFO_OFFSET_RESERVED        56
+#define ELE_INFO_SIZE_WORDS             64
+#define ELE_INFO_SIZE_BYTES             (ELE_INFO_SIZE_WORDS * 4)
 
 /* Header field packing. */
 static inline uint32_t ele_make_header(uint8_t version, uint8_t size,
@@ -80,13 +115,17 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
                           (uint64_t)s->msg_buf[2];
 
     /*
-     * struct ele_get_info_data is 256 bytes / 64 u32 words. Zero-fill
-     * the whole thing, then set the two fields U-Boot's set_cpu_info()
-     * actually reads: soc and lc.
+     * Zero-fill the full 256-byte struct, then set the fields U-Boot's
+     * set_cpu_info() reads (soc, lc). Named offsets above keep the
+     * mapping legible; if U-Boot ever shifts the struct layout, the
+     * build check below + a re-read of ele_api.h are how this gets
+     * detected.
      */
-    uint32_t info_data[64] = {0};
-    info_data[1] = 0xA1009500;  /* SoC rev 0xA1, type 0x95 */
-    info_data[2] = 0x00000080;  /* lifecycle = OEM open */
+    uint32_t info_data[ELE_INFO_SIZE_WORDS] = {0};
+    QEMU_BUILD_BUG_ON(sizeof(info_data) != ELE_INFO_SIZE_BYTES);
+
+    info_data[ELE_INFO_OFFSET_SOC] = 0xA1009500;  /* SoC rev 0xA1, type 0x95 */
+    info_data[ELE_INFO_OFFSET_LC]  = 0x00000080;  /* lifecycle = OEM open */
 
     dma_memory_write(&address_space_memory, info_addr,
                      info_data, sizeof(info_data),
@@ -142,6 +181,9 @@ static void ele_dispatch(IMX95ELEServerState *s)
 static void ele_on_tr_write(void *opaque, unsigned int idx, uint32_t value)
 {
     IMX95ELEServerState *s = opaque;
+
+    /* Invoked from MU MMIO write handler under BQL; see imx95_scmi_server.c. */
+    g_assert(bql_locked());
 
     if (s->msg_count >= IMX95_ELE_MAX_WORDS) {
         qemu_log_mask(LOG_GUEST_ERROR,
