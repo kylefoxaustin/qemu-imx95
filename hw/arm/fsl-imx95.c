@@ -164,6 +164,16 @@ static const struct {
      * CR0.SMMUEN clear and early-exits.
      */
     [FSL_IMX95_SMMU]                 = { 0x490d0000, 128 * KiB,  "smmu" },
+
+    /*
+     * uSDHC controllers (compat "fsl,imx95-usdhc"). Bases + IRQs
+     * from imx95.dtsi:1303-1340. Logging stubs in v0.2 prep; the
+     * real fsl-esdhc model lands when we have a backing storage
+     * story (FIT or AHAB container on a disk image).
+     */
+    [FSL_IMX95_USDHC1]               = { 0x42850000, 64 * KiB,   "usdhc1" },
+    [FSL_IMX95_USDHC2]               = { 0x42860000, 64 * KiB,   "usdhc2" },
+    [FSL_IMX95_USDHC3]               = { 0x428b0000, 64 * KiB,   "usdhc3" },
 };
 
 /*
@@ -184,6 +194,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
+        FSL_IMX95_USDHC1, FSL_IMX95_USDHC2, FSL_IMX95_USDHC3,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
