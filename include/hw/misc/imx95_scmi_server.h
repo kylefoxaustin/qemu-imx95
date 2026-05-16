@@ -37,6 +37,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95SCMIServerState, IMX95_SCMI_SERVER)
 #define SCMI_PROTOCOL_VOLTAGE           0x17
 #define SCMI_PROTOCOL_PINCTRL           0x19
 
+/*
+ * NXP-vendor SCMI protocols (per references/uboot-imx/include/
+ * scmi_protocols.h:31). Linux device-tree exposes the ones at
+ * dtsi:406-420 (lmm 0x80, bbm 0x81, cpu 0x82, misc 0x84). v0.2 adds
+ * misc because U-Boot SPL queries ROM_PASSOVER_GET on it before
+ * trying to load the next boot stage.
+ */
+#define SCMI_PROTOCOL_IMX_LMM           0x80
+#define SCMI_PROTOCOL_IMX_BBM           0x81
+#define SCMI_PROTOCOL_IMX_CPU           0x82
+#define SCMI_PROTOCOL_IMX_MISC          0x84
+
+/* SCMI imx-misc message IDs. */
+#define SCMI_MSG_IMX_MISC_RESET_REASON      0x0A
+#define SCMI_MSG_IMX_MISC_ROM_PASSOVER_GET  0x07
+
 /* Return status codes. */
 #define SCMI_SUCCESS                     0
 #define SCMI_NOT_SUPPORTED              -1
