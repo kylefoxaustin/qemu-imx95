@@ -499,6 +499,25 @@ static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
         return;
     }
     default:
+        /*
+         * Pinctrl SETTINGS_CONFIGURE (msg 0x06) gets a SUCCESS-no-op
+         * because U-Boot SPL spams it for every PAD on the uSDHC pin
+         * group and prints a noisy "Failed to set PAD" line on each
+         * non-SUCCESS reply, even though it never bails on the
+         * failure. A real pin-mux model is a v0.3 item (Linux needs
+         * it to honor non-default routing); for v0.2 the stub
+         * answer is "fine, ignored" so the boot log stays readable.
+         */
+        if (protocol_id == SCMI_PROTOCOL_PINCTRL && msg_id == 0x06) {
+            warn_report_once("scmi-server: pinctrl SETTINGS_CONFIGURE is a "
+                             "stub no-op; pad muxing is not retained. "
+                             "Enable -d guest_errors for per-call detail.");
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "scmi-server: pinctrl SETTINGS_CONFIGURE ignored "
+                          "(token 0x%x)\n", token);
+            scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+            return;
+        }
         qemu_log_mask(LOG_GUEST_ERROR,
                       "%s: protocol 0x%02x unhandled msg_id 0x%02x token 0x%x\n",
                       __func__, protocol_id, msg_id, token);
