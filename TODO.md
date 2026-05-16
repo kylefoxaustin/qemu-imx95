@@ -19,51 +19,27 @@ review doc as "wontfix" with rationale.
 
 ## Before v0.2 (SPL → U-Boot proper handoff)
 
-Observed-failure items from the v0.1 SPL run:
+Open items remaining for the v0.2 milestone:
 
-- **SCMI vendor protocol 0x84 (`scmi_misc`)** — SPL queries
-  `rom_boot_info` via this protocol just after the banner. Our
-  SCMI server doesn't advertise or handle protocol 0x84, so SPL
-  prints `SCMI: failure at rom_boot_info` and resets. Extend the
-  SCMI server to advertise + stub-respond to scmi_misc messages.
+- **AHAB / SECO container on the SD image** — with the uSDHC
+  stack landed, SPL now successfully reads sector 0 of the SD
+  card and immediately rejects an all-zero image with
+  `Parse seco container failed -14`. v0.2 closes when we can
+  point `-drive` at a disk image that contains either a real
+  NXP AHAB container or a minimal hand-rolled fake whose layout
+  satisfies `parse_container_hdr_v3()` enough to let SPL load
+  *some* payload and jump to it. The artifact lives in
+  `tests/spl-banner/uboot-build/spl/u-boot.itb` for the FIT
+  path, but the i.MX95 SPL build is configured for AHAB.
 
-- **uSDHC / eMMC storage model** — SPL tries to load the next
-  stage (U-Boot proper, ATF, M33 SM firmware) from SD/eMMC and
-  prints `SPL: failed to boot from all boot devices`. Need a
-  Freescale eSDHC model at the appropriate base, plus boot media
-  (a disk image with the FIT or AHAB container).
-
-- **Container loading** — Pick a story: stock NXP AHAB container,
-  FIT, or a custom unwrap. Affects the storage layout above.
-
-Surfaced by the v0.1 review (independent-Claude pass on
-`docs/reviews/v0.1.md`):
-
-- **Per-clock rate lookup table.** SCMI server's
-  `CLOCK_RATE_GET` currently returns 24 MHz for every clock_id.
-  uSDHC computes its divisor as `source_rate / target_rate`; with
-  a 24 MHz source and a 400 MHz target, the divisor will be
-  wrong and SD timing will fail. Add a small `(clock_id, rate)`
-  lookup table for at least the clocks SPL/uSDHC/EQOS care about
-  before any storage work lands. ~50 lines, doesn't need a real
-  clock-tree solver.
-
-- **Replace SCMI 80-clock hard cap with on-demand advertisement.**
-  v0.1's `SCMI_CLOCK_NUM = 80` is arbitrary. Better approach:
-  track which `clock_id` values have actually been queried via
-  `CLOCK_ATTRIBUTES`, return success for those, return
-  `NOT_SUPPORTED` for everything else. CCF walks `0..N` once,
-  discovers the supported set, stops. No arbitrary upper bound,
-  no false positives.
-
-- **Promote SCMI `SUCCESS`-no-op handlers to LOG_GUEST_ERROR.**
-  v0.1 returns SUCCESS-no-effect for several SCMI messages it
-  doesn't actually implement (pinctrl SET, clock CONFIG_SET
-  / PARENT_SET / NAME_GET). When v0.2 starts touching uSDHC or
-  networking, a real pinctrl SET will silently succeed-no-op -
-  worst-possible failure mode (looks fine, fails mysteriously
-  later). Bump the log level so these surface in normal QEMU
-  output, not only under `-d unimp`.
+- **`scmi_pinctrl` SET should SUCCESS-no-op** (not return -1).
+  v0.1's `scmi_protocol_stub` returns `NOT_SUPPORTED` for any
+  message_id it doesn't know, including `PINCTRL_SETTINGS_CONFIGURE`
+  (msg 0x06). SPL logs "Failed to set PAD = X" for every pad
+  it tries to mux for uSDHC. Cosmetic since SPL doesn't bail
+  on the failure, but noisy. Move pinctrl into the same
+  warn_report_once + LOG_GUEST_ERROR pattern as the clock
+  no-op handlers.
 
 - **Banner-text smoke regression script.** `tests/spl-banner/` has
   a `README.md` documenting the run; v0.2 should add an actual
