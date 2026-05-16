@@ -29,6 +29,7 @@
 #include "hw/misc/imx95_ele_server.h"
 #include "hw/misc/imx95_scmi_server.h"
 #include "hw/misc/imx_mu.h"
+#include "hw/sd/sdhci.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/units.h"
@@ -54,6 +55,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslImx95State, FSL_IMX95)
 enum FslImx95Configuration {
     FSL_IMX95_NUM_A55_CPUS  = 6,
     FSL_IMX95_NUM_LPUARTS   = 8,    /* LPUART1..LPUART8 */
+    FSL_IMX95_NUM_USDHCS    = 3,    /* uSDHC1..uSDHC3 */
     FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
 };
 
@@ -69,6 +71,7 @@ struct FslImx95State {
     IMXMUState              ele_mu1;
     IMX95SCMIServerState    scmi_server;
     IMX95ELEServerState     ele_server;
+    SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
     DeviceState            *wdog3;
 };
 
@@ -166,6 +169,10 @@ enum FslImx95Irqs {
     FSL_IMX95_LPUART7_IRQ   = 68,
     FSL_IMX95_LPUART8_IRQ   = 69,
     FSL_IMX95_WDOG3_IRQ     = 77,
+    /* uSDHC1/2/3 SPIs (dtsi: usdhc1=86, usdhc2=87, usdhc3=191). */
+    FSL_IMX95_USDHC1_IRQ    = 86,
+    FSL_IMX95_USDHC2_IRQ    = 87,
+    FSL_IMX95_USDHC3_IRQ    = 191,
     /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */
     FSL_IMX95_SM_MU_IRQ     = 226,
 };
