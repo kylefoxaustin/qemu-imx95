@@ -1613,6 +1613,9 @@ static void sdhci_bus_class_init(ObjectClass *klass, const void *data)
 
 #define ESDHC_VENDOR_SPEC               0xc0
 #define ESDHC_FRC_SDCLK_ON              (1 << 8)
+#define ESDHC_VENDORSPEC_IPGEN          (1 << 11)
+#define ESDHC_VENDORSPEC_HCKEN          (1 << 12)
+#define ESDHC_VENDORSPEC_CKEN           (1 << 14)
 
 #define ESDHC_DLL_CTRL                  0x60
 
@@ -1706,6 +1709,25 @@ esdhc_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
             s->prnsts &= ~ESDHC_PRNSTS_CLOCK_GATE_OFF;
         } else {
             s->prnsts |= ESDHC_PRNSTS_CLOCK_GATE_OFF;
+        }
+        /*
+         * The FSL/i.MX uSDHC drives the SD clock through VENDORSPEC,
+         * not through the SDHCI CLKCON. Mirror the VENDORSPEC clock-
+         * enable bits into clkcon so the standard SDHCI paths (PRNSTS
+         * .SDSTB derived from CLOCK_INT_STABLE; sdhci_can_issue_command
+         * gating on CLOCK_IS_ON = INT_EN | SDCLK_EN) see the clock as
+         * enabled. Without this the U-Boot fsl_esdhc_imx driver waits
+         * forever for SDSTB and times out at -ETIMEDOUT, and commands
+         * silently never dispatch because can_issue_command returns
+         * false.
+         */
+        if (value & (ESDHC_VENDORSPEC_HCKEN | ESDHC_VENDORSPEC_IPGEN)) {
+            s->clkcon |= SDHC_CLOCK_INT_EN | SDHC_CLOCK_INT_STABLE;
+        }
+        if (value & ESDHC_VENDORSPEC_CKEN) {
+            s->clkcon |= SDHC_CLOCK_SDCLK_EN;
+        } else {
+            s->clkcon &= ~SDHC_CLOCK_SDCLK_EN;
         }
         break;
 

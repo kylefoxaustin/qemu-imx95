@@ -629,6 +629,7 @@ config FSL_IMX95
     select IMX95_ELE_SERVER
     select IMX95_SCMI_SERVER
     select IMX95_WDOG
+    select SDHCI
     select UNIMP
 
 config FSL_IMX95_EVK
