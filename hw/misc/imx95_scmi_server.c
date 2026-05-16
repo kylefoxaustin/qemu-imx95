@@ -180,7 +180,17 @@ static void scmi_base(IMX95SCMIServerState *s, unsigned int idx,
  * up with zero clocks, which makes clk_enable("ipg") fail -ENOENT
  * inside the LPUART serial driver's probe.
  */
-#define SCMI_CLOCK_NUM              80
+/*
+ * Advertised clock-id count. CCF iterates 0..N-1 calling
+ * CLOCK_ATTRIBUTES once per id; under TCG each round-trip takes
+ * ~270ms (SPL busy-polls MU SR), so this is the dominant CCF-init
+ * cost. We cap at the highest id that any consumer SPL currently
+ * touches (162 = IMX95_CLK_WAKEUPAXI, used by uSDHC1 "ahb"), plus
+ * a small margin, then return NOT_SUPPORTED in CLOCK_ATTRIBUTES
+ * for ids not in scmi_clock_rates[]. v0.3 (Linux bring-up) will
+ * need this raised once we know the full set Linux probes.
+ */
+#define SCMI_CLOCK_NUM              163
 #define SCMI_CLOCK_DEFAULT_RATE     24000000
 
 /*
@@ -210,13 +220,28 @@ static const struct scmi_clock_rate_entry scmi_clock_rates[] = {
     /* IMX95_CLK_LPUART1 = 41 + 11 = 52. imx95-clock.h:64. */
     { 52, 24000000, "lpuart1" },
     /*
-     * Add entries here as v0.2/v0.3 work observes consumers wanting
-     * specific rates. Reasonable expected next adds (RM-confirmation
-     * needed before trusting these): IMX95_CLK_USDHC1/2/3 at ~400 MHz
-     * (sourced from SYSPLL1_PFD1), IMX95_CLK_ENET at 125 MHz or
-     * 250 MHz depending on RGMII/SGMII selection.
+     * uSDHC1 clock tree per SPL DTS mmc@42850000:
+     *   ipg = BUSWAKEUP  (41 + 78  = 119 = 0x77)  ~133 MHz
+     *   ahb = WAKEUPAXI  (41 + 121 = 162 = 0xa2)  ~312.5 MHz
+     *   per = USDHC1     (41 + 117 = 158 = 0x9e)  ~400 MHz (HS200)
+     * Plausible rates from the BSP; values not RM-confirmed yet (TODO
+     * before upstream). fsl_esdhc treats "per" as the bus-clock source
+     * and divides down to 400 kHz for card init, then re-tunes upward.
      */
+    { 119, 133000000, "buswakeup" },
+    { 162, 312500000, "wakeupaxi" },
+    { 158, 400000000, "usdhc1" },
 };
+
+static bool scmi_clock_supported(uint32_t clock_id)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(scmi_clock_rates); i++) {
+        if (scmi_clock_rates[i].clock_id == clock_id) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static uint64_t scmi_lookup_clock_rate(uint32_t clock_id)
 {
@@ -256,15 +281,22 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
     }
     case SCMI_MSG_CLOCK_ATTRIBUTES: {
         /*
-         * Request payload (1 word): clock_id.
-         * Response: attributes (u32) + name (16 bytes). Each clock
-         * needs a unique name for CCF's clk_register() not to reject
-         * duplicates. Pull clock_id from shmem and embed in the name.
+         * On-demand advertisement (replaces v0.1's arbitrary 80-cap):
+         * advertise NUM_CLOCKS = SCMI_CLOCK_NUM in PROTOCOL_ATTRIBUTES
+         * so CCF allocates its array, then return NOT_SUPPORTED here
+         * for any clock_id not in scmi_clock_rates[]. CCF skips
+         * registration for those — we only pay clk_register cost for
+         * the handful of clocks we actually answer for. Without this,
+         * each unique-name clk_register touches the uclass list and
+         * registering all 256 takes >60s under TCG.
+         *
+         * Response on supported IDs: attributes (u32) + name (16 bytes).
+         * The name must be unique per clock_id (CCF rejects dupes).
          */
         uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
         uint8_t  reply[4 + 16] = {0};
 
-        if (clock_id >= SCMI_CLOCK_NUM) {
+        if (clock_id >= SCMI_CLOCK_NUM || !scmi_clock_supported(clock_id)) {
             scmi_complete(s, idx, SCMI_NOT_SUPPORTED, NULL, 0);
             return;
         }
@@ -395,11 +427,35 @@ static void scmi_imx_misc(IMX95SCMIServerState *s, unsigned int idx,
         return;
     }
     case SCMI_MSG_IMX_MISC_ROM_PASSOVER_GET: {
-        /* Response extra payload: numPassover (u32) + passover[15] (60B). */
+        /*
+         * Response extra payload: numPassover (u32) + passover[15] (60B).
+         * Populate the passover[] block with a minimal packed
+         * rom_passover_t (per sys_proto.h:244) that points SPL at
+         * SD1 (uSDHC1, mmc@42850000). Field offsets within the 60-byte
+         * passover area:
+         *   off 0-1   tag (u16) - nonzero so SPL accepts the data
+         *   off 2     len (u8 = 0x80, fixed)
+         *   off 3     ver (u8)
+         *   off 37    boot_dev_inst (u8) - SD instance 0
+         *   off 38    boot_dev_type (u8) - BT_DEV_TYPE_SD (1)
+         *
+         * BT_DEV_TYPE_SD is enum boot_dev_type_e in sys_proto.h:205.
+         * SPL's get_boot_device() maps {SD, inst 0} -> SD1_BOOT, then
+         * spl_board_boot_device(SD1_BOOT) -> BOOT_DEVICE_MMC1, which
+         * triggers a probe of mmc@42850000.
+         */
         uint8_t extra[4 + 60] = {0};
+        uint32_t one = cpu_to_le32(1);
+        memcpy(&extra[0], &one, sizeof(one));    /* numPassover = 1 */
+        extra[4 + 0]  = 0xCD;                    /* tag low byte */
+        extra[4 + 1]  = 0xAB;                    /* tag high byte */
+        extra[4 + 2]  = 0x80;                    /* len = fixed 0x80 */
+        extra[4 + 3]  = 0x01;                    /* ver */
+        extra[4 + 37] = 0x00;                    /* boot_dev_inst = 0 */
+        extra[4 + 38] = 0x01;                    /* boot_dev_type = SD */
         warn_report_once("scmi-server: imx-misc ROM_PASSOVER_GET stub "
-                         "returning numPassover=0 (SPL will fall back to "
-                         "default boot-device probing).");
+                         "pointing SPL at SD1 (uSDHC1 @ 0x42850000); "
+                         "promote when storage backend lands.");
         scmi_complete(s, idx, SCMI_SUCCESS, extra, sizeof(extra));
         return;
     }
