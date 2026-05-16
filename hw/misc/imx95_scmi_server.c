@@ -183,6 +183,51 @@ static void scmi_base(IMX95SCMIServerState *s, unsigned int idx,
 #define SCMI_CLOCK_NUM              80
 #define SCMI_CLOCK_DEFAULT_RATE     24000000
 
+/*
+ * Per-clock rate table. CLOCK_RATE_GET response is computed from
+ * this table; clock_ids not listed fall back to SCMI_CLOCK_DEFAULT_RATE
+ * (24 MHz). The v0.1 milestone got away with returning 24 MHz for
+ * every clock because the only consumer (LPUART) was natively a
+ * 24 MHz IP. v0.2 work that touches uSDHC, ENET, or other clocks
+ * with higher source rates needs accurate values here - otherwise
+ * the driver's divisor math will compute against the wrong source
+ * rate and timing on the bus will fail in subtle ways.
+ *
+ * Clock IDs derive from the i.MX 95 BSP header
+ * references/uboot-imx/dts/upstream/src/arm64/freescale/imx95-clock.h
+ * where each IMX95_CLK_<NAME> is defined relative to
+ * IMX95_CCM_NUM_CLK_SRC (=41). When adding entries, please leave a
+ * comment pointing at the header line so the source-of-truth stays
+ * traceable.
+ */
+struct scmi_clock_rate_entry {
+    uint32_t clock_id;
+    uint64_t rate_hz;
+    const char *name;       /* informational; not delivered to agent */
+};
+
+static const struct scmi_clock_rate_entry scmi_clock_rates[] = {
+    /* IMX95_CLK_LPUART1 = 41 + 11 = 52. imx95-clock.h:64. */
+    { 52, 24000000, "lpuart1" },
+    /*
+     * Add entries here as v0.2/v0.3 work observes consumers wanting
+     * specific rates. Reasonable expected next adds (RM-confirmation
+     * needed before trusting these): IMX95_CLK_USDHC1/2/3 at ~400 MHz
+     * (sourced from SYSPLL1_PFD1), IMX95_CLK_ENET at 125 MHz or
+     * 250 MHz depending on RGMII/SGMII selection.
+     */
+};
+
+static uint64_t scmi_lookup_clock_rate(uint32_t clock_id)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(scmi_clock_rates); i++) {
+        if (scmi_clock_rates[i].clock_id == clock_id) {
+            return scmi_clock_rates[i].rate_hz;
+        }
+    }
+    return SCMI_CLOCK_DEFAULT_RATE;
+}
+
 #define SCMI_MSG_CLOCK_ATTRIBUTES       0x03
 #define SCMI_MSG_CLOCK_RATE_SET         0x05
 #define SCMI_MSG_CLOCK_RATE_GET         0x06
@@ -228,9 +273,11 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
         return;
     }
     case SCMI_MSG_CLOCK_RATE_GET: {
+        uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
+        uint64_t hz = scmi_lookup_clock_rate(clock_id);
         uint32_t rate[2];
-        rate[0] = cpu_to_le32(SCMI_CLOCK_DEFAULT_RATE);  /* lsb */
-        rate[1] = 0;                                     /* msb */
+        rate[0] = cpu_to_le32((uint32_t)(hz & 0xFFFFFFFFu));
+        rate[1] = cpu_to_le32((uint32_t)(hz >> 32));
         scmi_complete(s, idx, SCMI_SUCCESS, rate, sizeof(rate));
         return;
     }
