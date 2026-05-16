@@ -282,13 +282,46 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
         return;
     }
     case SCMI_MSG_CLOCK_RATE_SET: {
-        /* Response: status only. The achieved rate is read back by GET. */
+        /*
+         * No-op: the v0.1 stub does not actually change clock rates.
+         * We still return SUCCESS so consumers proceed. warn_report_once
+         * surfaces the no-op exactly once in default QEMU output (so
+         * a developer running without -d still learns about it), and
+         * the LOG_GUEST_ERROR per-call line gives -d guest_errors the
+         * full clock_id detail.
+         */
+        uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
+        warn_report_once("scmi-server: CLOCK_RATE_SET is a stub no-op; "
+                         "values are not retained (CLOCK_RATE_GET returns "
+                         "the table rate). Enable -d guest_errors for "
+                         "per-call detail.");
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "scmi-server: CLOCK_RATE_SET on clock_id %u ignored\n",
+                      clock_id);
         scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
         return;
     }
-    case SCMI_MSG_CLOCK_CONFIG_SET:
-    case SCMI_MSG_CLOCK_PARENT_SET:
+    case SCMI_MSG_CLOCK_CONFIG_SET: {
+        uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
+        warn_report_once("scmi-server: CLOCK_CONFIG_SET is a stub no-op.");
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "scmi-server: CLOCK_CONFIG_SET on clock_id %u ignored\n",
+                      clock_id);
+        scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+        return;
+    }
+    case SCMI_MSG_CLOCK_PARENT_SET: {
+        uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
+        warn_report_once("scmi-server: CLOCK_PARENT_SET is a stub no-op.");
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "scmi-server: CLOCK_PARENT_SET on clock_id %u ignored\n",
+                      clock_id);
+        scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+        return;
+    }
     case SCMI_MSG_CLOCK_NAME_GET:
+        warn_report_once("scmi-server: CLOCK_NAME_GET is a stub no-op "
+                         "(returns empty response).");
         scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
         return;
     default:
