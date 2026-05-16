@@ -19,6 +19,8 @@ review doc as "wontfix" with rationale.
 
 ## Before v0.2 (SPL → U-Boot proper handoff)
 
+Observed-failure items from the v0.1 SPL run:
+
 - **SCMI vendor protocol 0x84 (`scmi_misc`)** — SPL queries
   `rom_boot_info` via this protocol just after the banner. Our
   SCMI server doesn't advertise or handle protocol 0x84, so SPL
@@ -34,6 +36,49 @@ review doc as "wontfix" with rationale.
 - **Container loading** — Pick a story: stock NXP AHAB container,
   FIT, or a custom unwrap. Affects the storage layout above.
 
+Surfaced by the v0.1 review (independent-Claude pass on
+`docs/reviews/v0.1.md`):
+
+- **Per-clock rate lookup table.** SCMI server's
+  `CLOCK_RATE_GET` currently returns 24 MHz for every clock_id.
+  uSDHC computes its divisor as `source_rate / target_rate`; with
+  a 24 MHz source and a 400 MHz target, the divisor will be
+  wrong and SD timing will fail. Add a small `(clock_id, rate)`
+  lookup table for at least the clocks SPL/uSDHC/EQOS care about
+  before any storage work lands. ~50 lines, doesn't need a real
+  clock-tree solver.
+
+- **Replace SCMI 80-clock hard cap with on-demand advertisement.**
+  v0.1's `SCMI_CLOCK_NUM = 80` is arbitrary. Better approach:
+  track which `clock_id` values have actually been queried via
+  `CLOCK_ATTRIBUTES`, return success for those, return
+  `NOT_SUPPORTED` for everything else. CCF walks `0..N` once,
+  discovers the supported set, stops. No arbitrary upper bound,
+  no false positives.
+
+- **Promote SCMI `SUCCESS`-no-op handlers to LOG_GUEST_ERROR.**
+  v0.1 returns SUCCESS-no-effect for several SCMI messages it
+  doesn't actually implement (pinctrl SET, clock CONFIG_SET
+  / PARENT_SET / NAME_GET). When v0.2 starts touching uSDHC or
+  networking, a real pinctrl SET will silently succeed-no-op -
+  worst-possible failure mode (looks fine, fails mysteriously
+  later). Bump the log level so these surface in normal QEMU
+  output, not only under `-d unimp`.
+
+- **Banner-text smoke regression script.** `tests/spl-banner/` has
+  a `README.md` documenting the run; v0.2 should add an actual
+  script that runs SPL with a wallclock timeout, greps for the
+  expected banner line, and exits non-zero if it's not there
+  within 30s. Catches both functional regressions and the
+  `-device loader` / `arm_load_kernel` ordering invariant
+  (whichever is last-write-wins on the reset PC).
+
+- **VMState snapshot/restore test.** Every v0.1 device declares
+  VMState; none of it is exercised. Add a savevm/loadvm round-
+  trip during SPL execution (savevm mid-boot, loadvm, verify SPL
+  resumes coherently). Catches silent VMState bugs before they
+  become "every snapshot is corrupted" surprises later.
+
 ## Before v0.3 (Linux to login)
 
 - **SCMI protocols beyond what v0.1 stubs.** v0.1 will respond to
@@ -44,6 +89,13 @@ review doc as "wontfix" with rationale.
   `imx95.dtsi:406-420`. Audit gaps before Linux bring-up; either
   extend the stub or accept that Linux probes will log
   "unsupported protocol" entries and degrade.
+
+- **ELE `GET_INFO` soc_rev = 0xA1 may trip Linux errata code.**
+  Per the v0.1 review: U-Boot uses soc_rev mainly for printf, but
+  Linux's i.MX silicon-rev-aware errata paths branch on it. If
+  v0.3 boot shows weird per-rev behavior, check this first.
+  Cross-check against the i.MX 95 RM "Identification" chapter
+  and set the value the silicon actually reports.
 
 ## Before v0.5 (PCIe + MSI consumers arrive)
 
