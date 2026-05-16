@@ -333,6 +333,85 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
     }
 }
 
+/* ----- NXP-vendor SCMI imx-misc protocol (0x84) ----- */
+
+/*
+ * ROM_PASSOVER_GET response layout (per rom_passover_t in U-Boot's
+ * arch/arm/include/asm/mach-imx/sys_proto.h:244):
+ *
+ *   u32 status;
+ *   u32 numPassover;
+ *   u32 passover[15];   // 60 bytes; packed rom_passover_t struct
+ *
+ * Total response payload = 4 + 4 + 60 = 68 bytes. Matches the
+ * "size_of(out) = 68" the SPL error message reports.
+ *
+ * The packed rom_passover_t fields the agent unpacks: tag (u16),
+ * len (u8 = 0x80), ver (u8), boot_mode (u32), card_addr_mode (u32),
+ * bad_blks_of_img_set0 (u32), ap_mu_id (u32),
+ * bad_blks_of_img_set1 (u32), boot_stage (u8), img_set_sel (u8),
+ * rsv0[2], img_set_end (u32), rom_version (u32),
+ * boot_dev_state (u8), boot_dev_inst (u8), boot_dev_type (u8), rsv1,
+ * dev_page_size (u32), cnt_header_ofs (u32), img_ofs (u32).
+ *
+ * v0.2 stub returns numPassover = 0 with the passover block
+ * zero-filled. SPL's scmi_get_rom_data() succeeds (no more
+ * "scmi_err = -1" message), but the data is uninformative; SPL will
+ * fall back to its default boot-device probe sequence rather than
+ * using ROM-provided hints. Promote to a real boot-mode hint when
+ * the storage backend lands in v0.2.
+ */
+static void scmi_imx_misc(IMX95SCMIServerState *s, unsigned int idx,
+                          uint8_t msg_id, uint16_t token)
+{
+    switch (msg_id) {
+    case SCMI_MSG_PROTOCOL_VERSION: {
+        uint32_t version = cpu_to_le32(0x00010000);
+        scmi_complete(s, idx, SCMI_SUCCESS, &version, sizeof(version));
+        return;
+    }
+    case SCMI_MSG_PROTOCOL_ATTRIBUTES: {
+        uint32_t attrs = 0;
+        scmi_complete(s, idx, SCMI_SUCCESS, &attrs, sizeof(attrs));
+        return;
+    }
+    case SCMI_MSG_PROTOCOL_MESSAGE_ATTRIBUTES: {
+        uint32_t mattr = 0;
+        scmi_complete(s, idx, SCMI_SUCCESS, &mattr, sizeof(mattr));
+        return;
+    }
+    case SCMI_MSG_IMX_MISC_RESET_REASON: {
+        /*
+         * Response struct (scmi_imx_misc_reset_reason_out in
+         * scmi_nxp_protocols.h:29): status (4) + bootflags (4) +
+         * shutdownflags (4) + extInfo[21] (84). Total 96 bytes.
+         * Stub: zero everything, which the agent reads as "no boot
+         * reason recorded, no shutdown reason recorded, no
+         * extended info" - functionally indistinguishable from a
+         * fresh power-on reset, which is what QEMU effectively is.
+         */
+        uint8_t extra[4 + 4 + 84] = {0};
+        scmi_complete(s, idx, SCMI_SUCCESS, extra, sizeof(extra));
+        return;
+    }
+    case SCMI_MSG_IMX_MISC_ROM_PASSOVER_GET: {
+        /* Response extra payload: numPassover (u32) + passover[15] (60B). */
+        uint8_t extra[4 + 60] = {0};
+        warn_report_once("scmi-server: imx-misc ROM_PASSOVER_GET stub "
+                         "returning numPassover=0 (SPL will fall back to "
+                         "default boot-device probing).");
+        scmi_complete(s, idx, SCMI_SUCCESS, extra, sizeof(extra));
+        return;
+    }
+    default:
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: imx-misc unhandled msg_id 0x%02x token 0x%x\n",
+                      __func__, msg_id, token);
+        scmi_complete(s, idx, SCMI_NOT_SUPPORTED, NULL, 0);
+        return;
+    }
+}
+
 /* ----- Common stub for any other advertised protocol ----- */
 
 static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
@@ -419,6 +498,9 @@ static void scmi_doorbell(void *opaque, unsigned int idx)
         return;
     case SCMI_PROTOCOL_PINCTRL:
         scmi_protocol_stub(s, idx, protocol_id, msg_id, token);
+        return;
+    case SCMI_PROTOCOL_IMX_MISC:
+        scmi_imx_misc(s, idx, msg_id, token);
         return;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
