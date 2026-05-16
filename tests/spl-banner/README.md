@@ -72,18 +72,45 @@ synchronously which takes some boot time on TCG), SPL prints:
     get_reset_reason:-1 for SYS
     Normal Boot
 
-then proceeds into post-banner work which is **v0.2 scope** and
-not yet handled, so SPL will print error messages and reset:
+then proceeds into post-banner work. As of the v0.2 frontier
+landing the imx-misc SCMI protocol, the uSDHC1/2/3 controllers,
+and the SDHCI clock-path fix, SPL completes MMC bring-up and
+moves on to the AHAB-container parse step:
 
-    Failed to get ROM passover data, scmi_err = -1, size_of(out) = 68
-    SCMI: failure at rom_boot_info
+    Trying to boot from MMC1
+    Boot stage: USB Serial Download
+    Image set: 0, offset: 0x0
+    Parse seco container failed -14
     SPL: failed to boot from all boot devices
-    ### ERROR ### Please RESET the board ###
 
-That's the expected end-state for v0.1: banner reached, then
-graceful failure where the next milestone picks up (SCMI vendor
-protocol 0x84 for `rom_boot_info`, plus a uSDHC/eMMC model so
-SPL can actually load the next stage).
+That's the expected end-state without an SD image: the controller
+talks to the (anonymous) bus but there is no card, so the read
+fails. With an SD image attached (see "Booting from SD" below)
+SPL gets through `mmc init`, reads sector 0, and rejects the
+all-zero data as not a valid container. Closing the v0.2
+milestone needs an actual NXP AHAB / SECO container on the SD
+image at offset 32 KiB (`CONTAINER_HDR_MMCSD_OFFSET`).
+
+## Booting from SD
+
+Create a backing image and attach it via QEMU's generic
+`-drive` + `-device sd-card` plumbing:
+
+    truncate -s 64M tests/sd-boot/sd.img
+
+    ./build/qemu-system-aarch64 \
+        -M imx95-19x19-evk \
+        -nographic \
+        -m 2G \
+        -device loader,file=tests/spl-banner/uboot-build/spl/u-boot-spl.bin,addr=0x20480000,cpu-num=0,force-raw=on \
+        -drive if=none,format=raw,file=tests/sd-boot/sd.img,id=sd0 \
+        -device sd-card,drive=sd0
+
+The bare `-device sd-card,drive=sd0` (no explicit `bus=`) lands
+on uSDHC1's anonymous sd-bus, because `fsl-imx95.c` realises the
+three uSDHC instances in reverse order so usdhc1 ends up at the
+top of the unnamed-bus stack — see the comment in
+`fsl_imx95_realize()`.
 
 ## Loading SPL via `-device loader`
 
