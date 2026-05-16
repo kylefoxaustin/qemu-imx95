@@ -394,6 +394,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                         fsl_imx95_memmap[FSL_IMX95_ELE_MU1].addr);
     }
 
+    /*
+     * Ordering is load-bearing here: the MU must be realised (so its
+     * MMIO + state are valid) BEFORE the responder is realised,
+     * because the responder's realize() calls imx_mu_set_tr_write_handler()
+     * on the MU. The dependency is via a runtime callback registration
+     * inside the responder's realize hook, not via a QOM property, so
+     * a grep for "ele_mu1" won't surface it. If you reorder these
+     * lines, the responder will register its handler on a still-zeroed
+     * MU state and SPL's first ELE TR write will silently no-op.
+     */
     object_property_set_link(OBJECT(&s->ele_server), "mu",
                              OBJECT(&s->ele_mu1), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server), errp)) {
