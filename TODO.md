@@ -17,19 +17,22 @@ review doc as "wontfix" with rationale.
     chardev byte-arrival in `imx_lpuart_receive`),
     `include/hw/char/imx_lpuart.h` (add `LPUART_CTRL_ORIE`).
 
-## In progress: v0.1 (SCMI stub + SPL banner)
+## Before v0.2 (SPL → U-Boot proper handoff)
 
-The original "v0.1 SPL banner" plan assumed direct CCM/ANATOP/IOMUXC
-modelling. Investigation showed the NXP imx95-evk SPL is fully SCMI-
-based even at the SPL stage, so the SCMI server stub work originally
-planned for v0.3 has been pulled forward into v0.1. The "before
-v0.1" entry that used to live here listing those base addresses is
-now superseded by `references/uboot-imx/arch/arm/include/asm/arch-imx9/imx-regs.h`,
-which has the RM-sourced bases; SPL won't poke them directly because
-of SCMI, but they're added as logging stubs as a canary.
+- **SCMI vendor protocol 0x84 (`scmi_misc`)** — SPL queries
+  `rom_boot_info` via this protocol just after the banner. Our
+  SCMI server doesn't advertise or handle protocol 0x84, so SPL
+  prints `SCMI: failure at rom_boot_info` and resets. Extend the
+  SCMI server to advertise + stub-respond to scmi_misc messages.
 
-Items below remain for future milestones; v0.1's own scope sits in
-the milestone review doc once it tags.
+- **uSDHC / eMMC storage model** — SPL tries to load the next
+  stage (U-Boot proper, ATF, M33 SM firmware) from SD/eMMC and
+  prints `SPL: failed to boot from all boot devices`. Need a
+  Freescale eSDHC model at the appropriate base, plus boot media
+  (a disk image with the FIT or AHAB container).
+
+- **Container loading** — Pick a story: stock NXP AHAB container,
+  FIT, or a custom unwrap. Affects the storage layout above.
 
 ## Before v0.3 (Linux to login)
 
