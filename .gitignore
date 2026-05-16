@@ -33,3 +33,4 @@ docs/reviews/
 
 # v0.1 work-around dir from the QEMU build reconfigure
 /build.broken/
+tests/sd-boot/

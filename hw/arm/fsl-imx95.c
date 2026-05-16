@@ -38,6 +38,7 @@
 #include "hw/core/qdev-properties-system.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/misc/unimp.h"
+#include "hw/sd/sdhci.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
 #include "target/arm/cpu-qom.h"
@@ -194,7 +195,6 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
-        FSL_IMX95_USDHC1, FSL_IMX95_USDHC2, FSL_IMX95_USDHC3,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
@@ -431,6 +431,44 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog3), 0,
                     fsl_imx95_memmap[FSL_IMX95_WDOG3].addr);
 
+    /*
+     * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with
+     * the i.MX MMIO quirks). With no backing -drive the card line
+     * stays unpopulated and SPL fails its MMC1 probe cleanly.
+     * Attach storage with e.g.:
+     *   -drive if=none,format=raw,file=sd.img,id=mmc0
+     *   -device sd-card,drive=mmc0
+     *
+     * Realization order is intentional: we want usdhc1's sd-bus to be
+     * the first one a bare `-device sd-card,drive=...` (no explicit
+     * bus=) picks up, since SPL is hard-wired to boot from MMC1.
+     * QEMU's anonymous-bus matching prefers the most-recently-added
+     * bus of the type, so we realize the array in reverse so that
+     * usdhc1 ends up at the top of the stack.
+     */
+    {
+        static const struct {
+            int region;
+            int irq;
+        } usdhc_table[FSL_IMX95_NUM_USDHCS] = {
+            { FSL_IMX95_USDHC1, FSL_IMX95_USDHC1_IRQ },
+            { FSL_IMX95_USDHC2, FSL_IMX95_USDHC2_IRQ },
+            { FSL_IMX95_USDHC3, FSL_IMX95_USDHC3_IRQ },
+        };
+
+        for (i = FSL_IMX95_NUM_USDHCS - 1; i >= 0; i--) {
+            SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usdhc[i]);
+
+            if (!sysbus_realize(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0,
+                            fsl_imx95_memmap[usdhc_table[i].region].addr);
+            sysbus_connect_irq(sbd, 0,
+                qdev_get_gpio_in(gicdev, usdhc_table[i].irq));
+        }
+    }
+
     /* All peripherals not yet modeled get logging stubs. */
     fsl_imx95_install_unimplemented(s);
 }
@@ -453,6 +491,11 @@ static void fsl_imx95_init(Object *obj)
                             TYPE_IMX95_SCMI_SERVER);
     object_initialize_child(obj, "ele-server", &s->ele_server,
                             TYPE_IMX95_ELE_SERVER);
+
+    for (i = 0; i < FSL_IMX95_NUM_USDHCS; i++) {
+        g_autofree char *name = g_strdup_printf("usdhc%d", i + 1);
+        object_initialize_child(obj, name, &s->usdhc[i], TYPE_IMX_USDHC);
+    }
 }
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
