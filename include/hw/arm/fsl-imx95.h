@@ -140,6 +140,15 @@ enum FslImx95MemoryRegions {
     /* ARM SMMU-v3 - SPL's disable_smmuv3() reads CR0; stub returns 0. */
     FSL_IMX95_SMMU,
 
+    /*
+     * uSDHC (SD / eMMC) controllers. SPL probes them to find a boot
+     * device; v0.2 stubs them so we can observe access patterns
+     * before promoting to a real fsl-esdhc model.
+     */
+    FSL_IMX95_USDHC1,
+    FSL_IMX95_USDHC2,
+    FSL_IMX95_USDHC3,
+
     FSL_IMX95_NUM_REGIONS,
 };
 
