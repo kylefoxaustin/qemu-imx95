@@ -198,6 +198,15 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_LPI2C7,
     FSL_IMX95_LPI2C8,
 
+    /*
+     * USB PHY + DWC3 controller. U-Boot autoboot's bootcmd touches
+     * these via dwc3_imx8mp_glue_configure (reads at 0x4c1f0000).
+     * Logging stubs prevent the data abort that otherwise resets
+     * the board mid-autoboot.
+     */
+    FSL_IMX95_USB_PHY,
+    FSL_IMX95_USB_DWC3,
+
     FSL_IMX95_NUM_REGIONS,
 };
 
