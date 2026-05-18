@@ -182,6 +182,22 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_USDHC2,
     FSL_IMX95_USDHC3,
 
+    /*
+     * LPI2C controllers. U-Boot proper probes them during the post-
+     * banner dram_init / board_init phase (PMIC over I2C2 is the
+     * critical one - PCA9450 on the EVK). Logging stubs are enough
+     * to let the I2C transfer time out gracefully and DRAM init
+     * fall back to defaults.
+     */
+    FSL_IMX95_LPI2C1,
+    FSL_IMX95_LPI2C2,
+    FSL_IMX95_LPI2C3,
+    FSL_IMX95_LPI2C4,
+    FSL_IMX95_LPI2C5,
+    FSL_IMX95_LPI2C6,
+    FSL_IMX95_LPI2C7,
+    FSL_IMX95_LPI2C8,
+
     FSL_IMX95_NUM_REGIONS,
 };
 
