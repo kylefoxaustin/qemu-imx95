@@ -198,6 +198,10 @@ static const struct {
     [FSL_IMX95_LPI2C6] = { 0x426e0000, 64 * KiB, "lpi2c6" },
     [FSL_IMX95_LPI2C7] = { 0x44340000, 64 * KiB, "lpi2c7" },
     [FSL_IMX95_LPI2C8] = { 0x44350000, 64 * KiB, "lpi2c8" },
+
+    /* USB PHY + DWC3 controller (autoboot bootcmd touches these). */
+    [FSL_IMX95_USB_PHY]  = { 0x4c1f0000, 64 * KiB, "usb_phy" },
+    [FSL_IMX95_USB_DWC3] = { 0x4c200000, 64 * KiB, "usb_dwc3" },
 };
 
 /*
@@ -231,6 +235,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C2, FSL_IMX95_LPI2C3,
         FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C5, FSL_IMX95_LPI2C6,
         FSL_IMX95_LPI2C7, FSL_IMX95_LPI2C8,
+        FSL_IMX95_USB_PHY, FSL_IMX95_USB_DWC3,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
