@@ -233,16 +233,6 @@ static const struct scmi_clock_rate_entry scmi_clock_rates[] = {
     { 158, 400000000, "usdhc1" },
 };
 
-static bool scmi_clock_supported(uint32_t clock_id)
-{
-    for (size_t i = 0; i < ARRAY_SIZE(scmi_clock_rates); i++) {
-        if (scmi_clock_rates[i].clock_id == clock_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static uint64_t scmi_lookup_clock_rate(uint32_t clock_id)
 {
     for (size_t i = 0; i < ARRAY_SIZE(scmi_clock_rates); i++) {
@@ -281,22 +271,22 @@ static void scmi_clock(IMX95SCMIServerState *s, unsigned int idx,
     }
     case SCMI_MSG_CLOCK_ATTRIBUTES: {
         /*
-         * On-demand advertisement (replaces v0.1's arbitrary 80-cap):
-         * advertise NUM_CLOCKS = SCMI_CLOCK_NUM in PROTOCOL_ATTRIBUTES
-         * so CCF allocates its array, then return NOT_SUPPORTED here
-         * for any clock_id not in scmi_clock_rates[]. CCF skips
-         * registration for those — we only pay clk_register cost for
-         * the handful of clocks we actually answer for. Without this,
-         * each unique-name clk_register touches the uclass list and
-         * registering all 256 takes >60s under TCG.
-         *
-         * Response on supported IDs: attributes (u32) + name (16 bytes).
-         * The name must be unique per clock_id (CCF rejects dupes).
+         * Return SUCCESS with attributes=0 + a unique "clk_<id>" name for
+         * every clock_id in [0, SCMI_CLOCK_NUM). U-Boot's clk_scmi probe
+         * (drivers/clk/clk_scmi.c) iterates 0..num_clocks-1 and ignores
+         * the SCMI status code — it only checks the transport return.
+         * The previous "return NOT_SUPPORTED with no payload" pattern
+         * caused U-Boot to read garbage attributes/name from caller stack;
+         * if BIT(1) happened to be set it triggered spurious
+         * CLOCK_GET_PERMISSIONS round-trips, and a stray duplicate name
+         * could abort the loop before our truly-supported ids registered.
+         * Unique names + attributes=0 makes CCF iterate cleanly:
+         * no GET_PERMISSIONS, no dup-name failure mid-loop.
          */
         uint32_t clock_id = smt_read32(s, SMT_MSG_PAYLOAD);
         uint8_t  reply[4 + 16] = {0};
 
-        if (clock_id >= SCMI_CLOCK_NUM || !scmi_clock_supported(clock_id)) {
+        if (clock_id >= SCMI_CLOCK_NUM) {
             scmi_complete(s, idx, SCMI_NOT_SUPPORTED, NULL, 0);
             return;
         }
