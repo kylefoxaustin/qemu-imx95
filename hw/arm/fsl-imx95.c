@@ -32,6 +32,7 @@
 #include "system/address-spaces.h"
 #include "system/system.h"
 #include "hw/arm/bsa.h"
+#include "hw/arm/boot.h"
 #include "hw/arm/fsl-imx95.h"
 #include "hw/core/boards.h"
 #include "hw/core/qdev-properties.h"
@@ -284,6 +285,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             object_property_set_bool(OBJECT(&s->cpu[i]), "has_el3",
                                      !kvm_enabled(), &error_abort);
         }
+
+        /*
+         * U-Boot proper runs at EL3 (no TF-A below it in our model)
+         * and issues OPTEE/PSCI SMCs assuming firmware will service
+         * them. Without psci-conduit, those SMCs trap to U-Boot's own
+         * EL3 sync vector and crash. Wire QEMU's built-in PSCI handler
+         * to the SMC conduit so PSCI calls return cleanly and the
+         * vendor-OS calls return UNDEFINED, which U-Boot handles as
+         * "no OP-TEE present" and moves on.
+         */
+        object_property_set_int(OBJECT(&s->cpu[i]), "psci-conduit",
+                                QEMU_PSCI_CONDUIT_SMC, &error_abort);
 
         if (i) {
             /* Secondary CPUs come up via PSCI / SRC. */
