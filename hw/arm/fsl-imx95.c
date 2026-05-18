@@ -194,6 +194,16 @@ static const struct {
  * traces accesses but doesn't fault. This lets U-Boot / Linux probe
  * registers safely while we iterate.
  */
+/*
+ * NOP tr-write handler for the stub MUs. Its mere presence triggers
+ * the IMX_MU model's "set TSR.TEn after TR write" path - effectively
+ * making the stub mailboxes drop-and-ack on every send.
+ */
+static void fsl_imx95_stub_mu_tr_write(void *opaque, unsigned int idx,
+                                       uint32_t value)
+{
+}
+
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
@@ -203,9 +213,6 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
-        FSL_IMX95_MU_47320000, FSL_IMX95_MU_47350000,
-        FSL_IMX95_MU_47540000, FSL_IMX95_MU_47550000,
-        FSL_IMX95_MU_47560000, FSL_IMX95_MU_47570000,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
@@ -437,6 +444,34 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * Realise the 6 stub MUs. Wiring imx_mu_set_tr_write_handler() to
+     * a NOP makes IMX_MU re-assert TSR.TEn after every TR write, so
+     * U-Boot's TX-empty poll on these unmodeled mailboxes completes
+     * instead of looping. RR stays empty - no responder, no replies -
+     * which matches "the mailbox is here but nothing is listening on
+     * the other end."
+     */
+    {
+        static const int stub_mu_regions[] = {
+            FSL_IMX95_MU_47320000, FSL_IMX95_MU_47350000,
+            FSL_IMX95_MU_47540000, FSL_IMX95_MU_47550000,
+            FSL_IMX95_MU_47560000, FSL_IMX95_MU_47570000,
+        };
+        QEMU_BUILD_BUG_ON(ARRAY_SIZE(stub_mu_regions) !=
+                          ARRAY_SIZE(s->stub_mu));
+        for (i = 0; i < ARRAY_SIZE(s->stub_mu); i++) {
+            SysBusDevice *sbd = SYS_BUS_DEVICE(&s->stub_mu[i]);
+            if (!sysbus_realize(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0,
+                            fsl_imx95_memmap[stub_mu_regions[i]].addr);
+            imx_mu_set_tr_write_handler(&s->stub_mu[i],
+                                        fsl_imx95_stub_mu_tr_write, NULL);
+        }
+    }
+
+    /*
      * Watchdog 3 (the Wakeup-domain wdog the kernel sees). U-Boot SPL
      * also disables it in arch_cpu_init() before the console comes up.
      * Stub model is enough to satisfy disable_wdog().
@@ -502,6 +537,10 @@ static void fsl_imx95_init(Object *obj)
 
     object_initialize_child(obj, "sm_mu", &s->sm_mu, TYPE_IMX_MU);
     object_initialize_child(obj, "ele_mu1", &s->ele_mu1, TYPE_IMX_MU);
+    for (i = 0; i < ARRAY_SIZE(s->stub_mu); i++) {
+        g_autofree char *name = g_strdup_printf("stub_mu%d", i);
+        object_initialize_child(obj, name, &s->stub_mu[i], TYPE_IMX_MU);
+    }
     object_initialize_child(obj, "scmi-server", &s->scmi_server,
                             TYPE_IMX95_SCMI_SERVER);
     object_initialize_child(obj, "ele-server", &s->ele_server,

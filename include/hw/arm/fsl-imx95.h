@@ -69,6 +69,13 @@ struct FslImx95State {
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
     IMXMUState              ele_mu1;
+    /*
+     * Stub MUs for the V2X / NETC / spare instances the DT references
+     * but nothing in the model talks to. Wired with a NOP tr-write
+     * handler so writes drop and TSR.TEn re-asserts, letting U-Boot
+     * iterate them cleanly without hanging on TX-empty polls.
+     */
+    IMXMUState              stub_mu[6];
     IMX95SCMIServerState    scmi_server;
     IMX95ELEServerState     ele_server;
     SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
