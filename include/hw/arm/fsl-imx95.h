@@ -78,6 +78,16 @@ struct FslImx95State {
     IMXMUState              stub_mu[6];
     IMX95SCMIServerState    scmi_server;
     IMX95ELEServerState     ele_server;
+    /*
+     * Second ELE server attached to the stub MU at 0x47550000. The
+     * imx9_probe_mu() SCMI variant in U-Boot proper hardcodes
+     * "mailbox@47550000" as the ELE channel (the SPL variant uses
+     * "mailbox@47530000", which is ele_mu1). Without an ELE responder
+     * at 0x47550000, ele_get_info() times out (-110), board_init_f's
+     * initcall fails, and the boot hangs before serial_init prints.
+     * Mirror the responder so both SPL and U-Boot proper reach it.
+     */
+    IMX95ELEServerState     ele_server2;
     SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
     DeviceState            *wdog3;
 };
