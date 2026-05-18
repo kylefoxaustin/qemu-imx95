@@ -332,6 +332,13 @@ static void sdhci_poweron_reset(DeviceState *dev)
 
 static void sdhci_data_transfer(void *opaque);
 
+/*
+ * Forward decl so sdhci_sdma_transfer_multi_blocks can detect the
+ * i.MX/FSL uSDHC variant via s->io_ops; the actual definition lives
+ * near the other i.MX-specific MemoryRegionOps further down.
+ */
+static const MemoryRegionOps usdhc_mmio_ops;
+
 #define BLOCK_SIZE_MASK (4 * KiB - 1)
 
 static void sdhci_send_command(SDHCIState *s)
@@ -611,12 +618,26 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     }
 
     /*
-     * XXX: Some sd/mmc drivers (for example, u-boot-slp) do not account for
-     * possible stop at page boundary if initial address is not page aligned,
-     * allow them to work properly
+     * The i.MX/FSL uSDHC silicon does not implement the SDHCI "Host SDMA
+     * Buffer Boundary" mechanism; it transfers all blocks back-to-back
+     * regardless of buffer-boundary address alignment. The blksize-quirk
+     * in esdhc_write() forces bits 14:12 to 0b111 (= 512 KiB) so Linux's
+     * "zero this field out" pattern doesn't trip a 4 KiB boundary break,
+     * but the real hardware never pauses for the boundary at all, so
+     * neither should we. Skipping the page-aligned path makes the SDMA
+     * transfer run to completion (blkcnt -> 0) and fire transfer-complete,
+     * which is what the FSL U-Boot SPL driver expects (it doesn't ack
+     * SDMA-boundary IRQs by re-writing SYSAD).
      */
-    if ((s->sdmasysad % boundary_chk) == 0) {
-        page_aligned = true;
+    if (s->io_ops != &usdhc_mmio_ops) {
+        /*
+         * XXX: Some sd/mmc drivers (for example, u-boot-slp) do not
+         * account for possible stop at page boundary if initial address
+         * is not page aligned, allow them to work properly
+         */
+        if ((s->sdmasysad % boundary_chk) == 0) {
+            page_aligned = true;
+        }
     }
 
     s->prnsts |= SDHC_DATA_INHIBIT | SDHC_DAT_LINE_ACTIVE;
