@@ -187,6 +187,16 @@ static const struct {
     [FSL_IMX95_USDHC1]               = { 0x42850000, 64 * KiB,   "usdhc1" },
     [FSL_IMX95_USDHC2]               = { 0x42860000, 64 * KiB,   "usdhc2" },
     [FSL_IMX95_USDHC3]               = { 0x428b0000, 64 * KiB,   "usdhc3" },
+
+    /* LPI2C1..8 from imx95.dtsi - logging stubs in v0.2. */
+    [FSL_IMX95_LPI2C1] = { 0x42530000, 64 * KiB, "lpi2c1" },
+    [FSL_IMX95_LPI2C2] = { 0x42540000, 64 * KiB, "lpi2c2" },
+    [FSL_IMX95_LPI2C3] = { 0x426b0000, 64 * KiB, "lpi2c3" },
+    [FSL_IMX95_LPI2C4] = { 0x426c0000, 64 * KiB, "lpi2c4" },
+    [FSL_IMX95_LPI2C5] = { 0x426d0000, 64 * KiB, "lpi2c5" },
+    [FSL_IMX95_LPI2C6] = { 0x426e0000, 64 * KiB, "lpi2c6" },
+    [FSL_IMX95_LPI2C7] = { 0x44340000, 64 * KiB, "lpi2c7" },
+    [FSL_IMX95_LPI2C8] = { 0x44350000, 64 * KiB, "lpi2c8" },
 };
 
 /*
@@ -217,6 +227,9 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
+        FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C2, FSL_IMX95_LPI2C3,
+        FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C5, FSL_IMX95_LPI2C6,
+        FSL_IMX95_LPI2C7, FSL_IMX95_LPI2C8,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
