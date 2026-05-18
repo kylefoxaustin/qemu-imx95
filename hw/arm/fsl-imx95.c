@@ -139,6 +139,18 @@ static const struct {
     [FSL_IMX95_ELE_MU1]              = { 0x47530000, 64 * KiB,   "elemu1" },
 
     /*
+     * Other MU instances U-Boot proper probes from DT but we don't
+     * model yet (V2X, NETC, etc.). Logging stubs so mu_hal_init's
+     * register accesses don't external-abort.
+     */
+    [FSL_IMX95_MU_47320000] = { 0x47320000, 64 * KiB, "mu@47320000" },
+    [FSL_IMX95_MU_47350000] = { 0x47350000, 64 * KiB, "mu@47350000" },
+    [FSL_IMX95_MU_47540000] = { 0x47540000, 64 * KiB, "mu@47540000" },
+    [FSL_IMX95_MU_47550000] = { 0x47550000, 64 * KiB, "mu@47550000" },
+    [FSL_IMX95_MU_47560000] = { 0x47560000, 64 * KiB, "mu@47560000" },
+    [FSL_IMX95_MU_47570000] = { 0x47570000, 64 * KiB, "mu@47570000" },
+
+    /*
      * Watchdogs. WDG3 is in the Linux DTS (the kernel sees it); WDG4
      * and WDG5 are SPL-only - U-Boot's arch_cpu_init() disables all
      * three. Bases from references/uboot-imx/arch/arm/include/asm/
@@ -191,6 +203,9 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
+        FSL_IMX95_MU_47320000, FSL_IMX95_MU_47350000,
+        FSL_IMX95_MU_47540000, FSL_IMX95_MU_47550000,
+        FSL_IMX95_MU_47560000, FSL_IMX95_MU_47570000,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
