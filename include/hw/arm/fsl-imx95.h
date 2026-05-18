@@ -128,6 +128,19 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_ELE_MU,
     FSL_IMX95_ELE_MU1,
 
+    /*
+     * Other MU instances U-Boot proper probes from DT (mailbox@*).
+     * Not yet modelled; logging stubs are enough for mu_hal_init to
+     * complete cleanly (it reads PAR, writes RCR/TCR=0, reads SR — all
+     * zeros are accepted and the drain loop is skipped).
+     */
+    FSL_IMX95_MU_47320000,
+    FSL_IMX95_MU_47350000,
+    FSL_IMX95_MU_47540000,
+    FSL_IMX95_MU_47550000,
+    FSL_IMX95_MU_47560000,
+    FSL_IMX95_MU_47570000,
+
     /* Watchdogs. SPL disables WDG3/4/5 in arch_cpu_init(). */
     FSL_IMX95_WDOG3,
     FSL_IMX95_WDOG4,
