@@ -149,7 +149,17 @@ static uint64_t imx_lpuart_read(void *opaque, hwaddr offset, unsigned size)
         break;
 
     case LPUART_WATER:
-        value = s->water;
+        /*
+         * Reflect the current fifo state in the RX/TX count fields
+         * (bits[31:24] RXCOUNT, bits[15:8] TXCOUNT). U-Boot's
+         * _lpuart32_serial_tstc() polls (water >> 24) for incoming-
+         * char detection, so RXCOUNT must update when imx_lpuart_receive
+         * stashes a byte. We are 1-deep: 0 or 1 in either slot.
+         * Preserve the guest-written watermark bits unchanged.
+         */
+        value = (s->water & 0x00ff00ffu)
+              | ((uint32_t)(s->rx_full ? 1 : 0) << 24)
+              | 0u;  /* TXCOUNT always 0 - we drain TR writes instantly */
         break;
 
     default:
