@@ -142,14 +142,18 @@ static void scmi_base(IMX95SCMIServerState *s, unsigned int idx,
     case SCMI_MSG_BASE_DISCOVER_LIST_PROTOCOLS: {
         /*
          * Response: num_protocols (u32), then packed u8 protocol IDs.
-         * We advertise CLOCK and PINCTRL since those are what U-Boot's
-         * imx9_probe_mu() explicitly probes by DT phandle.
+         * We advertise CLOCK + PINCTRL (probed by SPL via imx9_probe_mu)
+         * and POWER_DOMAIN (probed by U-Boot proper's USB power-on in
+         * init_sequence_r). IMX_MISC (vendor 0x84) is handled but
+         * intentionally not in this list - U-Boot finds it by direct
+         * lookup, not by walking discover-list.
          */
         uint8_t buf[8] = {0};
-        uint32_t n = 2;
+        uint32_t n = 3;
         memcpy(buf, &(uint32_t){cpu_to_le32(n)}, 4);
         buf[4] = SCMI_PROTOCOL_CLOCK;
         buf[5] = SCMI_PROTOCOL_PINCTRL;
+        buf[6] = SCMI_PROTOCOL_POWER_DOMAIN;
         scmi_complete(s, idx, SCMI_SUCCESS, buf, sizeof(buf));
         return;
     }
@@ -513,6 +517,22 @@ static void scmi_protocol_stub(IMX95SCMIServerState *s, unsigned int idx,
          * it to honor non-default routing); for v0.2 the stub
          * answer is "fine, ignored" so the boot log stays readable.
          */
+        /*
+         * Power-domain STATE_SET (msg 0x04) gets SUCCESS-no-op too:
+         * U-Boot proper's init_sequence_r calls it to power on USB
+         * during board_init. We don't model power domains, so just
+         * accept the request silently. -EOPNOTSUPP here would abort
+         * the initcall and crash the boot.
+         */
+        if (protocol_id == SCMI_PROTOCOL_POWER_DOMAIN && msg_id == 0x04) {
+            warn_report_once("scmi-server: POWER_DOMAIN STATE_SET is a "
+                             "stub no-op; domains are not modelled.");
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "scmi-server: POWER_DOMAIN STATE_SET ignored "
+                          "(token 0x%x)\n", token);
+            scmi_complete(s, idx, SCMI_SUCCESS, NULL, 0);
+            return;
+        }
         if (protocol_id == SCMI_PROTOCOL_PINCTRL && msg_id == 0x06) {
             warn_report_once("scmi-server: pinctrl SETTINGS_CONFIGURE is a "
                              "stub no-op; pad muxing is not retained. "
@@ -577,6 +597,7 @@ static void scmi_doorbell(void *opaque, unsigned int idx)
         scmi_clock(s, idx, msg_id, token);
         return;
     case SCMI_PROTOCOL_PINCTRL:
+    case SCMI_PROTOCOL_POWER_DOMAIN:
         scmi_protocol_stub(s, idx, protocol_id, msg_id, token);
         return;
     case SCMI_PROTOCOL_IMX_MISC:
