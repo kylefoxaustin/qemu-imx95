@@ -472,6 +472,26 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * Wire the second ELE responder to the stub MU at 0x47550000.
+     * imx9_probe_mu() in U-Boot proper (SCMI variant, arch/arm/
+     * mach-imx/imx9/scmi/soc.c:1953) hard-codes "mailbox@47550000" as
+     * the ELE channel; SPL's matching #if XPL_BUILD branch uses
+     * "mailbox@47530000" (our ele_mu1). Mirror the responder here so
+     * U-Boot proper's ele_get_info() completes instead of timing out.
+     * The realize call below will overwrite the NOP tr-write handler
+     * the stub_mu loop above just installed.
+     *
+     * stub_mu[3] = FSL_IMX95_MU_47550000 (must match stub_mu_regions
+     * ordering above; the QEMU_BUILD_BUG_ON in the loop body anchors
+     * the count but not the order).
+     */
+    object_property_set_link(OBJECT(&s->ele_server2), "mu",
+                             OBJECT(&s->stub_mu[3]), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server2), errp)) {
+        return;
+    }
+
+    /*
      * Watchdog 3 (the Wakeup-domain wdog the kernel sees). U-Boot SPL
      * also disables it in arch_cpu_init() before the console comes up.
      * Stub model is enough to satisfy disable_wdog().
@@ -544,6 +564,8 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "scmi-server", &s->scmi_server,
                             TYPE_IMX95_SCMI_SERVER);
     object_initialize_child(obj, "ele-server", &s->ele_server,
+                            TYPE_IMX95_ELE_SERVER);
+    object_initialize_child(obj, "ele-server2", &s->ele_server2,
                             TYPE_IMX95_ELE_SERVER);
 
     for (i = 0; i < FSL_IMX95_NUM_USDHCS; i++) {
