@@ -282,6 +282,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         object_property_set_int(OBJECT(&s->cpu[i]), "cntfrq", 24000000,
                                 &error_abort);
 
+        /*
+         * MPIDR per-CPU. The Linux DTS (imx95.dtsi cpu@0..cpu@500)
+         * puts each A55 in its own cluster: Aff1 = CPU index, Aff0 = 0.
+         * So cpu[i] gets mp-affinity = i << 8. PSCI CPU_ON from Linux
+         * uses these MPIDR values to identify the target CPU; without
+         * the override QEMU would default to Aff0=i which doesn't match
+         * the DT and PSCI CPU_ON fails for every secondary.
+         * Source: references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+         */
+        object_property_set_uint(OBJECT(&s->cpu[i]), "mp-affinity",
+                                 (uint64_t)i << 8, &error_abort);
+
         if (object_property_find(OBJECT(&s->cpu[i]), "has_el2")) {
             object_property_set_bool(OBJECT(&s->cpu[i]), "has_el2",
                                      !kvm_enabled(), &error_abort);
