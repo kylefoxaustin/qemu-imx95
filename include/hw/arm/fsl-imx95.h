@@ -66,6 +66,20 @@ struct FslImx95State {
     GICv3State              gic;
     MemoryRegion            ocram;
     MemoryRegion            sm_shmem;
+    /*
+     * System counter region backed by RAM so writes stick. Linux's
+     * imx-sysctr driver (timer-imx-sysctr.c) writes CMPCR/CMPCV
+     * registers then polls readback until the values match. A pure
+     * unimplemented-device stub drops the write and reads return 0,
+     * so the readback loop never converges - kernel log fills with
+     * "sysctr_timer_read_write write failed, retry: N". RAM backing
+     * gives the loop the write-then-read-back semantics it needs.
+     * Note: counter-value reads (CNTCV at 0x8/0xc, 0x20008/0x2000c)
+     * return whatever was last written (typically 0) rather than a
+     * live counter. Linux uses arch_timer as the primary clocksource;
+     * the sysctr is a secondary event timer.
+     */
+    MemoryRegion            sysctr;
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
     IMXMUState              ele_mu1;

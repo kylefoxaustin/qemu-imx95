@@ -222,7 +222,6 @@ static void fsl_imx95_stub_mu_tr_write(void *opaque, unsigned int idx,
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
-        FSL_IMX95_SYSCNT,
         FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
         FSL_IMX95_SRC, FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
@@ -480,6 +479,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].addr,
                                 &s->sm_shmem);
+
+    /*
+     * System counter region as RAM (see comment on s->sysctr in
+     * fsl-imx95.h). Removed from the unimplemented-region list so
+     * the RAM mapping isn't shadowed by the zero-returning stub.
+     */
+    memory_region_init_ram(&s->sysctr, OBJECT(dev), "imx95-sysctr",
+                           fsl_imx95_memmap[FSL_IMX95_SYSCNT].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_SYSCNT].addr,
+                                &s->sysctr);
 
     {
         SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->sm_mu);
