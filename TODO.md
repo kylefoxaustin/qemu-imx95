@@ -27,35 +27,80 @@ Open items remaining for the v0.2 milestone:
   resumes coherently). Catches silent VMState bugs before they
   become "every snapshot is corrupted" surprises later.
 
-## Before v0.3 (Linux to login)
+## Before v0.4 (Linux preboot via -kernel direct load)
 
-- **SDHCI long-transfer stall.** With the v0.2 SD-boot chain
-  landed, SPL successfully reads ~512 KiB then stops mid-transfer
-  when the payload is the 1.3 MiB `u-boot.bin` — the next stage
-  never receives control. A small (85-byte) payload from
-  `tests/hello-imx95/hello.bin` runs end-to-end, so the chain
-  itself works. Investigation candidates: SDHCI emulation's
-  block-count / DMA-buffer behavior on multi-block transfers
-  larger than `CONFIG_SPL_SYS_MALLOC_SIZE = 0x80000`, or an
-  off-by-one in fsl_esdhc's `b_max` chunking under our PRNSTS
-  semantics. Without this, "boot real U-Boot proper" stays a
-  v0.3 prerequisite.
+(v0.3 ended up being "U-Boot interactive prompt" rather than "Linux
+to login." Two items below were originally scoped for the v0.3
+prereq pass; both are now done. The remainder are v0.4 prereqs.)
 
-- **SCMI protocols beyond what v0.1 stubs.** v0.1 will respond to
-  the SCMI protocols U-Boot SPL exercises (base, clk, pinctrl,
-  power-domain). Linux exercises more: perf (DVFS), sensor
-  (thermal), system-power, plus the imx-vendor extensions
-  (`scmi_lmm`, `scmi_bbm`, `scmi_cpu`, `scmi_misc`) seen in
-  `imx95.dtsi:406-420`. Audit gaps before Linux bring-up; either
-  extend the stub or accept that Linux probes will log
-  "unsupported protocol" entries and degrade.
+- **DONE in v0.2 — SDHCI long-transfer stall.** Fixed in
+  `91c0548604` via SDMA buffer-boundary bypass for i.MX uSDHC.
+  Full 1.3 MiB u-boot.bin reads through cleanly.
+
+- **SCMI protocols beyond what v0.1 stubs.** Still outstanding.
+  v0.2-prep extended the server (CLOCK_ATTRIBUTES always-SUCCESS,
+  imx-misc protocol 0x84, POWER_DOMAIN protocol 0x11). Linux will
+  exercise more: perf (DVFS), sensor (thermal), system-power, plus
+  remaining imx-vendor extensions (`scmi_lmm`, `scmi_bbm`,
+  `scmi_cpu`, more of `scmi_misc`) seen in `imx95.dtsi:406-420`.
+  Audit gaps before Linux bring-up; either extend the stub or
+  accept that Linux probes will log "unsupported protocol"
+  entries and degrade.
 
 - **ELE `GET_INFO` soc_rev = 0xA1 may trip Linux errata code.**
   Per the v0.1 review: U-Boot uses soc_rev mainly for printf, but
   Linux's i.MX silicon-rev-aware errata paths branch on it. If
-  v0.3 boot shows weird per-rev behavior, check this first.
+  v0.4 Linux boot shows weird per-rev behavior, check this first.
   Cross-check against the i.MX 95 RM "Identification" chapter
   and set the value the silicon actually reports.
+
+- **DDR controller model decision.** Document explicitly:
+  "DRAM is RAM; DDRC is logging-stub." Works for boot-to-userspace;
+  does not work for DRAM training, power management, suspend/resume.
+  Tag in any v0.4 user-facing README.
+
+- **Kernel image + DTB + initramfs availability.** Before
+  committing to Option B' (`-kernel` direct load), verify
+  `references/linux-imx/` has a buildable imx95 defconfig and that
+  we can produce the Image/DTB pair the `-kernel`/`-dtb` args
+  expect. 30-min check; gates the v0.4 plan.
+
+## Before v0.4 (usability + verification, reviewer-flagged)
+
+- **`tests/uboot-prompt/` regression test.** Mirror of
+  `tests/spl-banner/` but with the socat key-send dance to verify
+  the v0.3 interactive prompt hasn't regressed. Document as
+  manual-only (not CI) since the socket-chardev setup is per-
+  developer. README in the test dir should give the exact
+  invocation. Reviewer-flagged in v0.3 round-3 review.
+
+- **README user-facing note for the no-key autoboot path.**
+  Without a keystroke during the countdown, U-Boot tries MMC
+  (voltage-select -110), NVMe (no PCIe clocks - graceful), USB
+  (crash on usb@4c100000). One-line warning in any user-facing
+  doc: "press any key during 'Hit any key to stop autoboot:' to
+  reach the interactive prompt; otherwise the board resets."
+  Cheap; prevents issue reports.
+
+- **PCA9450 PMIC over LPI2C as known-issue.** v0.3 stubs all 8
+  LPI2C controllers as logging-only. Any v0.4 path that probes
+  the PMIC for actual power-domain reads/writes will hang on I2C
+  transfer-complete polling. Tag as known-issue in v0.4 docs
+  before the Linux pm subsystem touches it.
+
+- **SDHCI class-flag refactor (upstream prep, parked).** Convert
+  the v0.2 `s->io_ops != &usdhc_mmio_ops` guard into an explicit
+  `SDHCIClass::no_sdma_boundary` flag. Reviewer-flagged in
+  v0.2-prep round 1; deferred through v0.2 + v0.3. Lands in the
+  "upstream-prep" milestone (likely v0.4.1 or a dedicated tag).
+
+- **No-key autoboot reach shell.** Currently autoboot resets on
+  the unmodeled USB controller chain (usb@4c010010, usb@4c100000,
+  usbmisc@4c200200). Path-C-bucket-1 stubs for each, plus the
+  MMC voltage-select fix, would let autoboot complete without
+  resetting and drop the user to the prompt automatically.
+  Cosmetic but improves first-impressions-on-running-the-emulator.
+  Lower-priority than Linux preboot.
 
 ## Before v0.5 (PCIe + MSI consumers arrive)
 
