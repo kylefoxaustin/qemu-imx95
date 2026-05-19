@@ -244,6 +244,52 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
                                     fsl_imx95_memmap[r].addr,
                                     fsl_imx95_memmap[r].size);
     }
+
+    /*
+     * Bulk MU stubs for every mailbox the Linux imx95.dtsi declares
+     * that we haven't already wired with a real IMX_MU model. Linux's
+     * imx_mu driver probes each in turn (via fsl,imx95-mu /
+     * fsl,imx95-mu-v2x compatibles); without backing devices the
+     * probe takes a synchronous external abort reading PAR at offset
+     * 0x4. mu_hal_init() is safe against zero reads (rr_count=0
+     * skips the drain loop, SR bit 6 stays clear), so an
+     * unimplemented-device stub is enough to clear the abort.
+     *
+     * The addresses + names come from
+     * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+     * mailbox nodes. We exclude addresses already covered by real
+     * models (sm_mu, ele_mu/elemu0, ele_mu1/elemu1, and the six
+     * stub_mu[] entries at 0x47320000/0x47350000/0x47540000..0x47570000).
+     */
+    {
+        static const struct {
+            uint64_t addr;
+            const char *name;
+        } linux_mus[] = {
+            { 0x42430000, "mu7" },
+            { 0x42730000, "mu8" },
+            { 0x44220000, "mu1" },
+            { 0x445d0000, "mu3" },
+            { 0x445f0000, "mu4" },
+            { 0x44630000, "mu6" },
+            { 0x47300000, "v2x_mu4" },
+            { 0x47330000, "v2x_mu7" },
+            { 0x47340000, "v2x_mu8" },
+            { 0x4ac60000, "cameramix_mu1" },
+            { 0x4ac70000, "cameramix_mu2" },
+            { 0x4ac80000, "cameramix_mu3" },
+            { 0x4ac90000, "cameramix_mu4" },
+            { 0x4aca0000, "cameramix_mu5" },
+            { 0x4acb0000, "cameramix_mu6" },
+            { 0x4acc0000, "cameramix_mu7" },
+            { 0x4acd0000, "cameramix_mu8" },
+            { 0x4ace0000, "cameramix_mu9" },
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(linux_mus); i++) {
+            create_unimplemented_device(linux_mus[i].name,
+                                        linux_mus[i].addr, 64 * KiB);
+        }
+    }
 }
 
 static void fsl_imx95_realize(DeviceState *dev, Error **errp)
