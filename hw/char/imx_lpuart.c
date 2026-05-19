@@ -219,9 +219,17 @@ static void imx_lpuart_write(void *opaque, hwaddr offset,
 
     case LPUART_DATA:
         ch = value & LPUART_DATA_MASK;
-        if (s->ctrl & LPUART_CTRL_TE) {
-            qemu_chr_fe_write_all(&s->chr, &ch, 1);
-        }
+        /*
+         * Always push the byte through the chardev backend, even if
+         * CTRL_TE is currently 0. Real silicon would queue or drop the
+         * byte until TE is enabled; in emulation we don't model that
+         * gating because some consumers (notably the Linux earlycon
+         * path under -kernel direct boot, which assumes firmware
+         * already set TE before the kernel runs) write to DATA without
+         * first enabling TE themselves. Without this, kernel console
+         * output vanishes silently and earlycon appears broken.
+         */
+        qemu_chr_fe_write_all(&s->chr, &ch, 1);
         /*
          * TDRE and TC are pinned high; the byte goes out instantly. A
          * future model would clear them for one host tick, then set TC
