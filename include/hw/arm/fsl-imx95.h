@@ -24,7 +24,9 @@
 #define FSL_IMX95_H
 
 #include "target/arm/cpu.h"
+#include "hw/arm/armv7m.h"
 #include "hw/char/imx_lpuart.h"
+#include "hw/core/clock.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/misc/imx95_ele_server.h"
 #include "hw/misc/imx95_scmi_server.h"
@@ -32,6 +34,7 @@
 #include "hw/sd/sdhci.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
+#include "qemu/notify.h"
 #include "qemu/units.h"
 
 #define TYPE_FSL_IMX95 "fsl-imx95"
@@ -43,6 +46,24 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslImx95State, FSL_IMX95)
  */
 #define FSL_IMX95_RAM_START         0x80000000ULL
 #define FSL_IMX95_RAM_SIZE_MAX      (16ULL * GiB)
+
+/*
+ * Cortex-M33 System Manager (SM) core. The SM firmware is linked to run
+ * from the M33's tightly-coupled memories: code in ITCM, data/bss/stack
+ * in DTCM. Sizes are rounded up to 256 KiB (the real TCM banks are
+ * smaller; the SM image fits well within this). The reset vector table
+ * sits at the ITCM base, so the M33's reset VTOR (init-svtor) points
+ * there. The M33's 32-bit view is otherwise a superset of the A55 view
+ * (it also reaches CCM/ANATOP/SRC/etc. that the A55 cannot) - for now we
+ * give it the A55 system memory plus its private TCM; unmodelled
+ * SM-only peripherals will fault and get stubbed in later milestones.
+ */
+#define FSL_IMX95_M33_ITCM_BASE     0x1ffc0000ULL
+#define FSL_IMX95_M33_DTCM_BASE     0x20000000ULL
+#define FSL_IMX95_M33_TCM_SIZE      (256 * KiB)
+#define FSL_IMX95_M33_SVTOR         0x1ffc0000U
+#define FSL_IMX95_M33_NUM_IRQ       256
+#define FSL_IMX95_M33_CLK_HZ        333333333U  /* SM runs the M33 ~333 MHz */
 
 /*
  * i.MX 95 application processor complex:
@@ -63,6 +84,29 @@ struct FslImx95State {
     SysBusDevice            parent_obj;
 
     ARMCPU                  cpu[FSL_IMX95_NUM_A55_CPUS];
+
+    /*
+     * Cortex-M33 System Manager core. v0.6 wires the CPU + its private
+     * TCM so the real NXP SM firmware (m33_image.bin) can be loaded and
+     * started; it is not yet the SCMI provider (the C-side stub still is).
+     * m33_view is the M33's 32-bit address space: ITCM + DTCM RAM layered
+     * over a low-priority alias of the A55 system memory.
+     */
+    ARMv7MState             m33;
+    MemoryRegion            m33_view;
+    MemoryRegion            m33_sysmem_alias;
+    MemoryRegion            m33_itcm;
+    MemoryRegion            m33_dtcm;
+    Clock                  *m33_cpuclk;
+    /*
+     * The M33 starts powered-off and is released only if SM firmware was
+     * actually loaded into its ITCM (checked at reset via this hook,
+     * registered late so it runs after the -device loader populates the
+     * ITCM). Without firmware the M33 stays halted, so a plain A55 Linux
+     * boot is unaffected.
+     */
+    Notifier                m33_machine_done;
+
     GICv3State              gic;
     MemoryRegion            ocram;
     MemoryRegion            sm_shmem;
