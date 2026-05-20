@@ -12,15 +12,17 @@ follow the existing upstream i.MX 8MP code
 ## Status
 
 **The emulator boots stock NXP Linux 6.12.49 to userspace.** All 6 Cortex-A55
-cores come up via PSCI, GICv3 initialises, the SCMI mailbox transport runs
-against the in-tree SCMI server stub, every driver probes, and PID 1 runs in
-userspace (verified: an init that mounts `/proc` and reports `aarch64`).
+cores come up via PSCI (kept active by `cpuidle.off=1`; see below), GICv3
+initialises, the SCMI mailbox transport runs against the in-tree SCMI server
+stub, all in-tree drivers reach their `.probe()` entry (some defer pending
+providers — see Known limitation), and PID 1 runs in userspace (verified: an
+init that mounts `/proc` and reports `aarch64`).
 
 Earlier milestones — U-Boot SPL banner, SPL → U-Boot proper handoff over an
 emulated SD boot chain, and the U-Boot interactive prompt — all still work.
 
-Current development is **v0.5** (Linux bring-up hardening). See the roadmap
-and `TODO.md` for what's done and what's open.
+v0.5 reached Linux userspace; current development is **v0.6** (interactive
+console). See the roadmap and `TODO.md` for what's done and what's open.
 
 ## Booting Linux
 
@@ -168,10 +170,10 @@ Linux boot — see "Booting Linux" above.
 - **v0.2** — SPL → U-Boot proper handoff, uSDHC, SD boot chain ✅
 - **v0.3** — U-Boot interactive prompt ✅
 - **v0.4** — Linux boots via `-kernel`: 6 CPUs, GICv3, SCMI mailbox ✅
-- **v0.5** — Linux to userspace (in progress): SCMI interrupt bring-up,
-  reaches PID 1. Next: interactive console (LPUART tty + its clock/dma/gpio
-  deps), then a real shell.
-- **v0.6+** — interactive Linux shell; eventually U-Boot → kernel-from-MMC
-  for a fully realistic boot; accelerator stubs (NPU/GPU/VPU/ISP); real M33
-  SM firmware (with CPU power management) in place of the C-side SCMI/ELE
-  stubs.
+- **v0.5** — Linux to userspace: SCMI interrupt bring-up unblocked, reaches
+  PID 1 in userspace ✅
+- **v0.6** — interactive Linux shell (in progress): bring up the LPUART tty
+  and its probe-defer cascade (clock/dma/gpio deps) so a real console works.
+- **v0.7+** — eventually U-Boot → kernel-from-MMC for a fully realistic boot;
+  accelerator stubs (NPU/GPU/VPU/ISP); real M33 SM firmware (with CPU power
+  management) in place of the C-side SCMI/ELE stubs.
