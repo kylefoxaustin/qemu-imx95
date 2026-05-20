@@ -830,6 +830,39 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * v0.9 SCMI swap: when the C-stub is disabled, instantiate the M33-side
+     * (MUB) endpoint of MU2 and peer-link it to the A55-side MU. Linux's
+     * SCMI doorbell on MUA (0x445b0000) then latches the matching GIP on MUB
+     * and raises the M33's MU2_B IRQ, so the real SM firmware services the
+     * request; the SM's response doorbell on MUB raises the A55's MU IRQ in
+     * turn. The MUB and its sram0 alias sit 0x10000 above their MUA
+     * counterparts (A2_MUB = A2_MUA + 0x10000), and the SM's mb_mu computes
+     * its SMT buffer at MUB+0x1000 - the same backing RAM Linux uses at
+     * MUA+0x1000, so both sides exchange messages through one buffer.
+     * Done after the M33 is realized so its NVIC GPIO inputs exist.
+     */
+    if (!s->scmi_server_enabled) {
+        IMXMUState *mub = &s->sm_mu_b;
+        hwaddr mub_base = fsl_imx95_memmap[FSL_IMX95_SM_MU].addr + 0x10000;
+        hwaddr shmem_b = fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].addr + 0x10000;
+
+        object_initialize_child(OBJECT(s), "sm_mu_b", mub, TYPE_IMX_MU);
+        if (!sysbus_realize(SYS_BUS_DEVICE(mub), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(mub), 0, mub_base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(mub), 0,
+            qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_SM_MU_B_M33_IRQ));
+        imx_mu_set_peer(&s->sm_mu, mub);
+
+        memory_region_init_alias(&s->sm_shmem_b, OBJECT(s), "imx95-sm-shmem-b",
+                                 &s->sm_shmem, 0,
+                                 fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].size);
+        memory_region_add_subregion(get_system_memory(), shmem_b,
+                                    &s->sm_shmem_b);
+    }
+
+    /*
      * Register the M33 auto-start check from a machine-done notifier so
      * its reset hook is installed AFTER the generic -device loader's, and
      * therefore runs after the SM image has been written into ITCM.
