@@ -100,6 +100,16 @@ struct IMXMUState {
     /* TR-write forwarding (see typedef above). */
     IMXMUTRWriteHandler  tr_write_handler;
     void                *tr_write_opaque;
+
+    /*
+     * Optional peer MU endpoint (the other side of a real hardware MU).
+     * When set, a GCR.GIRn doorbell trigger on this side latches the
+     * matching GSR.GIPn on the peer (raising the peer's IRQ once the peer
+     * enables GIER.GIEn), instead of invoking doorbell_handler. This models
+     * the A55-side (MUA) <-> M33-side (MUB) cross-connect used to let the
+     * real SM firmware service the A55's SCMI traffic.
+     */
+    IMXMUState          *peer;
 };
 
 /*
@@ -114,6 +124,12 @@ void imx_mu_set_doorbell_handler(IMXMUState *s,
 void imx_mu_set_tr_write_handler(IMXMUState *s,
                                  IMXMUTRWriteHandler handler,
                                  void *opaque);
+
+/*
+ * Link two MU endpoints as hardware peers (the MUA and MUB sides of one
+ * physical MU). Sets the peer link in both directions. Pass either side.
+ */
+void imx_mu_set_peer(IMXMUState *s, IMXMUState *peer);
 
 /*
  * Deliver a response word into RR[idx] and assert RSR.RFn so the
