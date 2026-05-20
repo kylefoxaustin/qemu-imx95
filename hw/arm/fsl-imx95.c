@@ -42,6 +42,7 @@
 #include "hw/core/boards.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
+#include "hw/i2c/i2c.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/misc/unimp.h"
 #include "hw/sd/sdhci.h"
@@ -243,7 +244,8 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_SMMU,
         FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C2, FSL_IMX95_LPI2C3,
         FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C5, FSL_IMX95_LPI2C6,
-        FSL_IMX95_LPI2C7, FSL_IMX95_LPI2C8,
+        /* LPI2C7 (0x44340000) is the SM's PMIC bus - real model below. */
+        FSL_IMX95_LPI2C8,
         FSL_IMX95_USB_PHY, FSL_IMX95_USB_DWC3,
     };
 
@@ -699,6 +701,22 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_ps), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_ps), 0,
                     fsl_imx95_memmap[FSL_IMX95_XCACHE_PS].addr);
+
+    /*
+     * LPI2C master the SM uses for the PMIC + IO-expander (SDK LPI2C1 at
+     * 0x44340000 = our FSL_IMX95_LPI2C7). Real model with a PF09 PMIC at
+     * 0x08 and a PCAL6408A IO-expander at 0x20 on its bus, so the SM's
+     * BRD_SM_SerialDevicesInit transfers complete.
+     */
+    s->lpi2c_pmic = qdev_new("imx.lpi2c");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c_pmic), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c_pmic), 0,
+                    fsl_imx95_memmap[FSL_IMX95_LPI2C7].addr);
+    {
+        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c_pmic, "i2c"));
+        i2c_slave_create_simple(i2c, "pf09-pmic", 0x08);
+        i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
+    }
 
     /*
      * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with

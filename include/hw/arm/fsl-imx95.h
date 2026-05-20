@@ -168,6 +168,13 @@ struct FslImx95State {
     /* M33 XCACHE controllers (PC @0x44400000, PS @0x44400800). */
     DeviceState            *xcache_pc;
     DeviceState            *xcache_ps;
+    /*
+     * LPI2C the SM uses for the PMIC / IO-expander (SDK "LPI2C1" at
+     * 0x44340000, our memmap FSL_IMX95_LPI2C7). Real master model with a
+     * PF09 PMIC + PCAL6408A on its bus; the other LPI2C instances stay
+     * logging stubs.
+     */
+    DeviceState            *lpi2c_pmic;
 };
 
 /*

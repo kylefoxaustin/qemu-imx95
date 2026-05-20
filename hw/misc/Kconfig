@@ -114,6 +114,10 @@ config IMX95_WDOG
 config IMX95_XCACHE
     bool
 
+config IMX95_PMIC
+    bool
+    select I2C
+
 config IMX95_ELE_SERVER
     bool
     select IMX_MU
