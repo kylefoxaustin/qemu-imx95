@@ -177,6 +177,14 @@ struct FslImx95State {
     DeviceState            *lpi2c_pmic;
     /* GPC (General Power Controller) - SM power-domain / CPU-mode control. */
     DeviceState            *gpc;
+
+    /*
+     * When true (default), instantiate the C-stub SCMI server that answers
+     * the A55's SCMI traffic on the A55-side MU (MUA @0x445b0000). Set false
+     * to leave that channel for the real SM firmware on the M33 to service
+     * (the v0.9 SCMI swap). Toggle via -global fsl-imx95.scmi-stub=false.
+     */
+    bool                    scmi_server_enabled;
 };
 
 /*

@@ -581,10 +581,19 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             qdev_get_gpio_in(gicdev, FSL_IMX95_SM_MU_IRQ));
     }
 
-    object_property_set_link(OBJECT(&s->scmi_server), "mu",
-                             OBJECT(&s->sm_mu), &error_abort);
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->scmi_server), errp)) {
-        return;
+    /*
+     * The C-stub SCMI server answers the A55's SCMI traffic on the A55-side
+     * MU. Skip it when scmi-server=off so the real SM firmware on the M33
+     * can service the channel instead (the v0.9 SCMI swap).
+     */
+    if (s->scmi_server_enabled) {
+        object_initialize_child(OBJECT(s), "scmi-server", &s->scmi_server,
+                                TYPE_IMX95_SCMI_SERVER);
+        object_property_set_link(OBJECT(&s->scmi_server), "mu",
+                                 OBJECT(&s->sm_mu), &error_abort);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->scmi_server), errp)) {
+            return;
+        }
     }
 
     /*
@@ -852,8 +861,12 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("stub_mu%d", i);
         object_initialize_child(obj, name, &s->stub_mu[i], TYPE_IMX_MU);
     }
-    object_initialize_child(obj, "scmi-server", &s->scmi_server,
-                            TYPE_IMX95_SCMI_SERVER);
+    /*
+     * The C-stub SCMI server child is initialised in realize() instead of
+     * here, gated on the scmi-stub property (a child object that is
+     * initialised must also be realised, so it can't be unconditionally
+     * created when the property may disable it).
+     */
     object_initialize_child(obj, "ele-server", &s->ele_server,
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server2", &s->ele_server2,
@@ -865,11 +878,16 @@ static void fsl_imx95_init(Object *obj)
     }
 }
 
+static const Property fsl_imx95_properties[] = {
+    DEFINE_PROP_BOOL("scmi-stub", FslImx95State, scmi_server_enabled, true),
+};
+
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = fsl_imx95_realize;
+    device_class_set_props(dc, fsl_imx95_properties);
     /* This is an SoC, not user-creatable. */
     dc->user_creatable = false;
 }
