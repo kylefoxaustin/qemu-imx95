@@ -2,6 +2,7 @@
  * Minimal I2C device models for the i.MX 95 EVK System Manager:
  *   - PF09 (PF0900) PMIC          (TYPE_PF09_PMIC,  addr 0x08, CRC'd)
  *   - PCAL6408A 8-bit IO expander (TYPE_PCAL6408A,  addr 0x20)
+ *   - PF53 buck regulator         (TYPE_PF53_PMIC,  addr 0x2a/0x29)
  *
  * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
  *
@@ -238,10 +239,105 @@ static const TypeInfo pcal6408a_info = {
     .class_init    = pcal6408a_class_init,
 };
 
+/* ============================ PF53 PMIC ============================ */
+
+/*
+ * PF5301 / PF5302 (PF53-family) buck regulators on the same LPI2C bus.
+ * BRD_SM_SerialDevicesInit calls PF53_Init() on each, which only reads
+ * the DEV_ID register and checks that the transfer ACKs (it does not
+ * validate the value, and the SM configures crcEn=false for these). So a
+ * plain register file that ACKs is sufficient to get past SM init.
+ */
+#define TYPE_PF53_PMIC "pf53-pmic"
+OBJECT_DECLARE_SIMPLE_TYPE(PF53State, PF53_PMIC)
+
+#define PF53_NUM_REG    256
+
+struct PF53State {
+    I2CSlave    parent_obj;
+
+    uint8_t     regs[PF53_NUM_REG];
+    uint8_t     cur_reg;
+    uint32_t    wcount;
+};
+
+static int pf53_event(I2CSlave *i2c, enum i2c_event event)
+{
+    PF53State *s = PF53_PMIC(i2c);
+
+    if (event == I2C_START_SEND) {
+        s->wcount = 0;
+    }
+    return 0;
+}
+
+static int pf53_send(I2CSlave *i2c, uint8_t data)
+{
+    PF53State *s = PF53_PMIC(i2c);
+
+    if (s->wcount == 0) {
+        s->cur_reg = data;
+    } else {
+        s->regs[s->cur_reg++] = data;
+    }
+    s->wcount++;
+    return 0;
+}
+
+static uint8_t pf53_recv(I2CSlave *i2c)
+{
+    PF53State *s = PF53_PMIC(i2c);
+
+    return s->regs[s->cur_reg++];
+}
+
+static void pf53_reset(DeviceState *dev)
+{
+    PF53State *s = PF53_PMIC(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+    s->cur_reg = 0;
+    s->wcount = 0;
+}
+
+static const VMStateDescription vmstate_pf53 = {
+    .name = TYPE_PF53_PMIC,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(parent_obj, PF53State),
+        VMSTATE_UINT8_ARRAY(regs, PF53State, PF53_NUM_REG),
+        VMSTATE_UINT8(cur_reg, PF53State),
+        VMSTATE_UINT32(wcount, PF53State),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static void pf53_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
+
+    k->event = pf53_event;
+    k->recv = pf53_recv;
+    k->send = pf53_send;
+    dc->vmsd = &vmstate_pf53;
+    device_class_set_legacy_reset(dc, pf53_reset);
+    dc->desc = "NXP PF53 PMIC (i.MX95 SM stub)";
+}
+
+static const TypeInfo pf53_info = {
+    .name          = TYPE_PF53_PMIC,
+    .parent        = TYPE_I2C_SLAVE,
+    .instance_size = sizeof(PF53State),
+    .class_init    = pf53_class_init,
+};
+
 static void imx95_pmic_register_types(void)
 {
     type_register_static(&pf09_info);
     type_register_static(&pcal6408a_info);
+    type_register_static(&pf53_info);
 }
 
 type_init(imx95_pmic_register_types)
