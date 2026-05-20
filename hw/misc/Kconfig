@@ -118,6 +118,9 @@ config IMX95_PMIC
     bool
     select I2C
 
+config IMX95_GPC
+    bool
+
 config IMX95_ELE_SERVER
     bool
     select IMX_MU
