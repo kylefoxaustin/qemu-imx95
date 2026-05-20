@@ -19,18 +19,28 @@ Two things run on this emulator today:
   in-tree C-side SCMI server stub, all in-tree drivers reach their
   `.probe()` entry (some defer pending providers — see Known limitation),
   and PID 1 runs in userspace.
-- **The real NXP System Manager firmware runs on the emulated Cortex-M33.**
-  The SM (`m33_image.elf`) boots from its ITCM, runs through early init —
-  BBNSM, its watchdog, XCACHE, HSIOMIX — and configures the board PMIC
-  (PF09) and IO-expander (PCAL6408A) over a modelled LPI2C bus. It next
-  reaches the GPC/CCM clock-and-power complex (v0.8 work). This is the path
-  to replacing the C-side SCMI stub with the real SM firmware.
+- **The real NXP System Manager firmware boots to its monitor on the
+  emulated Cortex-M33.** The SM (`m33_image.elf`) boots from its ITCM, runs
+  through early init (BBNSM, its watchdog, XCACHE, HSIOMIX), configures the
+  board PMIC (PF09) and IO-expander (PCAL6408A) over a modelled LPI2C bus,
+  comes through the GPC power-mode setup, prints its banner, and drops to
+  its interactive debug monitor on the SM console (LPUART2):
+
+  ```
+  Hello from SM (Build NNN, Commit ........, ...)
+  *** SM Debug Monitor ***
+  >$
+  ```
+
+  Run it with `tests/sm-banner/run.sh`. This is the path to replacing the
+  C-side SCMI stub with the real SM firmware.
 
 Earlier milestones — U-Boot SPL banner, SPL → U-Boot proper handoff over an
 emulated SD boot chain, and the U-Boot interactive prompt — all still work.
 
-Current development is **v0.8** (SM clock/power: GPC, CCM, PLLs). See the
-roadmap and `TODO.md` for what's done and what's open.
+Current development is **v0.9** (an interactive SM monitor — LPUART RX — and
+hardening toward booting Linux without `cpuidle.off=1`). See the roadmap and
+`TODO.md` for what's done and what's open.
 
 ## Booting Linux
 
@@ -106,6 +116,11 @@ next bring-up target.
   self-clear), HSIOMIX, and a real LPI2C master + PF09 PMIC / PCAL6408A
   IO-expander (with the PF09 J1850 CRC). The SM now completes PMIC/IO-expander
   init and reaches the GPC/CCM power-and-clock complex.
+- **v0.8** — SM boots to its debug monitor. Modelled the GPC (`imx95.gpc`):
+  per-domain CPU_CTRL + GLOBAL, each status register mirroring its paired
+  control so the SM's power-mode polls converge. The SM comes through
+  power-mode setup, prints its banner, and reaches its interactive monitor
+  prompt on its console (LPUART2, `serial_hd(1)`).
 
 All memory-map addresses and IRQ numbers come from the NXP BSP, never
 guessed:
@@ -192,9 +207,12 @@ Linux boot — see "Booting Linux" above.
 - **v0.6** — Cortex-M33 SM core; loads + executes real NXP SM firmware ✅
 - **v0.7** — SM runs through early init + PMIC/IO-expander (BBNSM, WDOG2,
   XCACHE, HSIOMIX, LPI2C + PF09/PCAL6408A) ✅
-- **v0.8** — SM clock/power bring-up (in progress): the GPC/CCM/PLL complex,
-  toward the SM reaching its console banner and steady-state SCMI server loop.
-- **v0.9+** — the SM as the real SCMI provider for the A55 (retiring the
+- **v0.8** — SM boots to its debug monitor: GPC modelled, SM prints its
+  banner and reaches its `>$` prompt ✅
+- **v0.9** — interactive SM monitor (LPUART RX so the `>$` prompt can be
+  driven) and hardening toward booting Linux without `cpuidle.off=1`
+  (in progress).
+- **v1.0+** — the SM as the real SCMI provider for the A55 (retiring the
   C-side SCMI/ELE stubs); interactive Linux shell (LPUART tty probe-defer
   cascade); eventually U-Boot → kernel-from-MMC; accelerator stubs
   (NPU/GPU/VPU/ISP).
