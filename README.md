@@ -11,18 +11,26 @@ follow the existing upstream i.MX 8MP code
 
 ## Status
 
-**The emulator boots stock NXP Linux 6.12.49 to userspace.** All 6 Cortex-A55
-cores come up via PSCI (kept active by `cpuidle.off=1`; see below), GICv3
-initialises, the SCMI mailbox transport runs against the in-tree SCMI server
-stub, all in-tree drivers reach their `.probe()` entry (some defer pending
-providers — see Known limitation), and PID 1 runs in userspace (verified: an
-init that mounts `/proc` and reports `aarch64`).
+Two things run on this emulator today:
+
+- **Stock NXP Linux 6.12.49 boots to userspace** on the A55 cluster. All 6
+  Cortex-A55 cores come up via PSCI (kept active by `cpuidle.off=1`; see
+  below), GICv3 initialises, the SCMI mailbox transport runs against the
+  in-tree C-side SCMI server stub, all in-tree drivers reach their
+  `.probe()` entry (some defer pending providers — see Known limitation),
+  and PID 1 runs in userspace.
+- **The real NXP System Manager firmware runs on the emulated Cortex-M33.**
+  The SM (`m33_image.elf`) boots from its ITCM, runs through early init —
+  BBNSM, its watchdog, XCACHE, HSIOMIX — and configures the board PMIC
+  (PF09) and IO-expander (PCAL6408A) over a modelled LPI2C bus. It next
+  reaches the GPC/CCM clock-and-power complex (v0.8 work). This is the path
+  to replacing the C-side SCMI stub with the real SM firmware.
 
 Earlier milestones — U-Boot SPL banner, SPL → U-Boot proper handoff over an
 emulated SD boot chain, and the U-Boot interactive prompt — all still work.
 
-v0.5 reached Linux userspace; current development is **v0.6** (interactive
-console). See the roadmap and `TODO.md` for what's done and what's open.
+Current development is **v0.8** (SM clock/power: GPC, CCM, PLLs). See the
+roadmap and `TODO.md` for what's done and what's open.
 
 ## Booting Linux
 
@@ -85,10 +93,19 @@ next bring-up target.
 - **v0.4** — Linux 6.12.49 boots via `-kernel` direct load: all 6 A55s up via
   PSCI (per-CPU MPIDR Aff1 fix), GICv3 up, SCMI mailbox transport active.
   Added the Linux-DTS MU stub set and the LPUART TX-not-gated-on-TE fix.
-- **v0.5** (in progress) — Linux to userspace. sysctr region RAM-backed so
-  the NXP sysctr driver's write-readback loop converges; SCMI interrupt-mode
-  bring-up unblocked via `cpuidle.off=1` (root cause diagnosed); reaches PID 1
-  in userspace with an initramfs.
+- **v0.5** — Linux to userspace. sysctr region RAM-backed so the NXP sysctr
+  driver's write-readback loop converges; SCMI interrupt-mode bring-up
+  unblocked via `cpuidle.off=1` (root cause diagnosed); reaches PID 1 in
+  userspace with an initramfs.
+- **v0.6** — Cortex-M33 System Manager core added (`TYPE_ARMV7M` cortex-m33,
+  ITCM/DTCM). Loads and executes the real NXP SM firmware (`m33_image.elf`);
+  released from reset only when SM firmware is present, so A55-only Linux
+  boots are unaffected.
+- **v0.7** — SM runs through early init. Modelled the peripherals it touches:
+  BBNSM (RTC/GPRs), WDOG2, the M33 XCACHE controllers (CCR command-bit
+  self-clear), HSIOMIX, and a real LPI2C master + PF09 PMIC / PCAL6408A
+  IO-expander (with the PF09 J1850 CRC). The SM now completes PMIC/IO-expander
+  init and reaches the GPC/CCM power-and-clock complex.
 
 All memory-map addresses and IRQ numbers come from the NXP BSP, never
 guessed:
@@ -172,8 +189,12 @@ Linux boot — see "Booting Linux" above.
 - **v0.4** — Linux boots via `-kernel`: 6 CPUs, GICv3, SCMI mailbox ✅
 - **v0.5** — Linux to userspace: SCMI interrupt bring-up unblocked, reaches
   PID 1 in userspace ✅
-- **v0.6** — interactive Linux shell (in progress): bring up the LPUART tty
-  and its probe-defer cascade (clock/dma/gpio deps) so a real console works.
-- **v0.7+** — eventually U-Boot → kernel-from-MMC for a fully realistic boot;
-  accelerator stubs (NPU/GPU/VPU/ISP); real M33 SM firmware (with CPU power
-  management) in place of the C-side SCMI/ELE stubs.
+- **v0.6** — Cortex-M33 SM core; loads + executes real NXP SM firmware ✅
+- **v0.7** — SM runs through early init + PMIC/IO-expander (BBNSM, WDOG2,
+  XCACHE, HSIOMIX, LPI2C + PF09/PCAL6408A) ✅
+- **v0.8** — SM clock/power bring-up (in progress): the GPC/CCM/PLL complex,
+  toward the SM reaching its console banner and steady-state SCMI server loop.
+- **v0.9+** — the SM as the real SCMI provider for the A55 (retiring the
+  C-side SCMI/ELE stubs); interactive Linux shell (LPUART tty probe-defer
+  cascade); eventually U-Boot → kernel-from-MMC; accelerator stubs
+  (NPU/GPU/VPU/ISP).
