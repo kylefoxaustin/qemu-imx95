@@ -714,9 +714,11 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 
     /*
      * LPI2C master the SM uses for the PMIC + IO-expander (SDK LPI2C1 at
-     * 0x44340000 = our FSL_IMX95_LPI2C7). Real model with a PF09 PMIC at
-     * 0x08 and a PCAL6408A IO-expander at 0x20 on its bus, so the SM's
-     * BRD_SM_SerialDevicesInit transfers complete.
+     * 0x44340000 = our FSL_IMX95_LPI2C7). Real model with the serial
+     * devices BRD_SM_SerialDevicesInit probes on its bus, so SM init
+     * completes: PCAL6408A IO-expander (0x20), PF09 main PMIC (0x08), and
+     * the PF5301/PF5302 (PF53) buck regulators (0x2a/0x29). The PCA2131 RTC
+     * (0x53) needs no model - its PCA2131_Init() is a no-op.
      */
     s->lpi2c_pmic = qdev_new("imx.lpi2c");
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c_pmic), &error_fatal);
@@ -726,6 +728,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c_pmic, "i2c"));
         i2c_slave_create_simple(i2c, "pf09-pmic", 0x08);
         i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
+        i2c_slave_create_simple(i2c, "pf53-pmic", 0x2a);
+        i2c_slave_create_simple(i2c, "pf53-pmic", 0x29);
     }
 
     /*
