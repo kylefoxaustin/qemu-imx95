@@ -124,6 +124,22 @@ struct FslImx95State {
      * the sysctr is a secondary event timer.
      */
     MemoryRegion            sysctr;
+    /*
+     * BBNSM (Battery-Backed Non-Secure Module: RTC, tamper, 8 general-
+     * purpose registers) backed by RAM so writes stick. The NXP SM
+     * firmware touches it during early init (brd_sm reset-record GPRs via
+     * BBNSM_GprSetValue, and RTC setup that polls CTRL.RTC_EN back). The
+     * driver only does write-then-read-back on these registers and never
+     * reads VID/FEATURES, so a plain RAM region is sufficient. The A55
+     * Linux side does not currently touch it.
+     */
+    MemoryRegion            bbnsm;
+    /*
+     * HSIO BLK_CTRL (HSIOMIX) backed by RAM. The SM's SystemInit does a
+     * read-modify-write of the LFAST IO register at 0x4c0100c0; RAM gives
+     * the read-back the write expects.
+     */
+    MemoryRegion            blk_ctrl_hsiomix;
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
     IMXMUState              ele_mu1;
@@ -147,7 +163,11 @@ struct FslImx95State {
      */
     IMX95ELEServerState     ele_server2;
     SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
+    DeviceState            *wdog2;
     DeviceState            *wdog3;
+    /* M33 XCACHE controllers (PC @0x44400000, PS @0x44400800). */
+    DeviceState            *xcache_pc;
+    DeviceState            *xcache_ps;
 };
 
 /*
@@ -167,6 +187,16 @@ enum FslImx95MemoryRegions {
 
     /* System counter (drives the ARM generic timer). */
     FSL_IMX95_SYSCNT,
+
+    /* BBNSM (RTC / tamper / GPRs) - touched by the M33 SM firmware. */
+    FSL_IMX95_BBNSM,
+
+    /* M33 XCACHE controllers (enabled/invalidated by the SM at boot). */
+    FSL_IMX95_XCACHE_PC,
+    FSL_IMX95_XCACHE_PS,
+
+    /* HSIO BLK_CTRL (HSIOMIX) - SM SystemInit RMWs the LFAST IO reg. */
+    FSL_IMX95_BLK_CTRL_HSIOMIX,
 
     /* LPUART block (8 instances; all currently stubbed) */
     FSL_IMX95_LPUART1,
@@ -216,7 +246,11 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_MU_47560000,
     FSL_IMX95_MU_47570000,
 
-    /* Watchdogs. SPL disables WDG3/4/5 in arch_cpu_init(). */
+    /*
+     * Watchdogs. SPL disables WDG3/4/5 in arch_cpu_init(). WDOG2 is the
+     * M33 SM's own watchdog (unlocked + configured in its reset handler).
+     */
+    FSL_IMX95_WDOG2,
     FSL_IMX95_WDOG3,
     FSL_IMX95_WDOG4,
     FSL_IMX95_WDOG5,

@@ -95,6 +95,10 @@ static const struct {
      * real model if any guest write to this region surfaces.
      */
     [FSL_IMX95_SYSCNT]               = { 0x44290000, 192 * KiB,  "sysctr" },
+    [FSL_IMX95_BBNSM]                = { 0x44440000, 4 * KiB,    "bbnsm" },
+    [FSL_IMX95_XCACHE_PC]            = { 0x44400000, 0x800,      "xcache_pc" },
+    [FSL_IMX95_XCACHE_PS]            = { 0x44400800, 0x800,      "xcache_ps" },
+    [FSL_IMX95_BLK_CTRL_HSIOMIX]     = { 0x4c010000, 64 * KiB,   "blk_ctrl_hsiomix" },
 
     /*
      * LPUART block. compatible: "fsl,imx95-lpuart". Each instance is
@@ -162,6 +166,7 @@ static const struct {
      * three. Bases from references/uboot-imx/arch/arm/include/asm/
      * arch-imx9/imx-regs.h.
      */
+    [FSL_IMX95_WDOG2]                = { 0x442e0000, 64 * KiB,   "wdog2" },
     [FSL_IMX95_WDOG3]                = { 0x42490000, 64 * KiB,   "wdog3" },
     [FSL_IMX95_WDOG4]                = { 0x424a0000, 64 * KiB,   "wdog4" },
     [FSL_IMX95_WDOG5]                = { 0x424b0000, 64 * KiB,   "wdog5" },
@@ -541,6 +546,26 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                 fsl_imx95_memmap[FSL_IMX95_SYSCNT].addr,
                                 &s->sysctr);
 
+    /*
+     * BBNSM region as RAM (see comment on s->bbnsm in fsl-imx95.h). The
+     * M33 SM firmware reaches it via the m33_view alias of system memory.
+     */
+    memory_region_init_ram(&s->bbnsm, OBJECT(dev), "imx95-bbnsm",
+                           fsl_imx95_memmap[FSL_IMX95_BBNSM].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_BBNSM].addr,
+                                &s->bbnsm);
+
+    /* HSIO BLK_CTRL (HSIOMIX) as RAM (see comment on s->blk_ctrl_hsiomix). */
+    memory_region_init_ram(&s->blk_ctrl_hsiomix, OBJECT(dev),
+                           "imx95-blk-ctrl-hsiomix",
+                           fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].addr,
+                                &s->blk_ctrl_hsiomix);
+
     {
         SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->sm_mu);
 
@@ -649,6 +674,31 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog3), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog3), 0,
                     fsl_imx95_memmap[FSL_IMX95_WDOG3].addr);
+
+    /*
+     * WDOG2 is the M33 SM's own watchdog: its reset handler unlocks it
+     * (key 0xD928C520 -> CNT) and configures it before continuing. Same
+     * ULP WDOG IP as wdog3; reuse the model (no timer behaviour, so it
+     * never fires - the SM is free to configure and refresh it).
+     */
+    s->wdog2 = qdev_new("imx95.wdog");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog2), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog2), 0,
+                    fsl_imx95_memmap[FSL_IMX95_WDOG2].addr);
+
+    /*
+     * M33 XCACHE controllers. The SM enables + invalidates its caches at
+     * boot (CCR ENCACHE + INVWn + GO, then polls); the model self-clears
+     * the command bits so those polls converge.
+     */
+    s->xcache_pc = qdev_new("imx95.xcache");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_pc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_pc), 0,
+                    fsl_imx95_memmap[FSL_IMX95_XCACHE_PC].addr);
+    s->xcache_ps = qdev_new("imx95.xcache");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_ps), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_ps), 0,
+                    fsl_imx95_memmap[FSL_IMX95_XCACHE_PS].addr);
 
     /*
      * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with
