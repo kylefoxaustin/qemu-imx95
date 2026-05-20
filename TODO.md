@@ -102,6 +102,45 @@ prereq pass; both are now done. The remainder are v0.4 prereqs.)
   Cosmetic but improves first-impressions-on-running-the-emulator.
   Lower-priority than Linux preboot.
 
+## v0.5 — Linux boot known issues / required boot args
+
+- **`cpuidle.off=1` is REQUIRED to boot Linux past SCMI bring-up.**
+  Without it, Linux hangs immediately after
+  `arm-scmi ... SCMI Notifications - Core Enabled`. With it, Linux
+  6.12.49 boots end-to-end through all driver init and reaches the
+  rootfs-mount stage (panics on "Unable to mount root fs" when no
+  initramfs/rootfs is supplied — expected for a `-kernel` direct boot).
+
+  Boot recipe:
+
+  ```
+  ./build/qemu-system-aarch64 -M imx95-19x19-evk -m 2G -display none \
+      -serial mon:stdio \
+      -kernel <Image> -dtb <imx95-19x19-evk.dtb> \
+      -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1"
+  ```
+
+  Note the **earlycon address quirk**: pass `0x44380010`, not
+  `0x44380000` — the i.MX95 LPUART has VERID/PARAM/GLOBAL/PINCFG at
+  0x00-0x0C and BAUD at 0x10; Linux's regular driver applies the
+  `reg_off = 0x10` offset automatically but earlycon does not.
+
+  Root cause (do not re-investigate — fully diagnosed): on entering its
+  deepest cpuidle state each CPU writes `ICC_IGRPEN1_EL1 = 0` (disables
+  Group-1 interrupts at its GIC CPU interface) and quiesces its
+  redistributor (`GICR_WAKER.ProcessorSleep`). The SCMI completion IRQ
+  (mu2, SPI 226) is statically routed to CPU0; once CPU0 tears down its
+  interface and idles, QEMU has no power-controller wake-request to wake
+  it, so the SCMI response is never delivered. `cpuidle.off=1` keeps the
+  CPU interfaces up.
+
+  Proper fix (future, removes the need for the flag): model i.MX95 CPU
+  power management — the M33 SM firmware / SCMI-or-PSCI CPU-power path
+  that wakes a suspended CPU for a targeted pending interrupt. This is
+  the "real SM firmware" roadmap item. Alternatively, ship/patch a DTB
+  with the powerdown cpuidle states removed. Same spirit as the
+  earlycon-address quirk and the DDR-is-RAM decision.
+
 ## Before v0.5 (PCIe + MSI consumers arrive)
 
 - **GIC ITS wiring** — currently modelled as a freestanding
