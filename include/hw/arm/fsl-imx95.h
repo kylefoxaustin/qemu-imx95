@@ -110,6 +110,8 @@ struct FslImx95State {
     GICv3State              gic;
     MemoryRegion            ocram;
     MemoryRegion            sm_shmem;
+    /* Alias of sm_shmem into the MU2 MUB window (v0.9 SCMI swap). */
+    MemoryRegion            sm_shmem_b;
     /*
      * System counter region backed by RAM so writes stick. Linux's
      * imx-sysctr driver (timer-imx-sysctr.c) writes CMPCR/CMPCV
@@ -143,6 +145,13 @@ struct FslImx95State {
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
     IMXMUState              ele_mu1;
+    /*
+     * M33-side (MUB) endpoint of MU2, peer-linked to sm_mu (the A55-side
+     * MUA @0x445b0000). Only instantiated in the v0.9 SCMI-swap path
+     * (scmi-stub=off), mapped at 0x445c0000 with its IRQ routed to the M33
+     * NVIC, so the real SM firmware services the A55's SCMI doorbells.
+     */
+    IMXMUState              sm_mu_b;
     /*
      * Stub MUs for the V2X / NETC / spare instances the DT references
      * but nothing in the model talks to. Wired with a NOP tr-write
@@ -343,5 +352,12 @@ enum FslImx95Irqs {
     /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */
     FSL_IMX95_SM_MU_IRQ     = 226,
 };
+
+/*
+ * M33 NVIC external interrupt number for the MU2 B-side (MU2_B_IRQn in the
+ * SM's MIMX95 device header) - the IRQ the SM enables to receive A55 SCMI
+ * doorbells on its side of MU2.
+ */
+#define FSL_IMX95_SM_MU_B_M33_IRQ   227
 
 #endif /* FSL_IMX95_H */
