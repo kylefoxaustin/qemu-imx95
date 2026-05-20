@@ -29,11 +29,16 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/main-loop.h"
 #include "system/address-spaces.h"
+#include "system/cpus.h"
 #include "system/system.h"
 #include "hw/arm/bsa.h"
 #include "hw/arm/boot.h"
+#include "hw/arm/armv7m.h"
 #include "hw/arm/fsl-imx95.h"
+#include "hw/core/clock.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/boards.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
@@ -291,28 +296,72 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
     }
 }
 
+/*
+ * Release the M33 only when SM firmware has actually been loaded into its
+ * ITCM. The SM image's vector table begins with the initial stack
+ * pointer, so a non-zero first ITCM word means firmware is present; a
+ * zeroed ITCM (no -device loader) leaves the M33 powered off, so a plain
+ * A55-only Linux boot does not run the M33 into a HardFault lockup.
+ *
+ * Run from a bottom half scheduled at machine-init-done: by the time the
+ * BH executes, the initial system reset has already committed the loaded
+ * image into ITCM, side-stepping the reset-handler ordering problem (the
+ * generic -device loader commits its ROM blob during the reset, after any
+ * reset hook a device could register).
+ */
+static void fsl_imx95_m33_start_bh(void *opaque)
+{
+    FslImx95State *s = opaque;
+    const void *itcm = memory_region_get_ram_ptr(&s->m33_itcm);
+    uint32_t initial_sp = ldl_le_p(itcm);
+
+    if (initial_sp != 0 && s->m33.cpu) {
+        CPUState *cs = CPU(s->m33.cpu);
+        cs->halted = 0;
+        cpu_resume(cs);
+    }
+}
+
+static void fsl_imx95_machine_done(Notifier *notifier, void *data)
+{
+    FslImx95State *s = container_of(notifier, FslImx95State, m33_machine_done);
+
+    aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                            fsl_imx95_m33_start_bh, s);
+}
+
 static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 {
     MachineState *ms = MACHINE(qdev_get_machine());
     FslImx95State *s = FSL_IMX95(dev);
     DeviceState *gicdev = DEVICE(&s->gic);
     const char *cpu_type = ms->cpu_type ?: ARM_CPU_TYPE_NAME("cortex-a55");
+    /*
+     * The 19x19 EVK has a fixed 6-core A55 cluster. The Cortex-M33 SM
+     * core is an additional, always-present vCPU not part of the A55
+     * cluster (it has its own NVIC, not the GIC), so the A55 wiring below
+     * is sized by the fixed cluster count rather than ms->smp.cpus, which
+     * also counts the M33.
+     */
+    const unsigned n_a55 = FSL_IMX95_NUM_A55_CPUS;
     int i;
 
-    if (ms->smp.cpus > FSL_IMX95_NUM_A55_CPUS) {
-        error_setg(errp, "%s: only %d A55 CPUs are supported (%d requested)",
-                   TYPE_FSL_IMX95, FSL_IMX95_NUM_A55_CPUS, (int)ms->smp.cpus);
+    if (ms->smp.cpus != n_a55 + 1) {
+        error_setg(errp,
+                   "%s: fixed topology is %u A55 + 1 M33 SM core; "
+                   "run with -smp %u (the default) - %d requested",
+                   TYPE_FSL_IMX95, n_a55, n_a55 + 1, (int)ms->smp.cpus);
         return;
     }
 
     /* Instantiate the A55 cluster. */
-    for (i = 0; i < ms->smp.cpus; i++) {
+    for (i = 0; i < n_a55; i++) {
         g_autofree char *name = g_strdup_printf("cpu%d", i);
         object_initialize_child(OBJECT(dev), name, &s->cpu[i], cpu_type);
     }
 
-    for (i = 0; i < ms->smp.cpus; i++) {
-        if (ms->smp.cpus > 1 &&
+    for (i = 0; i < n_a55; i++) {
+        if (n_a55 > 1 &&
             object_property_find(OBJECT(&s->cpu[i]), "reset-cbar")) {
             object_property_set_int(OBJECT(&s->cpu[i]), "reset-cbar",
                                     fsl_imx95_memmap[FSL_IMX95_GIC_DIST].addr,
@@ -376,12 +425,12 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         SysBusDevice *gicsbd = SYS_BUS_DEVICE(&s->gic);
         QList *redist_region_count;
 
-        qdev_prop_set_uint32(gicdev, "num-cpu", ms->smp.cpus);
+        qdev_prop_set_uint32(gicdev, "num-cpu", n_a55);
         qdev_prop_set_uint32(gicdev, "num-irq",
                              FSL_IMX95_NUM_IRQS + GIC_INTERNAL);
 
         redist_region_count = qlist_new();
-        qlist_append_int(redist_region_count, ms->smp.cpus);
+        qlist_append_int(redist_region_count, n_a55);
         qdev_prop_set_array(gicdev, "redist-region-count", redist_region_count);
 
         object_property_set_link(OBJECT(&s->gic), "sysmem",
@@ -393,7 +442,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(gicsbd, 1, fsl_imx95_memmap[FSL_IMX95_GIC_REDIST].addr);
 
         /* Wire the per-CPU timer PPIs and IRQ/FIQ lines. */
-        for (i = 0; i < ms->smp.cpus; i++) {
+        for (i = 0; i < n_a55; i++) {
             DeviceState *cpudev = DEVICE(&s->cpu[i]);
             int intidbase = FSL_IMX95_NUM_IRQS + i * GIC_INTERNAL;
             qemu_irq irq;
@@ -411,11 +460,11 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 
             sysbus_connect_irq(gicsbd, i,
                 qdev_get_gpio_in(cpudev, ARM_CPU_IRQ));
-            sysbus_connect_irq(gicsbd, i + ms->smp.cpus,
+            sysbus_connect_irq(gicsbd, i + n_a55,
                 qdev_get_gpio_in(cpudev, ARM_CPU_FIQ));
-            sysbus_connect_irq(gicsbd, i + 2 * ms->smp.cpus,
+            sysbus_connect_irq(gicsbd, i + 2 * n_a55,
                 qdev_get_gpio_in(cpudev, ARM_CPU_VIRQ));
-            sysbus_connect_irq(gicsbd, i + 3 * ms->smp.cpus,
+            sysbus_connect_irq(gicsbd, i + 3 * n_a55,
                 qdev_get_gpio_in(cpudev, ARM_CPU_VFIQ));
         }
     }
@@ -639,6 +688,66 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    /*
+     * Cortex-M33 System Manager core (v0.6). Build the M33's 32-bit
+     * address space: its private ITCM/DTCM RAM layered over a
+     * low-priority alias of the A55 system memory (so the M33 can also
+     * reach already-modelled peripherals and DRAM). The SM firmware is
+     * loaded into ITCM separately via -device loader (see tests/sm-banner).
+     *
+     * The M33 boots first on real silicon; here the A55 cluster is the
+     * primary boot path and the M33 is an additional core that runs only
+     * when SM firmware is loaded. With no firmware, ITCM reads back zero,
+     * so the M33 takes an early fault and locks up harmlessly without
+     * disturbing the A55s.
+     */
+    memory_region_init(&s->m33_view, OBJECT(s), "imx95-m33-view",
+                       4 * GiB);
+    /* Low-priority window onto the A55 system memory (peripherals, DRAM). */
+    memory_region_init_alias(&s->m33_sysmem_alias, OBJECT(s),
+                             "imx95-m33-sysmem", get_system_memory(),
+                             0, 4 * GiB);
+    memory_region_add_subregion_overlap(&s->m33_view, 0,
+                                        &s->m33_sysmem_alias, -1);
+    /* Private TCM, layered on top. */
+    memory_region_init_ram(&s->m33_itcm, OBJECT(s), "imx95-m33-itcm",
+                           FSL_IMX95_M33_TCM_SIZE, &error_fatal);
+    memory_region_add_subregion(&s->m33_view, FSL_IMX95_M33_ITCM_BASE,
+                                &s->m33_itcm);
+    memory_region_init_ram(&s->m33_dtcm, OBJECT(s), "imx95-m33-dtcm",
+                           FSL_IMX95_M33_TCM_SIZE, &error_fatal);
+    memory_region_add_subregion(&s->m33_view, FSL_IMX95_M33_DTCM_BASE,
+                                &s->m33_dtcm);
+
+    s->m33_cpuclk = clock_new(OBJECT(s), "m33-cpuclk");
+    clock_set_hz(s->m33_cpuclk, FSL_IMX95_M33_CLK_HZ);
+
+    qdev_prop_set_string(DEVICE(&s->m33), "cpu-type",
+                         ARM_CPU_TYPE_NAME("cortex-m33"));
+    qdev_prop_set_uint32(DEVICE(&s->m33), "num-irq", FSL_IMX95_M33_NUM_IRQ);
+    qdev_prop_set_uint32(DEVICE(&s->m33), "init-svtor", FSL_IMX95_M33_SVTOR);
+    /*
+     * Hold the M33 in reset until we know SM firmware was loaded into its
+     * ITCM (see fsl_imx95_m33_reset below). This keeps a plain A55 Linux
+     * boot - which loads no SM image - from running the M33 on a zeroed
+     * ITCM straight into a HardFault lockup.
+     */
+    qdev_prop_set_bit(DEVICE(&s->m33), "start-powered-off", true);
+    qdev_connect_clock_in(DEVICE(&s->m33), "cpuclk", s->m33_cpuclk);
+    object_property_set_link(OBJECT(&s->m33), "memory",
+                             OBJECT(&s->m33_view), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->m33), errp)) {
+        return;
+    }
+
+    /*
+     * Register the M33 auto-start check from a machine-done notifier so
+     * its reset hook is installed AFTER the generic -device loader's, and
+     * therefore runs after the SM image has been written into ITCM.
+     */
+    s->m33_machine_done.notify = fsl_imx95_machine_done;
+    qemu_add_machine_init_done_notifier(&s->m33_machine_done);
+
     /* All peripherals not yet modeled get logging stubs. */
     fsl_imx95_install_unimplemented(s);
 }
@@ -649,6 +758,8 @@ static void fsl_imx95_init(Object *obj)
     int i;
 
     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GICV3);
+
+    object_initialize_child(obj, "m33", &s->m33, TYPE_ARMV7M);
 
     for (i = 0; i < FSL_IMX95_NUM_LPUARTS; i++) {
         g_autofree char *name = g_strdup_printf("lpuart%d", i + 1);

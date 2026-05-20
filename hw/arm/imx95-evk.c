@@ -52,6 +52,21 @@ static void imx95_evk_init(MachineState *machine)
 
     if (!qtest_enabled()) {
         arm_load_kernel(&s->cpu[0], machine, &boot_info);
+
+        /*
+         * arm_load_kernel() registers its boot reset hook on every CPU in
+         * the system and treats all non-boot cores as A-profile PSCI
+         * secondaries. That is correct for the five A55 secondaries, but
+         * the Cortex-M33 SM core is not part of the A55 boot flow - it
+         * boots from its own ITCM vector table. Detach it from the
+         * A-profile boot machinery so its reset just runs the normal
+         * M-profile vector-table reset. Whether it then actually runs is
+         * decided by the SoC's M33 reset hook (only if SM firmware was
+         * loaded into ITCM).
+         */
+        if (s->m33.cpu) {
+            s->m33.cpu->env.boot_info = NULL;
+        }
     }
 }
 
@@ -67,8 +82,17 @@ static void imx95_19x19_evk_machine_init(MachineClass *mc)
 {
     mc->desc                  = "NXP i.MX 95 19x19 EVK (LPDDR5)";
     mc->init                  = imx95_evk_init;
-    mc->default_cpus          = FSL_IMX95_NUM_A55_CPUS;
-    mc->max_cpus              = FSL_IMX95_NUM_A55_CPUS;
+    /*
+     * Total vCPUs = 6 A55 + 1 Cortex-M33 System Manager core that the
+     * SoC always instantiates. TCG sizes its per-CPU context table from
+     * the resolved smp.max_cpus, which defaults to smp.cpus when -smp is
+     * not given - so both the default and the max must include the M33,
+     * otherwise the 7th CPU's tcg_register_thread() asserts. The A55
+     * cluster size is fixed in the SoC regardless of -smp; this count is
+     * really "A55 cluster + SM core".
+     */
+    mc->default_cpus          = FSL_IMX95_NUM_A55_CPUS + 1;
+    mc->max_cpus              = FSL_IMX95_NUM_A55_CPUS + 1;
     mc->default_ram_id        = "imx95-19x19-evk.ram";
     mc->default_ram_size      = 8 * GiB;   /* 19x19 EVK ships with 8 GiB LPDDR5 */
     mc->get_default_cpu_type  = imx95_evk_get_default_cpu_type;
