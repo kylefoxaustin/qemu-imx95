@@ -100,6 +100,7 @@ static const struct {
     [FSL_IMX95_XCACHE_PC]            = { 0x44400000, 0x800,      "xcache_pc" },
     [FSL_IMX95_XCACHE_PS]            = { 0x44400800, 0x800,      "xcache_ps" },
     [FSL_IMX95_BLK_CTRL_HSIOMIX]     = { 0x4c010000, 64 * KiB,   "blk_ctrl_hsiomix" },
+    [FSL_IMX95_GPC]                  = { 0x44470000, 64 * KiB,   "gpc" },
 
     /*
      * LPUART block. compatible: "fsl,imx95-lpuart". Each instance is
@@ -717,6 +718,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         i2c_slave_create_simple(i2c, "pf09-pmic", 0x08);
         i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
     }
+
+    /*
+     * GPC: the SM polls per-domain CMC_MODE_STAT and uses the sleep/wake
+     * handshakes for CPU power-mode control. The model mirrors each status
+     * register to its paired control so the SM's "request mode, wait for
+     * mode" loops converge.
+     */
+    s->gpc = qdev_new("imx95.gpc");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->gpc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->gpc), 0,
+                    fsl_imx95_memmap[FSL_IMX95_GPC].addr);
 
     /*
      * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with

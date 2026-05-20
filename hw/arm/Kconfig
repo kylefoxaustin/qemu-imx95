@@ -631,6 +631,7 @@ config FSL_IMX95
     select IMX95_WDOG
     select IMX95_XCACHE
     select IMX95_PMIC
+    select IMX95_GPC
     select IMX_LPI2C
     select SDHCI
     select UNIMP

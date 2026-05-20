@@ -175,6 +175,8 @@ struct FslImx95State {
      * logging stubs.
      */
     DeviceState            *lpi2c_pmic;
+    /* GPC (General Power Controller) - SM power-domain / CPU-mode control. */
+    DeviceState            *gpc;
 };
 
 /*
@@ -204,6 +206,9 @@ enum FslImx95MemoryRegions {
 
     /* HSIO BLK_CTRL (HSIOMIX) - SM SystemInit RMWs the LFAST IO reg. */
     FSL_IMX95_BLK_CTRL_HSIOMIX,
+
+    /* GPC (per-domain CPU_CTRL + GLOBAL) - SM power/CPU-mode control. */
+    FSL_IMX95_GPC,
 
     /* LPUART block (8 instances; all currently stubbed) */
     FSL_IMX95_LPUART1,
