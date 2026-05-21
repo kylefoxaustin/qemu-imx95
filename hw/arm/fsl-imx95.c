@@ -781,21 +781,6 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * The C-stub SCMI server answers the A55's SCMI traffic on the A55-side
-     * MU. Skip it when scmi-server=off so the real SM firmware on the M33
-     * can service the channel instead (the v0.9 SCMI swap).
-     */
-    if (s->scmi_server_enabled) {
-        object_initialize_child(OBJECT(s), "scmi-server", &s->scmi_server,
-                                TYPE_IMX95_SCMI_SERVER);
-        object_property_set_link(OBJECT(&s->scmi_server), "mu",
-                                 OBJECT(&s->sm_mu), &error_abort);
-        if (!sysbus_realize(SYS_BUS_DEVICE(&s->scmi_server), errp)) {
-            return;
-        }
-    }
-
-    /*
      * ELE mailbox 1 and its responder stub. The MU is a plain
      * register file; the ele-server hangs off the MU's TR-write hook
      * and answers ELE-protocol commands from SPL with stub responses.
@@ -1078,18 +1063,19 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * v0.9 SCMI swap: when the C-stub is disabled, instantiate the M33-side
-     * (MUB) endpoint of MU2 and peer-link it to the A55-side MU. Linux's
-     * SCMI doorbell on MUA (0x445b0000) then latches the matching GIP on MUB
-     * and raises the M33's MU2_B IRQ, so the real SM firmware services the
-     * request; the SM's response doorbell on MUB raises the A55's MU IRQ in
-     * turn. The MUB and its sram0 alias sit 0x10000 above their MUA
-     * counterparts (A2_MUB = A2_MUA + 0x10000), and the SM's mb_mu computes
-     * its SMT buffer at MUB+0x1000 - the same backing RAM Linux uses at
-     * MUA+0x1000, so both sides exchange messages through one buffer.
-     * Done after the M33 is realized so its NVIC GPIO inputs exist.
+     * MU2 SCMI: instantiate the M33-side (MUB) endpoint of MU2 and peer-link
+     * it to the A55-side MU, so the real SM firmware on the M33 services the
+     * A55's SCMI. Linux's SCMI doorbell on MUA (0x445b0000) latches the
+     * matching GIP on MUB and raises the M33's MU2_B IRQ; the SM's response
+     * doorbell on MUB raises the A55's MU IRQ in turn. The MUB and its sram0
+     * alias sit 0x10000 above their MUA counterparts (A2_MUB = A2_MUA +
+     * 0x10000), and the SM's mb_mu computes its SMT buffer at MUB+0x1000 -
+     * the same backing RAM Linux uses at MUA+0x1000, so both sides exchange
+     * messages through one buffer. Done after the M33 is realized so its NVIC
+     * GPIO inputs exist. (A plain A55 boot with no SM firmware loaded leaves
+     * the M33 halted, so nothing answers SCMI - the SM image is required.)
      */
-    if (!s->scmi_server_enabled) {
+    {
         IMXMUState *mub = &s->sm_mu_b;
         hwaddr mub_base = fsl_imx95_memmap[FSL_IMX95_SM_MU].addr + 0x10000;
         hwaddr shmem_b = fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].addr + 0x10000;
@@ -1143,12 +1129,6 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("stub_mu%d", i);
         object_initialize_child(obj, name, &s->stub_mu[i], TYPE_IMX_MU);
     }
-    /*
-     * The C-stub SCMI server child is initialised in realize() instead of
-     * here, gated on the scmi-stub property (a child object that is
-     * initialised must also be realised, so it can't be unconditionally
-     * created when the property may disable it).
-     */
     object_initialize_child(obj, "ele-server", &s->ele_server,
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server0", &s->ele_server0,
@@ -1162,16 +1142,11 @@ static void fsl_imx95_init(Object *obj)
     }
 }
 
-static const Property fsl_imx95_properties[] = {
-    DEFINE_PROP_BOOL("scmi-stub", FslImx95State, scmi_server_enabled, true),
-};
-
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = fsl_imx95_realize;
-    device_class_set_props(dc, fsl_imx95_properties);
     /* This is an SoC, not user-creatable. */
     dc->user_creatable = false;
 }

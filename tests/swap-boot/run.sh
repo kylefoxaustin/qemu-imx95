@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# v0.9 SCMI-swap full boot: the REAL NXP System Manager (M33) serves the
-# A55's SCMI, and Linux boots on top of it.
+# Full boot: the REAL NXP System Manager (M33) serves the A55's SCMI, and
+# Linux boots on top of it.
 #
 # Loads the SM firmware ELF onto the Cortex-M33 (cpu-num=6) AND a Linux
-# kernel + DTB + initramfs on the A55, with the C-stub SCMI server disabled
-# (`-global fsl-imx95.scmi-stub=false`) so MU2 traffic flows A55 <-> real SM.
+# kernel + DTB + initramfs on the A55. MU2 traffic flows A55 <-> real SM; the
+# SM image is required (there is no built-in SCMI server - the M33 is the
+# only thing that answers SCMI).
 #
 # icount is OFF by default. It is a debug-determinism tool (methodology
 # "Pillar 3"), not a normal-boot config: on this heterogeneous A55+M33
@@ -39,7 +40,6 @@ fi
 
 exec "$QEMU" -M imx95-19x19-evk -m 2G -display none \
     "${ICOUNT_ARGS[@]}" \
-    -global fsl-imx95.scmi-stub=false \
     -kernel "$KERNEL" -dtb "$DTB" -initrd "$INITRD" \
     -append "$CMDLINE" \
     -device loader,file="$SM_ELF",cpu-num=6 \

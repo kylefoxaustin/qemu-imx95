@@ -29,7 +29,6 @@
 #include "hw/core/clock.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/misc/imx95_ele_server.h"
-#include "hw/misc/imx95_scmi_server.h"
 #include "hw/misc/imx_mu.h"
 #include "hw/sd/sdhci.h"
 #include "hw/core/sysbus.h"
@@ -157,8 +156,7 @@ struct FslImx95State {
     IMXMUState              ele_mu1;
     /*
      * M33-side (MUB) endpoint of MU2, peer-linked to sm_mu (the A55-side
-     * MUA @0x445b0000). Only instantiated in the v0.9 SCMI-swap path
-     * (scmi-stub=off), mapped at 0x445c0000 with its IRQ routed to the M33
+     * MUA @0x445b0000), mapped at 0x445c0000 with its IRQ routed to the M33
      * NVIC, so the real SM firmware services the A55's SCMI doorbells.
      */
     IMXMUState              sm_mu_b;
@@ -169,7 +167,6 @@ struct FslImx95State {
      * iterate them cleanly without hanging on TX-empty polls.
      */
     IMXMUState              stub_mu[6];
-    IMX95SCMIServerState    scmi_server;
     IMX95ELEServerState     ele_server;
     /* ELE responder for the SM's elemu0 channel (0x47520000). */
     IMX95ELEServerState     ele_server0;
@@ -203,13 +200,6 @@ struct FslImx95State {
     /* ANATOP/PLL - SM DVFS PLL lock + DFS status (A55 perf level). */
     DeviceState            *anatop;
 
-    /*
-     * When true (default), instantiate the C-stub SCMI server that answers
-     * the A55's SCMI traffic on the A55-side MU (MUA @0x445b0000). Set false
-     * to leave that channel for the real SM firmware on the M33 to service
-     * (the v0.9 SCMI swap). Toggle via -global fsl-imx95.scmi-stub=false.
-     */
-    bool                    scmi_server_enabled;
 };
 
 /*

@@ -182,7 +182,7 @@ static void ele_on_tr_write(void *opaque, unsigned int idx, uint32_t value)
 {
     IMX95ELEServerState *s = opaque;
 
-    /* Invoked from MU MMIO write handler under BQL; see imx95_scmi_server.c. */
+    /* Invoked from the MU MMIO write handler, which runs under the BQL. */
     g_assert(bql_locked());
 
     if (s->msg_count >= IMX95_ELE_MAX_WORDS) {

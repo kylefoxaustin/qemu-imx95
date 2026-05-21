@@ -104,9 +104,6 @@ config FSL_IMX8MP_CCM
 config IMX_MU
     bool
 
-config IMX95_SCMI_SERVER
-    bool
-    select IMX_MU
 
 config IMX95_WDOG
     bool
