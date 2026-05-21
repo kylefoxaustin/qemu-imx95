@@ -152,6 +152,8 @@ struct FslImx95State {
     MemoryRegion            blk_ctrl_hsiomix;
     IMXLPUARTState          lpuart[FSL_IMX95_NUM_LPUARTS];
     IMXMUState              sm_mu;
+    /* ELE MU the M33 SM uses for its EdgeLock channel (elemu0, 0x47520000). */
+    IMXMUState              ele_mu0;
     IMXMUState              ele_mu1;
     /*
      * M33-side (MUB) endpoint of MU2, peer-linked to sm_mu (the A55-side
@@ -169,6 +171,8 @@ struct FslImx95State {
     IMXMUState              stub_mu[6];
     IMX95SCMIServerState    scmi_server;
     IMX95ELEServerState     ele_server;
+    /* ELE responder for the SM's elemu0 channel (0x47520000). */
+    IMX95ELEServerState     ele_server0;
     /*
      * Second ELE server attached to the stub MU at 0x47550000. The
      * imx9_probe_mu() SCMI variant in U-Boot proper hardcodes
