@@ -45,6 +45,16 @@ struct IMX95DPUState {
 static uint64_t imx95_dpu_read(void *opaque, hwaddr offset, unsigned size)
 {
     if (offset == DPU_CMDSEQ_STATUS) {
+        /*
+         * Report the sequencer idle with a full FIFO. This is deliberately
+         * NOT the reset value (0x41000080: IDLE set but FIFOSPACE = 128, below
+         * the driver's threshold of 192), because the dpu95 probe polls
+         * FIFOSPACE before the enable handshake that would raise it on real
+         * silicon. Returning a constant full FIFO is sound only because the
+         * model is probe-time-only: no actual command sequence is ever
+         * submitted. If a future milestone exercises real DPU command
+         * submission, FIFOSPACE must track the command FIFO occupancy instead.
+         */
         return DPU_CMDSEQ_STATUS_IDLE | DPU_CMDSEQ_STATUS_FIFOSPACE;
     }
     return 0;
