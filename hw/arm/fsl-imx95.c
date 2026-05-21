@@ -151,6 +151,12 @@ static const struct {
     [FSL_IMX95_ELE_MU1]              = { 0x47530000, 64 * KiB,   "elemu1" },
     /* Fuse Shadow Block (MIMX95_FSB.h FSB_BASE). */
     [FSL_IMX95_FSB]                  = { 0x47510000, 64 * KiB,   "fsb" },
+    /* VFCCU / FCCU fault-control unit (AON_VFCCU). */
+    [FSL_IMX95_VFCCU]                = { 0x446b0000, 64 * KiB,   "vfccu" },
+    /* AON_VFCCU (FCCU_BASE), AON_ERMA, NOC_SRAMCTL - SM eMcem/fabric init. */
+    [FSL_IMX95_VFCCU_AON]            = { 0x44570000, 64 * KiB,   "vfccu-aon" },
+    [FSL_IMX95_ERMA]                 = { 0x44560000, 64 * KiB,   "erma" },
+    [FSL_IMX95_NOC_SRAMCTL]          = { 0x490a0000, 64 * KiB,   "noc-sramctl" },
 
     /*
      * Other MU instances U-Boot proper probes from DT but we don't
@@ -582,6 +588,43 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                            fsl_imx95_memmap[FSL_IMX95_FSB].size, &error_fatal);
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_FSB].addr, &s->fsb);
+
+    /*
+     * VFCCU (fault collection/control) as RAM. The SM's eMcem_Vfccu_InitCVfccu
+     * writes fault config/flags and only re-reads what it wrote (e.g. clears
+     * FHCFG0.FHIDEN and loops until it reads back 0), so a register-file is
+     * enough; no fault-injection or IRQ behaviour is modelled (v1.0 item).
+     */
+    memory_region_init_ram(&s->vfccu, OBJECT(dev), "imx95-vfccu",
+                           fsl_imx95_memmap[FSL_IMX95_VFCCU].size, &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_VFCCU].addr,
+                                &s->vfccu);
+
+    /*
+     * More register-file write targets the SM's eMcem/fabric init touches:
+     * AON_VFCCU (FCCU central, 0x44570000), AON_ERMA (error reporting,
+     * 0x44560000) and NOC_SRAMCTL (0x490a0000). The SM only writes config
+     * and reads back what it wrote, so plain RAM suffices; no fault or
+     * fabric behaviour is modelled (v1.0 item).
+     */
+    memory_region_init_ram(&s->vfccu_aon, OBJECT(dev), "imx95-vfccu-aon",
+                           fsl_imx95_memmap[FSL_IMX95_VFCCU_AON].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_VFCCU_AON].addr,
+                                &s->vfccu_aon);
+    memory_region_init_ram(&s->erma, OBJECT(dev), "imx95-erma",
+                           fsl_imx95_memmap[FSL_IMX95_ERMA].size, &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_ERMA].addr,
+                                &s->erma);
+    memory_region_init_ram(&s->noc_sramctl, OBJECT(dev), "imx95-noc-sramctl",
+                           fsl_imx95_memmap[FSL_IMX95_NOC_SRAMCTL].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_NOC_SRAMCTL].addr,
+                                &s->noc_sramctl);
 
     {
         SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->sm_mu);
