@@ -237,7 +237,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
         FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
-        FSL_IMX95_SRC, FSL_IMX95_TRDC_AON,
+        FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_ELE_MU,
@@ -756,6 +756,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->gpc), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->gpc), 0,
                     fsl_imx95_memmap[FSL_IMX95_GPC].addr);
+
+    /*
+     * SRC: the SM powers mix domains down/up via SLICE_SW_CTRL.PDN_SOFT and
+     * polls each slice's FUNC_STAT until the transition completes. The model
+     * derives FUNC_STAT from PDN_SOFT (instantaneous), so DEV_SM_Init's
+     * power-down/up poll loops converge instead of spinning forever.
+     */
+    s->src = qdev_new("imx95.src");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->src), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->src), 0,
+                    fsl_imx95_memmap[FSL_IMX95_SRC].addr);
 
     /*
      * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with
