@@ -246,7 +246,6 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
         FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
-        FSL_IMX95_ELE_MU,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
@@ -687,6 +686,28 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * ELE MU 0 (elemu0, 0x47520000) + its responder. This is the EdgeLock
+     * channel the M33 SM uses during DEV_SM_Init (ELE_MuTx). Without a real
+     * MU here the SM's MU_SendMsg spins on TSR.TEn, and without a responder
+     * it then waits forever for an ELE reply. Same MU-then-responder
+     * ordering rule as ele_mu1 above.
+     */
+    {
+        SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->ele_mu0);
+
+        if (!sysbus_realize(mu_sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mu_sbd, 0,
+                        fsl_imx95_memmap[FSL_IMX95_ELE_MU].addr);
+    }
+    object_property_set_link(OBJECT(&s->ele_server0), "mu",
+                             OBJECT(&s->ele_mu0), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server0), errp)) {
+        return;
+    }
+
+    /*
      * Realise the 6 stub MUs. Wiring imx_mu_set_tr_write_handler() to
      * a NOP makes IMX_MU re-assert TSR.TEn after every TR write, so
      * U-Boot's TX-empty poll on these unmodeled mailboxes completes
@@ -961,6 +982,7 @@ static void fsl_imx95_init(Object *obj)
     }
 
     object_initialize_child(obj, "sm_mu", &s->sm_mu, TYPE_IMX_MU);
+    object_initialize_child(obj, "ele_mu0", &s->ele_mu0, TYPE_IMX_MU);
     object_initialize_child(obj, "ele_mu1", &s->ele_mu1, TYPE_IMX_MU);
     for (i = 0; i < ARRAY_SIZE(s->stub_mu); i++) {
         g_autofree char *name = g_strdup_printf("stub_mu%d", i);
@@ -973,6 +995,8 @@ static void fsl_imx95_init(Object *obj)
      * created when the property may disable it).
      */
     object_initialize_child(obj, "ele-server", &s->ele_server,
+                            TYPE_IMX95_ELE_SERVER);
+    object_initialize_child(obj, "ele-server0", &s->ele_server0,
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server2", &s->ele_server2,
                             TYPE_IMX95_ELE_SERVER);
