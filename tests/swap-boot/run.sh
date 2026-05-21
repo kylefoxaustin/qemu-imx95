@@ -7,7 +7,13 @@
 # kernel + DTB + initramfs on the A55, with the C-stub SCMI server disabled
 # (`-global fsl-imx95.scmi-stub=false`) so MU2 traffic flows A55 <-> real SM.
 #
-# -icount shift=auto keeps MU/timer interaction deterministic (reflex #4).
+# icount is OFF by default. It is a debug-determinism tool (methodology
+# "Pillar 3"), not a normal-boot config: on this heterogeneous A55+M33
+# machine, where both sides can sit in WFI between SCMI/MU round-trips,
+# icount delays interrupt/timer delivery to idle CPUs, so Linux's
+# wait_for_completion_timeout() waits run their full 1 s of virtual time
+# instead of completing on the IRQ - inflating the boot ~9x (114 s vs 13 s).
+# Enable it only when debugging a race:  ICOUNT=1 tests/swap-boot/run.sh
 #
 # Override paths via env: QEMU, SM_ELF, KERNEL, DTB, INITRD.
 # Pass extra args (e.g. -monitor stdio) after the script name.
@@ -26,8 +32,13 @@ for f in "$QEMU:exec" "$SM_ELF" "$KERNEL" "$DTB" "$INITRD"; do
     [ -e "$path" ] || { echo "missing: $path" >&2; exit 1; }
 done
 
+ICOUNT_ARGS=()
+if [ -n "${ICOUNT:-}" ]; then
+    ICOUNT_ARGS=(-icount shift=auto)
+fi
+
 exec "$QEMU" -M imx95-19x19-evk -m 2G -display none \
-    -icount shift=auto \
+    "${ICOUNT_ARGS[@]}" \
     -global fsl-imx95.scmi-stub=false \
     -kernel "$KERNEL" -dtb "$DTB" -initrd "$INITRD" \
     -append "$CMDLINE" \
