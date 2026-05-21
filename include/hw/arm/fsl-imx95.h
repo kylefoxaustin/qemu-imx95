@@ -125,19 +125,15 @@ struct FslImx95State {
     MemoryRegion            erma;
     MemoryRegion            noc_sramctl;
     /*
-     * System counter region backed by RAM so writes stick. Linux's
-     * imx-sysctr driver (timer-imx-sysctr.c) writes CMPCR/CMPCV
-     * registers then polls readback until the values match. A pure
-     * unimplemented-device stub drops the write and reads return 0,
-     * so the readback loop never converges - kernel log fills with
-     * "sysctr_timer_read_write write failed, retry: N". RAM backing
-     * gives the loop the write-then-read-back semantics it needs.
-     * Note: counter-value reads (CNTCV at 0x8/0xc, 0x20008/0x2000c)
-     * return whatever was last written (typically 0) rather than a
-     * live counter. Linux uses arch_timer as the primary clocksource;
-     * the sysctr is a secondary event timer.
+     * System counter (timer@44290000): a real clockevent model with a live
+     * counter + compare-match IRQ (hw/timer/imx95_sysctr.c). It is Linux's
+     * tick BROADCAST device - the cpu-pd-wait idle state has local-timer-stop,
+     * so an idling core shuts down its per-CPU arch timer and depends on this
+     * counter's compare interrupt to wake. (The earlier RAM stub gave write-
+     * then-read-back but no live counter / no IRQ, so idle cores never woke
+     * and the boot needed cpuidle.off=1.)
      */
-    MemoryRegion            sysctr;
+    DeviceState            *sysctr;
     /*
      * BBNSM (Battery-Backed Non-Secure Module: RTC, tamper, 8 general-
      * purpose registers) backed by RAM so writes stick. The NXP SM
@@ -383,6 +379,8 @@ enum FslImx95Irqs {
     FSL_IMX95_USDHC1_IRQ    = 86,
     FSL_IMX95_USDHC2_IRQ    = 87,
     FSL_IMX95_USDHC3_IRQ    = 191,
+    /* system counter compare-match (dtsi: timer@44290000). */
+    FSL_IMX95_SYSCNT_IRQ    = 72,
     /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */
     FSL_IMX95_SM_MU_IRQ     = 226,
 };

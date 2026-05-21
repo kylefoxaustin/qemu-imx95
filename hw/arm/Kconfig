@@ -635,6 +635,7 @@ config FSL_IMX95
     select IMX95_SRC
     select IMX95_ANATOP
     select IMX95_DPU
+    select IMX95_SYSCTR
     select IMX_LPI2C
     select SDHCI
     select UNIMP
