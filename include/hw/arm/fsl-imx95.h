@@ -112,6 +112,8 @@ struct FslImx95State {
     MemoryRegion            sm_shmem;
     /* Alias of sm_shmem into the MU2 MUB window (v0.9 SCMI swap). */
     MemoryRegion            sm_shmem_b;
+    /* Fuse Shadow Block (FSB) backing RAM - SM reads fuse words at boot. */
+    MemoryRegion            fsb;
     /*
      * System counter region backed by RAM so writes stick. Linux's
      * imx-sysctr driver (timer-imx-sysctr.c) writes CMPCR/CMPCV
@@ -261,6 +263,9 @@ enum FslImx95MemoryRegions {
     /* EdgeLock Secure Enclave mailboxes (elemu0/elemu1 needed for SPL) */
     FSL_IMX95_ELE_MU,
     FSL_IMX95_ELE_MU1,
+
+    /* Fuse Shadow Block - read by the SM's DEV_SM_FuseInit at boot. */
+    FSL_IMX95_FSB,
 
     /*
      * Other MU instances U-Boot proper probes from DT (mailbox@*).
