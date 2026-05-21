@@ -149,6 +149,8 @@ static const struct {
     /* EdgeLock Secure Enclave mailboxes. dtsi: mailbox@47520000.. */
     [FSL_IMX95_ELE_MU]               = { 0x47520000, 64 * KiB,   "elemu0" },
     [FSL_IMX95_ELE_MU1]              = { 0x47530000, 64 * KiB,   "elemu1" },
+    /* Fuse Shadow Block (MIMX95_FSB.h FSB_BASE). */
+    [FSL_IMX95_FSB]                  = { 0x47510000, 64 * KiB,   "fsb" },
 
     /*
      * Other MU instances U-Boot proper probes from DT but we don't
@@ -568,6 +570,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].addr,
                                 &s->blk_ctrl_hsiomix);
+
+    /*
+     * Fuse Shadow Block as RAM. On real silicon the ROM/ELE populates it
+     * from OTP before the SM runs; here the SM's DEV_SM_FuseInit just reads
+     * fuse words (FSB->FUSE[]), so a readable region is enough to get past
+     * the read. Fuse values default to zero; populate specific words later
+     * if a DEV_SM_Init consumer needs a non-zero value.
+     */
+    memory_region_init_ram(&s->fsb, OBJECT(dev), "imx95-fsb",
+                           fsl_imx95_memmap[FSL_IMX95_FSB].size, &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_FSB].addr, &s->fsb);
 
     {
         SysBusDevice *mu_sbd = SYS_BUS_DEVICE(&s->sm_mu);
