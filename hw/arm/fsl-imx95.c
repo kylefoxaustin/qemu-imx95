@@ -313,6 +313,33 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
                                         linux_mus[i].addr, 64 * KiB);
         }
     }
+
+    /*
+     * Bulk stubs for the chip-wide register blocks the SM's config-op blob
+     * (DEV_SM_ExecOp) pokes during DEV_SM_Init: TRDC/RDC and the per-MIX
+     * block-control / clock-reset regions across the SoC. These are almost
+     * all blind writes (a few read-modify-writes whose read value is not
+     * acted on), so logging stubs that accept the accesses are enough to
+     * let DEV_SM_Init complete; none of these subsystems is modelled.
+     * create_unimplemented_device is a low-priority background, so the
+     * cpu-sema RAM at 0x44231000 still overrides inside 0x44230000.
+     * Addresses from the M33_ENUM enumeration of the config-op phase; the
+     * real SCMI MU (0x445c0000) is intentionally absent (it is sm_mu_b).
+     */
+    {
+        static const uint64_t sm_cfgop_regions[] = {
+            0x42460000, 0x42470000, 0x42810000, 0x44230000, 0x44280000,
+            0x44620000, 0x49000000, 0x49010000, 0x49020000, 0x49060000,
+            0x4ac40000, 0x4ac50000, 0x4aff0000, 0x4b040000, 0x4b050000,
+            0x4c040000, 0x4c050000, 0x4c440000, 0x4c450000, 0x4c840000,
+            0x4c850000, 0x4d810000, 0x4d840000, 0x4d850000,
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(sm_cfgop_regions); i++) {
+            g_autofree char *name =
+                g_strdup_printf("sm-cfgop@0x%08" PRIx64, sm_cfgop_regions[i]);
+            create_unimplemented_device(name, sm_cfgop_regions[i], 64 * KiB);
+        }
+    }
 }
 
 /*
