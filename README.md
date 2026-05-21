@@ -1,188 +1,145 @@
 # qemu-imx95
 
-A QEMU machine type for the NXP **i.MX 95 Application Processor**, targeting
-the **19x19 EVK** (LPDDR5) variant.
+A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
+(LPDDR5) variant.
 
-Goal: a non-cycle-accurate software-development emulator for the i.MX 95 so
-software developers don't have to wait for silicon. Long-term aim is to be
-upstream-mergeable into QEMU mainline. Structural and stylistic conventions
-follow the existing upstream i.MX 8MP code
-(`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`).
+qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
+Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
+cluster's SCMI traffic. Intended use cases are BSP development, System Manager
+firmware development, peripheral-driver development, and CI for the above. It
+is not cycle-accurate, and hardware accelerators (GPU, VPU, NPU) are stubbed at
+probe time only — this emulator does not perform GPU rendering, video codec, or
+NPU inference (see [Known limitations](#known-limitations)).
 
-## Status
+Structural and stylistic conventions follow the upstream i.MX 8MP code
+(`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`); the long-term aim is to be
+upstream-mergeable into QEMU mainline.
 
-Two things run on this emulator today:
+## What runs today
 
-- **Stock NXP Linux 6.12.49 boots to userspace** on the A55 cluster. All 6
-  Cortex-A55 cores come up via PSCI (kept active by `cpuidle.off=1`; see
-  below), GICv3 initialises, the SCMI mailbox transport runs against the
-  in-tree C-side SCMI server stub, all in-tree drivers reach their
-  `.probe()` entry (some defer pending providers — see Known limitation),
-  and PID 1 runs in userspace.
-- **The real NXP System Manager firmware serves the A55's SCMI (v0.9).**
-  With the C-stub SCMI server disabled (`-global fsl-imx95.scmi-stub=off`)
-  and the SM (`m33_image.elf`) loaded on the M33, the real firmware boots
-  through its full init, runs its logical-machine bring-up, and answers
-  Linux's SCMI over a cross-connected MU2. Linux binds the real SM:
+Stock **NXP Linux 6.12.49** boots to userspace (PID 1) on the 6-core A55
+cluster, on top of the real NXP **System Manager** firmware running on the
+emulated Cortex-M33. The SM boots through its full init, runs its
+logical-machine bring-up, and answers Linux's SCMI over a cross-connected MU2:
 
-  ```
-  arm-scmi: SCMI Protocol v2.1 'NXP:IMX' Firmware version 0x333
-  scmi-perf-domain: Initialized 13 performance domains
-  arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
-  ```
+```
+arm-scmi: SCMI Protocol v2.1 'NXP:IMX' Firmware version 0x333
+scmi-perf-domain: Initialized 13 performance domains
+arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
+...
+Run /init as init process
+```
 
-  The SM itself also still boots standalone to its debug monitor
-  (`tests/sm-banner/run.sh`). Replacing the C-side SCMI stub with the real
-  firmware was the goal of v0.9.
+The SM also boots standalone to its debug-monitor prompt
+(`tests/sm-banner/run.sh`). Earlier bring-up milestones — U-Boot SPL banner,
+SPL → U-Boot proper handoff over an emulated SD boot chain, and the U-Boot
+interactive prompt — still work.
 
-Earlier milestones — U-Boot SPL banner, SPL → U-Boot proper handoff over an
-emulated SD boot chain, the U-Boot interactive prompt, and Linux to
-userspace on the C-stub — all still work.
+## Required artifacts
 
-Current development is **v0.10**: booting Linux to userspace *on the real
-SM* (and without `cpuidle.off=1`). The real SM powers the peripheral domains
-the C-stub never did, so Linux's in-tree drivers now probe them; that
-peripheral-coverage breadth is the v0.10 work. See the roadmap and
-`TODO.md`.
+> **The System Manager firmware image is required.** The real SM on the M33 is
+> the only SCMI provider — there is no built-in software SCMI server. Booting
+> without `-device loader,file=<m33_image.elf>,cpu-num=6` leaves the M33 halted
+> and **nothing answers SCMI**, so Linux hangs at `arm-scmi` probe. This is not
+> a bug; it matches real silicon, where the SM is always present.
 
-## Booting Linux
+To boot Linux to userspace you need four artifacts, all built from the NXP BSP:
 
-Build a kernel `Image` + the `imx95-19x19-evk.dtb` from the NXP BSP
-(`references/linux-imx`, imx defconfig), then:
+| Artifact | Where from |
+| --- | --- |
+| Kernel `Image`              | `references/linux-imx`, imx defconfig |
+| `imx95-19x19-evk.dtb`       | same kernel build |
+| initramfs (`*.cpio.gz`)     | any aarch64 rootfs with `/init` |
+| SM firmware `m33_image.elf` | `references/imx-sm`, `make config=mx95evk` |
+
+## Quick start
+
+Build (see [Building](#building)), then boot Linux to userspace on the real SM.
+
+**Easiest path:** `tests/swap-boot/run.sh`, with the artifact paths set via the
+`QEMU`/`SM_ELF`/`KERNEL`/`DTB`/`INITRD` env vars. The script encapsulates the
+canonical invocation.
+
+**Equivalent explicit command** (for adapting to other harnesses):
 
 ```
 ./build/qemu-system-aarch64 -M imx95-19x19-evk -m 2G -display none \
-    -serial mon:stdio \
-    -kernel <Image> \
-    -dtb <imx95-19x19-evk.dtb> \
-    -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1"
+    -kernel <Image> -dtb <imx95-19x19-evk.dtb> -initrd <initramfs.cpio.gz> \
+    -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+    -device loader,file=<m33_image.elf>,cpu-num=6 \
+    -serial mon:stdio -serial null
 ```
 
-To boot all the way to userspace, add an initramfs and `rdinit`:
+Two cmdline details are load-bearing:
 
-```
-    -initrd <initramfs.cpio.gz> \
-    -append "... cpuidle.off=1 rdinit=/init"
-```
+- **earlycon address `0x44380010`, not `0x44380000`.** The i.MX 95 LPUART has
+  VERID/PARAM/GLOBAL/PINCFG at 0x00–0x0C and BAUD at 0x10. Linux's regular
+  driver applies the `reg_off = 0x10` offset to the DT base automatically;
+  earlycon does not, so the cmdline address must be pre-offset.
+- **`cpuidle.off=1` is required** — see [Known limitations](#known-limitations).
 
-Two **required quirks** (both documented with root cause in `TODO.md`):
+## Known limitations
 
-- **earlycon address `0x44380010`, not `0x44380000`.** The i.MX95 LPUART has
-  VERID/PARAM/GLOBAL/PINCFG at offsets 0x00–0x0C and BAUD at 0x10. Linux's
-  regular driver applies the `reg_off = 0x10` offset to the DT base
-  automatically; earlycon does not, so the cmdline address must be
-  pre-offset.
-- **`cpuidle.off=1` is required.** Without it Linux hangs right after
-  `SCMI Notifications - Core Enabled`. On entering its deepest idle state a
-  CPU disables its GIC CPU interface (`ICC_IGRPEN1_EL1 = 0`) and quiesces its
-  redistributor; the SCMI completion IRQ (mu2, SPI 226) is routed to that
-  CPU, and the emulator has no power-controller wake-request to bring it
-  back, so the response interrupt is never delivered. Disabling cpuidle keeps
-  the CPU interfaces up. The proper fix (model i.MX95 CPU power management /
-  the M33 SM firmware) is future roadmap.
+**Deep cpuidle requires `cpuidle.off=1`.** Without it, Linux hangs shortly
+after `SCMI Notifications - Core Enabled`. The mechanism is fully
+characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
 
-Known limitation: there is no interactive shell yet — the full `fsl_lpuart`
-serial driver defers probe (no `ttyLP0` tty), along with a cascade of
-gpio/i2c/mmc/spi/pcie drivers. Userspace runs; an interactive console is the
-next bring-up target.
+1. Linux's `cpu-pd-wait` idle state has `local-timer-stop`, so an idling core
+   shuts down its per-CPU arch timer and relies on a broadcast clockevent.
+   **The machine model provides this** — `hw/timer/imx95_sysctr.c` is a real
+   system-counter timer (live counter + compare-match IRQ on GIC SPI 72).
+2. On entering that state, Linux's GIC `cpu_pm` notifier disables the per-CPU
+   GIC interface (matching real silicon, where a deeper power state is entered).
+3. **QEMU's GICv3 model does not implement the architectural WakeRequest** — it
+   never wakes a halted CPU on a pending interrupt once the CPU interface is
+   quiesced. So a cross-CPU wake (e.g. a `stop_machine` IPI) can't reach the
+   idle core, and the boot hangs. This affects all GICv3 QEMU machines.
+4. With `cpuidle.off=1`, Linux uses shallow WFI on the still-running per-CPU
+   arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
+   follow-up to qemu-devel.
 
-## What each milestone added
+**Hardware accelerators (GPU/VPU/NPU) are probe-time stubs only** — their Linux
+drivers register but no rendering/codec/inference occurs.
 
-- **v0.0.1** — scaffold: 6× A55 + GIC-600 (GICv3) + DDR/OCRAM, all
-  peripherals as unimplemented stubs.
-- **v0.0.2** — real memory map from the DTS, `imx.lpuart` device model,
-  LPUART1 console, bare-metal hello binary.
-- **v0.1** — U-Boot SPL prints its banner over LPUART1. Added the NXP MU (V2)
-  model, the SCMI server stub (base / clock / pinctrl), the ELE responder
-  stub (GET_INFO), a ULP watchdog stub, and ~18 direct-MMIO logging stubs.
-- **v0.2** — SPL → U-Boot proper handoff over a full emulated SD boot chain.
-  Added `TYPE_IMX_USDHC` (uSDHC1/2/3), the SCMI imx-misc vendor protocol
-  (0x84, ROM passover), an on-demand clock model with a per-clock rate table,
-  the i.MX uSDHC SDMA-boundary fix in `hw/sd/sdhci`, and AHAB-container SD
-  boot so SPL loads and jumps to U-Boot proper, which prints its banner.
-- **v0.3** — U-Boot interactive prompt reachable. Added LPI2C stubs,
-  `psci-conduit=smc`, the SCMI POWER_DOMAIN protocol (0x11), USB PHY/DWC3
-  stubs, and the LPUART WATER RX-count fix that lets `tstc()` see keystrokes.
-- **v0.4** — Linux 6.12.49 boots via `-kernel` direct load: all 6 A55s up via
-  PSCI (per-CPU MPIDR Aff1 fix), GICv3 up, SCMI mailbox transport active.
-  Added the Linux-DTS MU stub set and the LPUART TX-not-gated-on-TE fix.
-- **v0.5** — Linux to userspace. sysctr region RAM-backed so the NXP sysctr
-  driver's write-readback loop converges; SCMI interrupt-mode bring-up
-  unblocked via `cpuidle.off=1` (root cause diagnosed); reaches PID 1 in
-  userspace with an initramfs.
-- **v0.6** — Cortex-M33 System Manager core added (`TYPE_ARMV7M` cortex-m33,
-  ITCM/DTCM). Loads and executes the real NXP SM firmware (`m33_image.elf`);
-  released from reset only when SM firmware is present, so A55-only Linux
-  boots are unaffected.
-- **v0.7** — SM runs through early init. Modelled the peripherals it touches:
-  BBNSM (RTC/GPRs), WDOG2, the M33 XCACHE controllers (CCR command-bit
-  self-clear), HSIOMIX, and a real LPI2C master + PF09 PMIC / PCAL6408A
-  IO-expander (with the PF09 J1850 CRC). The SM now completes PMIC/IO-expander
-  init and reaches the GPC/CCM power-and-clock complex.
-- **v0.8** — SM boots to its debug monitor. Modelled the GPC (`imx95.gpc`):
-  per-domain CPU_CTRL + GLOBAL, each status register mirroring its paired
-  control so the SM's power-mode polls converge. The SM comes through
-  power-mode setup, prints its banner, and reaches its interactive monitor
-  prompt on its console (LPUART2, `serial_hd(1)`).
-- **v0.9 — the real SM serves Linux's SCMI.** Built a bidirectional
-  dual-aperture MU2 (A55-side MUA ↔ M33-side MUB, peer-linked, with the SMT
-  SRAM shared and the IRQ routed to both the GIC and the M33 NVIC) and a
-  `scmi-stub` toggle to disable the C-stub. Then drove the real SM through
-  its entire init so `LMM_Init` enables the AP mailbox: modelled the PF53
-  regulators, FSB, SRC mix-power, eMcem/VFCCU/ERMA/NOC, the SM's ELE channel,
-  and the ANATOP/ARM-PLL (instant lock + DFS-ok, RW/SET/CLR/TOG quad
-  aliasing) for A55 DVFS, plus the SoC config-op blocks. Linux now negotiates
-  SCMI with the real firmware (NXP vendor protocols, 13 perf domains, 9
-  CPUs). Booting Linux to *userspace* on the real SM is v0.10.
+Full diagnoses, including the icount × multi-CPU finding, are in
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
-All memory-map addresses and IRQ numbers come from the NXP BSP, never
-guessed:
+## Architecture overview
 
-- Linux DTS `references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi`
-  for peripherals the kernel sees directly.
-- U-Boot `references/uboot-imx/arch/arm/include/asm/arch-imx9/imx-regs.h`
-  for SCMI-routed peripherals SPL pokes before SCMI is up.
+- **6× Cortex-A55** (GICv3 / GIC-600), the application cores running Linux.
+- **1× Cortex-M33** running the real NXP System Manager firmware. Released from
+  reset only when SM firmware is present in its ITCM.
+- **MU2 cross-connect — the SCMI transport.** The A55-side mailbox
+  (MUA @0x445b0000) and the M33-side mailbox (MUB @0x445c0000) are peer-linked
+  over a shared SMT SRAM. Linux's SCMI doorbells on MUA reach the SM via MUB;
+  the SM's responses on MUB raise the A55's MU IRQ via MUA.
+- Real device models for the pieces the boot exercises: LPUART, uSDHC, MU, GIC,
+  the system-counter timer, ANATOP PLLs, SRC, GPC, ELE responder, LPI2C +
+  PMICs, and a DPU command-sequencer stub. Everything else is a logging stub.
 
-The i.MX 95 RM is authoritative for register behaviour; the DTS is
-authoritative for addresses and IRQ numbers.
+All memory-map addresses and IRQ numbers come from the NXP BSP, never guessed:
+the Linux DTS
+(`references/linux-imx/.../imx95.dtsi`) for peripherals the kernel sees, and
+the U-Boot RM-derived header for the SCMI-routed peripherals SPL pokes before
+SCMI is up. The RM is authoritative for register behaviour; the DTS for
+addresses and IRQ numbers.
 
-## Layout
+## Repository tour
 
-This repo is a QEMU mainline fork with the i.MX 95 scaffolding committed in.
-The interesting files:
-
-| File | Purpose |
+| Path | Purpose |
 | --- | --- |
-| `include/hw/arm/fsl-imx95.h`          | SoC aggregate state, memory map enum, IRQ IDs |
-| `hw/arm/fsl-imx95.c`                  | SoC realization: CPU, GIC, all device wiring, logging stubs |
-| `hw/arm/imx95-evk.c`                  | 19x19 EVK board file |
-| `include/hw/char/imx_lpuart.h`        | LPUART register layout + state |
-| `hw/char/imx_lpuart.c`                | LPUART device model |
-| `include/hw/misc/imx_mu.h`            | NXP MU (V2) register layout + state |
-| `hw/misc/imx_mu.c`                    | MU device model with doorbell + TR-write hooks |
-| `include/hw/misc/imx95_scmi_server.h` | SCMI protocol IDs + server state |
-| `hw/misc/imx95_scmi_server.c`         | SCMI server stub (base / clock / pinctrl / power-domain / imx-misc) |
-| `include/hw/misc/imx95_ele_server.h`  | ELE protocol constants + server state |
-| `hw/misc/imx95_ele_server.c`          | ELE responder stub (GET_INFO) |
-| `hw/misc/imx95_wdog.c`                | ULP watchdog stub |
-| `tests/hello-imx95/`                  | v0.0.2 bare-metal smoke test |
-| `tests/spl-banner/`                   | U-Boot SPL banner test + SD-boot docs |
-
-## Host packages
-
-Verified on Ubuntu 22.04. Each line covers a specific dev flow:
-
-    # QEMU build (this repo)
-    sudo apt install -y meson ninja-build
-
-    # Bare-metal hello-imx95 test + static initramfs init (assembler + cross gcc)
-    sudo apt install -y binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu
-
-    # U-Boot SPL build for the spl-banner test
-    sudo apt install -y bison flex libssl-dev libgnutls28-dev efitools
-
-Standard build chain (make, gcc, libc-dev, pkg-config, python3,
-libglib2.0-dev, libpixman-1-dev) is assumed already present.
+| `hw/arm/fsl-imx95.c`, `include/hw/arm/fsl-imx95.h` | SoC realization: CPUs, GIC, M33, device wiring, memory map, logging stubs |
+| `hw/arm/imx95-evk.c`        | 19x19 EVK board file |
+| `hw/char/imx_lpuart.c`      | LPUART model (console) |
+| `hw/misc/imx_mu.c`          | NXP MU (V2) model — doorbell + peer cross-connect |
+| `hw/i2c/imx_lpi2c.c`        | LPI2C master (interrupt-driven) |
+| `hw/timer/imx95_sysctr.c`   | system-counter clockevent timer |
+| `hw/misc/imx95_{src,anatop,gpc,pmic,dpu,ele_server,wdog}.c` | SM/Linux bring-up device models |
+| `tests/swap-boot/run.sh`    | full Linux-on-real-SM boot |
+| `tests/sm-banner/run.sh`    | SM standalone to its debug monitor |
+| `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
+| `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
+| `docs/imx95/known-limitations.md` | full limitation diagnoses |
 
 ## Building
 
@@ -190,47 +147,62 @@ libglib2.0-dev, libpixman-1-dev) is assumed already present.
     ../configure --target-list=aarch64-softmmu
     ninja qemu-system-aarch64
 
+Host packages (verified on Ubuntu 22.04): `meson ninja-build` for the QEMU
+build; `binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu` for the bare-metal
+test + a static initramfs init; `bison flex libssl-dev libgnutls28-dev
+efitools` for the U-Boot SPL test. The standard build chain (gcc, libc-dev,
+pkg-config, python3, libglib2.0-dev, libpixman-1-dev) is assumed present.
+
 ## Smoke tests
 
-Machine type registers:
-
+    # machine registers
     ./build/qemu-system-aarch64 -M help | grep imx95
 
-Bare-metal hello (v0.0.2):
-
+    # bare-metal hello (no SM firmware needed - useful to verify the build
+    # itself before assembling the boot artifacts)
     cd tests/hello-imx95 && make && cd ../..
     ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
-        -kernel tests/hello-imx95/hello.bin
-    # Expected: "Hello from i.MX 95!"
+        -kernel tests/hello-imx95/hello.bin      # -> "Hello from i.MX 95!"
 
-U-Boot SPL banner (v0.1) — see `tests/spl-banner/README.md` for build steps.
+    # SM standalone to its monitor
+    SM_ELF=<m33_image.elf> tests/sm-banner/run.sh
 
-Linux boot — see "Booting Linux" above.
+    # full Linux to userspace on the real SM
+    tests/swap-boot/run.sh
 
-## Roadmap
+## Methodology & contributing
 
-- **v0.0.1** — scaffold ✅
-- **v0.0.2** — real memmap, LPUART model, bare-metal hello ✅
-- **v0.1** — U-Boot SPL banner ✅
-- **v0.2** — SPL → U-Boot proper handoff, uSDHC, SD boot chain ✅
-- **v0.3** — U-Boot interactive prompt ✅
-- **v0.4** — Linux boots via `-kernel`: 6 CPUs, GICv3, SCMI mailbox ✅
-- **v0.5** — Linux to userspace: SCMI interrupt bring-up unblocked, reaches
-  PID 1 in userspace ✅
-- **v0.6** — Cortex-M33 SM core; loads + executes real NXP SM firmware ✅
-- **v0.7** — SM runs through early init + PMIC/IO-expander (BBNSM, WDOG2,
-  XCACHE, HSIOMIX, LPI2C + PF09/PCAL6408A) ✅
-- **v0.8** — SM boots to its debug monitor: GPC modelled, SM prints its
-  banner and reaches its `>$` prompt ✅
-- **v0.9** — the real SM serves Linux's SCMI: dual-aperture MU2
-  cross-connect + the SM driven through full init (PF53, FSB, SRC, eMcem,
-  ELE, ANATOP/ARM-PLL, config-ops) so `LMM_Init` enables the AP mailbox.
-  Linux negotiates SCMI with the real firmware ✅
-- **v0.10** — Linux to userspace *on the real SM*, without `cpuidle.off=1`.
-  The real SM powers the peripheral domains the C-stub didn't, so Linux's
-  in-tree drivers now probe them: stub/model enough (DMA, display, GPU, VPU,
-  PCIe, USB, NETC, A55-side ELE, …) that probes complete or fail soft, then
-  drop the cpuidle quirk (retiring the v0.5 hang).
-- **v1.0+** — upstream-readiness: retire remaining C-side ELE stubs; trim
-  fabricated regions; accelerator models where needed; commit/series hygiene
-  for submission.
+The project is built measure-first: propose a hypothesis, verify it against
+data, and re-plan when measurement disagrees. The debugging techniques that
+recur (the "five pillars"), the register-class triage pattern, and the
+working mode itself are written up in
+[`docs/imx95/methodology.md`](docs/imx95/methodology.md). Per-milestone design and review
+notes live in `docs/reviews/` (local working artifacts).
+
+## Milestone history
+
+- **v0.0.1–v0.0.2** — scaffold; real memory map from the DTS; `imx.lpuart`
+  model + LPUART1 console; bare-metal hello.
+- **v0.1** — U-Boot SPL banner. NXP MU model, SCMI server stub, ELE responder,
+  watchdog stub.
+- **v0.2** — SPL → U-Boot proper over an emulated SD boot chain. `TYPE_IMX_USDHC`,
+  the uSDHC SDMA-boundary fix, AHAB-container SD boot.
+- **v0.3** — U-Boot interactive prompt. LPI2C, `psci-conduit=smc`, USB stubs,
+  the LPUART WATER RX-count fix.
+- **v0.4** — Linux 6.12.49 boots via `-kernel`: 6 A55s up via PSCI, GICv3, SCMI
+  mailbox transport.
+- **v0.5** — Linux to userspace (on the C-stub SCMI server); the cpuidle hang
+  root-caused and worked around with `cpuidle.off=1`.
+- **v0.6** — Cortex-M33 SM core; loads + executes the real NXP SM firmware.
+- **v0.7** — SM through early init + PMIC/IO-expander (BBNSM, WDOG2, XCACHE,
+  HSIOMIX, LPI2C + PF09/PCAL6408A).
+- **v0.8** — SM to its debug monitor (GPC modelled).
+- **v0.9** — the real SM serves Linux's SCMI: dual-aperture MU2 cross-connect +
+  the SM driven through full init (PF53, FSB, SRC, eMcem, ELE, ANATOP/ARM-PLL,
+  config-ops) so `LMM_Init` enables the AP mailbox.
+- **v0.10** — Linux boots to userspace **on the real SM**: walked the
+  deferred-probe cascade (eDMA, the DPU command-sequencer, clock-provider
+  syscons, netc, usb3) to `/init`.
+- **v1.0** — polish: boot time cut ~9× (icount off the default boot path), the
+  system counter modelled as a real clockevent timer, the vestigial C-stub SCMI
+  server removed (real SM is now the only provider), and documentation.
