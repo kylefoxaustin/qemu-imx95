@@ -114,6 +114,12 @@ struct FslImx95State {
     MemoryRegion            sm_shmem_b;
     /* Fuse Shadow Block (FSB) backing RAM - SM reads fuse words at boot. */
     MemoryRegion            fsb;
+    /* VFCCU backing RAM - SM eMcem init writes fault config/flags. */
+    MemoryRegion            vfccu;
+    /* More eMcem/fabric init targets backed by RAM (write-acceptors). */
+    MemoryRegion            vfccu_aon;
+    MemoryRegion            erma;
+    MemoryRegion            noc_sramctl;
     /*
      * System counter region backed by RAM so writes stick. Linux's
      * imx-sysctr driver (timer-imx-sysctr.c) writes CMPCR/CMPCV
@@ -268,6 +274,13 @@ enum FslImx95MemoryRegions {
 
     /* Fuse Shadow Block - read by the SM's DEV_SM_FuseInit at boot. */
     FSL_IMX95_FSB,
+
+    /* VFCCU (Fault Collection & Control Unit) - SM eMcem init touches it. */
+    FSL_IMX95_VFCCU,
+    /* More SM eMcem/fabric init targets: AON_VFCCU, AON_ERMA, NOC_SRAMCTL. */
+    FSL_IMX95_VFCCU_AON,
+    FSL_IMX95_ERMA,
+    FSL_IMX95_NOC_SRAMCTL,
 
     /*
      * Other MU instances U-Boot proper probes from DT (mailbox@*).
