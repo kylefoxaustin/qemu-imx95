@@ -9,6 +9,9 @@ config ARM_MPTIMER
 config A9_GTIMER
     bool
 
+config IMX95_SYSCTR
+    bool
+
 config HPET
     bool
     default y if PC

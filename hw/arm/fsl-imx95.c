@@ -662,16 +662,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                 &s->sm_shmem);
 
     /*
-     * System counter region as RAM (see comment on s->sysctr in
-     * fsl-imx95.h). Removed from the unimplemented-region list so
-     * the RAM mapping isn't shadowed by the zero-returning stub.
+     * System counter (see comment on s->sysctr in fsl-imx95.h): a real
+     * clockevent timer, since it is Linux's tick broadcast device for the
+     * local-timer-stop idle state. Not in the unimplemented-region list.
      */
-    memory_region_init_ram(&s->sysctr, OBJECT(dev), "imx95-sysctr",
-                           fsl_imx95_memmap[FSL_IMX95_SYSCNT].size,
-                           &error_fatal);
-    memory_region_add_subregion(get_system_memory(),
-                                fsl_imx95_memmap[FSL_IMX95_SYSCNT].addr,
-                                &s->sysctr);
+    s->sysctr = qdev_new("imx95.sysctr");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->sysctr), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->sysctr), 0,
+                    fsl_imx95_memmap[FSL_IMX95_SYSCNT].addr);
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->sysctr), 0,
+                       qdev_get_gpio_in(gicdev, FSL_IMX95_SYSCNT_IRQ));
 
     /*
      * BBNSM region as RAM (see comment on s->bbnsm in fsl-imx95.h). The
