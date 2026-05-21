@@ -19,28 +19,31 @@ Two things run on this emulator today:
   in-tree C-side SCMI server stub, all in-tree drivers reach their
   `.probe()` entry (some defer pending providers — see Known limitation),
   and PID 1 runs in userspace.
-- **The real NXP System Manager firmware boots to its monitor on the
-  emulated Cortex-M33.** The SM (`m33_image.elf`) boots from its ITCM, runs
-  through early init (BBNSM, its watchdog, XCACHE, HSIOMIX), configures the
-  board PMIC (PF09) and IO-expander (PCAL6408A) over a modelled LPI2C bus,
-  comes through the GPC power-mode setup, prints its banner, and drops to
-  its interactive debug monitor on the SM console (LPUART2):
+- **The real NXP System Manager firmware serves the A55's SCMI (v0.9).**
+  With the C-stub SCMI server disabled (`-global fsl-imx95.scmi-stub=off`)
+  and the SM (`m33_image.elf`) loaded on the M33, the real firmware boots
+  through its full init, runs its logical-machine bring-up, and answers
+  Linux's SCMI over a cross-connected MU2. Linux binds the real SM:
 
   ```
-  Hello from SM (Build NNN, Commit ........, ...)
-  *** SM Debug Monitor ***
-  >$
+  arm-scmi: SCMI Protocol v2.1 'NXP:IMX' Firmware version 0x333
+  scmi-perf-domain: Initialized 13 performance domains
+  arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
   ```
 
-  Run it with `tests/sm-banner/run.sh`. This is the path to replacing the
-  C-side SCMI stub with the real SM firmware.
+  The SM itself also still boots standalone to its debug monitor
+  (`tests/sm-banner/run.sh`). Replacing the C-side SCMI stub with the real
+  firmware was the goal of v0.9.
 
 Earlier milestones — U-Boot SPL banner, SPL → U-Boot proper handoff over an
-emulated SD boot chain, and the U-Boot interactive prompt — all still work.
+emulated SD boot chain, the U-Boot interactive prompt, and Linux to
+userspace on the C-stub — all still work.
 
-Current development is **v0.9** (an interactive SM monitor — LPUART RX — and
-hardening toward booting Linux without `cpuidle.off=1`). See the roadmap and
-`TODO.md` for what's done and what's open.
+Current development is **v0.10**: booting Linux to userspace *on the real
+SM* (and without `cpuidle.off=1`). The real SM powers the peripheral domains
+the C-stub never did, so Linux's in-tree drivers now probe them; that
+peripheral-coverage breadth is the v0.10 work. See the roadmap and
+`TODO.md`.
 
 ## Booting Linux
 
@@ -121,6 +124,16 @@ next bring-up target.
   control so the SM's power-mode polls converge. The SM comes through
   power-mode setup, prints its banner, and reaches its interactive monitor
   prompt on its console (LPUART2, `serial_hd(1)`).
+- **v0.9 — the real SM serves Linux's SCMI.** Built a bidirectional
+  dual-aperture MU2 (A55-side MUA ↔ M33-side MUB, peer-linked, with the SMT
+  SRAM shared and the IRQ routed to both the GIC and the M33 NVIC) and a
+  `scmi-stub` toggle to disable the C-stub. Then drove the real SM through
+  its entire init so `LMM_Init` enables the AP mailbox: modelled the PF53
+  regulators, FSB, SRC mix-power, eMcem/VFCCU/ERMA/NOC, the SM's ELE channel,
+  and the ANATOP/ARM-PLL (instant lock + DFS-ok, RW/SET/CLR/TOG quad
+  aliasing) for A55 DVFS, plus the SoC config-op blocks. Linux now negotiates
+  SCMI with the real firmware (NXP vendor protocols, 13 perf domains, 9
+  CPUs). Booting Linux to *userspace* on the real SM is v0.10.
 
 All memory-map addresses and IRQ numbers come from the NXP BSP, never
 guessed:
@@ -209,10 +222,15 @@ Linux boot — see "Booting Linux" above.
   XCACHE, HSIOMIX, LPI2C + PF09/PCAL6408A) ✅
 - **v0.8** — SM boots to its debug monitor: GPC modelled, SM prints its
   banner and reaches its `>$` prompt ✅
-- **v0.9** — interactive SM monitor (LPUART RX so the `>$` prompt can be
-  driven) and hardening toward booting Linux without `cpuidle.off=1`
-  (in progress).
-- **v1.0+** — the SM as the real SCMI provider for the A55 (retiring the
-  C-side SCMI/ELE stubs); interactive Linux shell (LPUART tty probe-defer
-  cascade); eventually U-Boot → kernel-from-MMC; accelerator stubs
-  (NPU/GPU/VPU/ISP).
+- **v0.9** — the real SM serves Linux's SCMI: dual-aperture MU2
+  cross-connect + the SM driven through full init (PF53, FSB, SRC, eMcem,
+  ELE, ANATOP/ARM-PLL, config-ops) so `LMM_Init` enables the AP mailbox.
+  Linux negotiates SCMI with the real firmware ✅
+- **v0.10** — Linux to userspace *on the real SM*, without `cpuidle.off=1`.
+  The real SM powers the peripheral domains the C-stub didn't, so Linux's
+  in-tree drivers now probe them: stub/model enough (DMA, display, GPU, VPU,
+  PCIe, USB, NETC, A55-side ELE, …) that probes complete or fail soft, then
+  drop the cpuidle quirk (retiring the v0.5 hang).
+- **v1.0+** — upstream-readiness: retire remaining C-side ELE stubs; trim
+  fabricated regions; accelerator models where needed; commit/series hygiene
+  for submission.
