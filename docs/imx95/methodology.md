@@ -36,6 +36,13 @@ claim the absolute root.** A fix at layer N can reveal layer N+1 (the cpuidle
 work: broadcast-timer layer, then GIC-WakeRequest layer — both real, both
 necessary). State "at layer N the cause is X; a deeper layer may exist."
 
+The discipline applies beyond code. Tag names, build configurations,
+documentation conventions, and other operational decisions in a fork-based
+project all carry implicit hypotheses inherited from the parent — verify before
+acting. (Bare-name tagging worked through v0.10 by luck; the v1.0 milestone
+surfaced a collision with QEMU's own `v1.0` release tag, hence the project's
+`imx95-vX.Y` tag namespace.)
+
 ---
 
 ## The five debugging pillars
