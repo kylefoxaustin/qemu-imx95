@@ -356,9 +356,14 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
             uint64_t addr;
             uint64_t size;
         } linux_periph_regions[] = {
-            /* eDMA controllers span many 4 KiB channel pages -> 1 MiB. */
-            { 0x42000000, 0x100000 }, { 0x42210000, 0x100000 },
-            { 0x44000000, 0x100000 },
+            /*
+             * eDMA controllers: the driver maps the full DT reg window and
+             * touches the per-channel pages (0x40 channels x 0x8000 stride =
+             * 0x200000), so a 1 MiB stub faults on the high channels. Use the
+             * DT-declared sizes: edma5 = 0x210000, edma3 = 0x200000.
+             */
+            { 0x42000000, 0x210000 }, { 0x42210000, 0x210000 },
+            { 0x44000000, 0x200000 },
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
             { 0x42490000, 64 * KiB }, /* watchdog */
             { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
@@ -373,15 +378,27 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
             { 0x43840000, 64 * KiB }, { 0x43850000, 64 * KiB }, /* gpio */
             { 0x44350000, 64 * KiB }, /* i2c */
             { 0x44530000, 64 * KiB }, /* adc */
-            { 0x4b010000, 64 * KiB }, /* syscon */
-            { 0x4b400000, 0x100000 }, /* display-controller */
-            { 0x4c200000, 0x100000 }, /* usb */
+            { 0x4ac10000, 64 * KiB }, /* camera csr (clock provider) */
+            { 0x4ad00000, 64 * KiB }, /* display stream csr (clock provider) */
+            { 0x4ad10000, 64 * KiB }, /* display master csr (mmio-mux) */
+            { 0x4b010000, 64 * KiB }, /* syscon (dispmix csr) */
+            { 0x4b0b0000, 64 * KiB }, /* displaymix irqsteer */
+            { 0x4b0c0000, 64 * KiB }, /* lvds csr / ldb */
+            { 0x4b0d0000, 0x20000 },  /* pixel interleaver bridge */
+            /* 0x4b400000 display-controller (dpu) -> imx95.dpu status stub */
+            { 0x4c010000, 64 * KiB }, /* hsio blk-ctl (clock provider) */
+            { 0x4c100000, 64 * KiB }, /* usb3 dwc3 core */
+            { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
+            { 0x4c200000, 0x100000 }, /* usb2 (chipidea) */
             { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie */
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
             { 0x4c810000, 64 * KiB }, /* syscon */
-            { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl */
+            { 0x4ca00000, 0x100000 }, /* netc pcie ecam 0 */
+            { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 */
+            { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl ierb */
+            { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
             { 0x4d900000, 0x100000 }, /* gpu */
             { 0x4ab00000, 0x100000 }, /* neutron npu */
         };
