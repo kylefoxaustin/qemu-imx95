@@ -153,6 +153,10 @@ static const struct {
     [FSL_IMX95_FSB]                  = { 0x47510000, 64 * KiB,   "fsb" },
     /* VFCCU / FCCU fault-control unit (AON_VFCCU). */
     [FSL_IMX95_VFCCU]                = { 0x446b0000, 64 * KiB,   "vfccu" },
+    /* A1 MU SRAM page; SM keeps the A55 CPU wait-semaphore here (+0x3f8). */
+    [FSL_IMX95_CPU_SEMA]             = { 0x44231000, 4 * KiB,    "cpu-sema" },
+    /* CortexA TMPSNS (CORTEXA__TMPSNS_BASE). */
+    [FSL_IMX95_TMPSNS_CA]            = { 0x4a440000, 64 * KiB,   "tmpsns-ca" },
     /* AON_VFCCU (FCCU_BASE), AON_ERMA, NOC_SRAMCTL - SM eMcem/fabric init. */
     [FSL_IMX95_VFCCU_AON]            = { 0x44570000, 64 * KiB,   "vfccu-aon" },
     [FSL_IMX95_ERMA]                 = { 0x44560000, 64 * KiB,   "erma" },
@@ -599,6 +603,32 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_VFCCU].addr,
                                 &s->vfccu);
+
+    /*
+     * A55 CPU wait-semaphore SRAM. DEV_SM_CpuInit resets a Peterson-style
+     * semaphore (flag0/flag1/turn) the SM keeps at 0x442313f8 (in the A1 MU
+     * SRAM page); back it with RAM so the writes land.
+     */
+    memory_region_init_ram(&s->cpu_sema, OBJECT(dev), "imx95-cpu-sema",
+                           fsl_imx95_memmap[FSL_IMX95_CPU_SEMA].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_CPU_SEMA].addr,
+                                &s->cpu_sema);
+
+    /*
+     * CortexA TMPSNS as RAM. The SM's periodic sensor tick reads CTRL0
+     * (TMPSNS_GetFilterBusy) and the data/threshold registers; with the
+     * region zeroed the filter reads "idle" and the tick is a no-op. No
+     * real thermal model (canned/quiet); enough to keep the post-init
+     * sensor task from faulting on an unmapped read.
+     */
+    memory_region_init_ram(&s->tmpsns_ca, OBJECT(dev), "imx95-tmpsns-ca",
+                           fsl_imx95_memmap[FSL_IMX95_TMPSNS_CA].size,
+                           &error_fatal);
+    memory_region_add_subregion(get_system_memory(),
+                                fsl_imx95_memmap[FSL_IMX95_TMPSNS_CA].addr,
+                                &s->tmpsns_ca);
 
     /*
      * More register-file write targets the SM's eMcem/fabric init touches:
