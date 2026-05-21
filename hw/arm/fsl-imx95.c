@@ -242,7 +242,7 @@ static void fsl_imx95_stub_mu_tr_write(void *opaque, unsigned int idx,
 static void fsl_imx95_install_unimplemented(FslImx95State *s)
 {
     static const int unimplemented_regions[] = {
-        FSL_IMX95_CCM, FSL_IMX95_ANATOP, FSL_IMX95_IOMUXC,
+        FSL_IMX95_CCM, FSL_IMX95_IOMUXC,
         FSL_IMX95_TRDC_AON,
         FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
@@ -831,6 +831,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->src), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->src), 0,
                     fsl_imx95_memmap[FSL_IMX95_SRC].addr);
+
+    /*
+     * ANATOP/PLL: the SM's DVFS path powers a PLL up and polls
+     * PLL_STATUS.LOCK, then enables each DFS and polls DFS_STATUS.DFS_OK
+     * (an unbounded wait). The model makes LOCK mirror CTRL.POWERUP and
+     * DFS_OK mirror each DFS's enable, so the A55 perf-level set completes
+     * instead of timing out (-9) or hanging.
+     */
+    s->anatop = qdev_new("imx95.anatop");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->anatop), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->anatop), 0,
+                    fsl_imx95_memmap[FSL_IMX95_ANATOP].addr);
 
     /*
      * uSDHC1/2/3. Reuses QEMU's TYPE_IMX_USDHC (an SDHCI subclass with

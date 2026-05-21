@@ -200,6 +200,8 @@ struct FslImx95State {
     DeviceState            *gpc;
     /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
     DeviceState            *src;
+    /* ANATOP/PLL - SM DVFS PLL lock + DFS status (A55 perf level). */
+    DeviceState            *anatop;
 
     /*
      * When true (default), instantiate the C-stub SCMI server that answers
