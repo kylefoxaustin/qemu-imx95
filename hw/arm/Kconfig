@@ -633,6 +633,7 @@ config FSL_IMX95
     select IMX95_PMIC
     select IMX95_GPC
     select IMX95_SRC
+    select IMX95_ANATOP
     select IMX_LPI2C
     select SDHCI
     select UNIMP
