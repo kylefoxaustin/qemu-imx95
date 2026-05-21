@@ -127,6 +127,9 @@ config IMX95_SRC
 config IMX95_ANATOP
     bool
 
+config IMX95_DPU
+    bool
+
 config IMX95_ELE_SERVER
     bool
     select IMX_MU
