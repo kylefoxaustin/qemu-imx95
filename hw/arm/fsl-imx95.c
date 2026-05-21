@@ -340,6 +340,59 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
             create_unimplemented_device(name, sm_cfgop_regions[i], 64 * KiB);
         }
     }
+
+    /*
+     * Peripheral MMIO the Linux built-in drivers touch once the REAL SM
+     * powers/clocks their domains. With the C-stub SCMI these all deferred
+     * ("Failed getting clock"); with the real SM they probe and take a
+     * synchronous external abort on unmapped MMIO, killing PID 1. The list
+     * is exactly the C-stub boot's "deferred probe pending" set (plus the
+     * Neutron NPU). Logging stubs let the probes proceed without faulting;
+     * v1.0 models these subsystems for real. Low priority, so the modelled
+     * uSDHC / LPUART and the FSB RAM still override where they overlap.
+     */
+    {
+        static const struct {
+            uint64_t addr;
+            uint64_t size;
+        } linux_periph_regions[] = {
+            /* eDMA controllers span many 4 KiB channel pages -> 1 MiB. */
+            { 0x42000000, 0x100000 }, { 0x42210000, 0x100000 },
+            { 0x44000000, 0x100000 },
+            { 0x42430000, 64 * KiB }, /* cm7 mailbox */
+            { 0x42490000, 64 * KiB }, /* watchdog */
+            { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
+            { 0x42530000, 64 * KiB }, { 0x42540000, 64 * KiB }, /* i2c */
+            { 0x42590000, 64 * KiB }, /* serial */
+            { 0x425e0000, 64 * KiB }, /* spi */
+            { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB },
+            { 0x426d0000, 64 * KiB }, /* i2c */
+            { 0x42710000, 64 * KiB }, /* spi */
+            { 0x42850000, 64 * KiB }, { 0x42860000, 64 * KiB }, /* mmc */
+            { 0x43810000, 64 * KiB }, { 0x43820000, 64 * KiB },
+            { 0x43840000, 64 * KiB }, { 0x43850000, 64 * KiB }, /* gpio */
+            { 0x44350000, 64 * KiB }, /* i2c */
+            { 0x44530000, 64 * KiB }, /* adc */
+            { 0x4b010000, 64 * KiB }, /* syscon */
+            { 0x4b400000, 0x100000 }, /* display-controller */
+            { 0x4c200000, 0x100000 }, /* usb */
+            { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie */
+            { 0x4c410000, 64 * KiB }, /* syscon */
+            { 0x4c480000, 0x40000 },  /* vpu */
+            { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
+            { 0x4c810000, 64 * KiB }, /* syscon */
+            { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl */
+            { 0x4d900000, 0x100000 }, /* gpu */
+            { 0x4ab00000, 0x100000 }, /* neutron npu */
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(linux_periph_regions); i++) {
+            g_autofree char *name =
+                g_strdup_printf("linux-periph@0x%08" PRIx64,
+                                linux_periph_regions[i].addr);
+            create_unimplemented_device(name, linux_periph_regions[i].addr,
+                                        linux_periph_regions[i].size);
+        }
+    }
 }
 
 /*
