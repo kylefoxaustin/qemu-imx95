@@ -116,6 +116,10 @@ struct FslImx95State {
     MemoryRegion            fsb;
     /* VFCCU backing RAM - SM eMcem init writes fault config/flags. */
     MemoryRegion            vfccu;
+    /* A55 CPU wait-semaphore SRAM (A1 MU SRAM page). */
+    MemoryRegion            cpu_sema;
+    /* CortexA TMPSNS backing RAM (SM sensor tick; CTRL0=0 -> filter idle). */
+    MemoryRegion            tmpsns_ca;
     /* More eMcem/fabric init targets backed by RAM (write-acceptors). */
     MemoryRegion            vfccu_aon;
     MemoryRegion            erma;
@@ -283,6 +287,10 @@ enum FslImx95MemoryRegions {
 
     /* VFCCU (Fault Collection & Control Unit) - SM eMcem init touches it. */
     FSL_IMX95_VFCCU,
+    /* A1 MU SRAM page holding the A55 CPU wait-semaphore (DEV_SM_CpuInit). */
+    FSL_IMX95_CPU_SEMA,
+    /* CortexA TMPSNS - SM sensor tick reads it (post-init periodic task). */
+    FSL_IMX95_TMPSNS_CA,
     /* More SM eMcem/fabric init targets: AON_VFCCU, AON_ERMA, NOC_SRAMCTL. */
     FSL_IMX95_VFCCU_AON,
     FSL_IMX95_ERMA,
