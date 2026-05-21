@@ -188,6 +188,8 @@ struct FslImx95State {
     DeviceState            *lpi2c_pmic;
     /* GPC (General Power Controller) - SM power-domain / CPU-mode control. */
     DeviceState            *gpc;
+    /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
+    DeviceState            *src;
 
     /*
      * When true (default), instantiate the C-stub SCMI server that answers
