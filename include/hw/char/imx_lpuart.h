@@ -68,6 +68,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXLPUARTState, IMX_LPUART)
 #define LPUART_DATA_RXEMPT      0x00001000  /* RX buffer was empty */
 
 /*
+ * FIFO bits. TXEMPT/RXEMPT/TXOF/RXUF are read-only (status) and must never be
+ * latched from a guest write - the Linux driver read-modify-writes UARTFIFO,
+ * so a stored RXEMPT would stick and break its RX drain loop. TXFLUSH/RXFLUSH
+ * are write-1 self-clearing commands.
+ */
+#define LPUART_FIFO_TXEMPT      0x00800000
+#define LPUART_FIFO_RXEMPT      0x00400000
+#define LPUART_FIFO_TXOF        0x00020000  /* TX overflow (W1C) */
+#define LPUART_FIFO_RXUF        0x00010000  /* RX underflow (W1C) */
+#define LPUART_FIFO_TXFLUSH     0x00008000  /* self-clearing */
+#define LPUART_FIFO_RXFLUSH     0x00004000  /* self-clearing */
+#define LPUART_FIFO_RO_MASK     (LPUART_FIFO_TXEMPT | LPUART_FIFO_RXEMPT | \
+                                 LPUART_FIFO_TXOF | LPUART_FIFO_RXUF | \
+                                 LPUART_FIFO_TXFLUSH | LPUART_FIFO_RXFLUSH)
+
+/*
  * PARAM: FIFO depth is encoded as 1 << (field + 1) when nonzero, else 1.
  * The model implements a single-byte TX path and a 1-deep RX buffer, so
  * both TX and RX fields read back zero (depth = 1).

@@ -138,13 +138,18 @@ static uint64_t imx_lpuart_read(void *opaque, hwaddr offset, unsigned size)
 
     case LPUART_FIFO:
         /*
-         * Report the FIFO control bits the guest set, plus a sticky
-         * TXEMPT/RXEMPT to reflect our 1-deep model's current state.
+         * Report the FIFO control bits the guest set, plus the read-only
+         * TXEMPT/RXEMPT status computed from our 1-deep model. The status
+         * bits must be derived fresh, never returned from s->fifo: the Linux
+         * driver read-modify-writes UARTFIFO during setup, so a stored RXEMPT
+         * would stick set and make its RX drain loop (while !(FIFO & RXEMPT))
+         * believe the RX FIFO is always empty - it would never read DATA, RDRF
+         * would never clear, and the RX interrupt would storm.
          */
-        value = s->fifo;
-        value |= 0x00800000;  /* TXEMPT - we drain instantly */
+        value = s->fifo & ~(LPUART_FIFO_TXEMPT | LPUART_FIFO_RXEMPT);
+        value |= LPUART_FIFO_TXEMPT;  /* we drain TX instantly */
         if (!s->rx_full) {
-            value |= 0x00400000;  /* RXEMPT */
+            value |= LPUART_FIFO_RXEMPT;
         }
         break;
 
@@ -249,12 +254,14 @@ static void imx_lpuart_write(void *opaque, hwaddr offset,
 
     case LPUART_FIFO:
         /*
-         * Bits 0x4000/0x8000 are RXFLUSH/TXFLUSH, write-1-to-action and
-         * always read 0; the rest of the register is configuration the
-         * driver wants to read back.
+         * Store only the writable configuration bits. The read-only status
+         * bits (TXEMPT/RXEMPT/TXOF/RXUF) and the self-clearing flush commands
+         * (TXFLUSH/RXFLUSH) must NOT be latched: the driver read-modify-writes
+         * UARTFIFO, so latching RXEMPT would make it stick set and break the
+         * RX drain loop (see the FIFO read).
          */
-        s->fifo = value & ~0x0000C000;
-        if (value & 0x00004000) {
+        s->fifo = value & ~LPUART_FIFO_RO_MASK;
+        if (value & LPUART_FIFO_RXFLUSH) {
             s->rx_full = false;
             s->stat &= ~LPUART_STAT_RDRF;
         }
