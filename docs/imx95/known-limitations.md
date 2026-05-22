@@ -88,10 +88,29 @@ community writeup.
 
 ## 3. Hardware accelerators (GPU / VPU / NPU) are probe-time stubs only
 
-The Mali-G310 (GPU), Amphion (VPU), and Neutron (NPU) blocks are stubbed so
-their Linux drivers complete registration with the DRM / V4L2 / NPU subsystems,
-but **no actual rendering, codec, or inference occurs**. Userspace requiring
-hardware acceleration (glmark2, `ffmpeg` hwaccel, NPU inference) will not work.
+The Mali-G310 (GPU), Amphion (VPU), and Neutron (NPU) blocks are logging
+stubs: their MMIO is mapped and accesses are absorbed, but **no rendering,
+codec, or inference occurs**. The precise failure mode for each driver is
+characterized below from a Tier-3.4 live test with a glibc Mesa userspace
+(see `docs/imx95/validation-report.md` for the full evidence):
+
+- **Mali GPU.** The driver fails probe with `-22` (EINVAL) at the product-ID
+  check: it reads the stub's GPU-ID register, sees `Unknown GPU Product ID 0`,
+  logs "Early device initialization failed" and unbinds. No `/dev/dri/cardN`
+  is registered by Mali, and no Vulkan ICD is installed. `vulkaninfo` reports
+  `Found no drivers! ERROR_INCOMPATIBLE_DRIVER`. `glmark2-es2` and other
+  GL/Vulkan tools have nothing to attach to.
+- **DPU (display controller, `4b400000`).** Probes cleanly
+  (`hw/misc/imx95_dpu.c` reports the command sequencer idle with FIFO space)
+  and registers `/dev/dri/card0` + `renderD128` — so a DRM card *does* appear
+  in `/dev`, but it has no connectors and no scanout. `modetest` (which probes
+  by hardcoded driver-name list — i915/amdgpu/radeon/nouveau/vmwgfx — and
+  doesn't match the i.MX stub) fails to attach; `kmscube` errors with
+  `no connected connector! failed to initialize legacy DRM`.
+- **Amphion VPU / Neutron NPU.** Logging-stub MMIO, no V4L2 stream/inference.
+
+Userspace requiring hardware acceleration (glmark2, `ffmpeg` hwaccel, NPU
+inference, anything wanting a working Mali ICD) will not work.
 
 This is universal across SoC software emulators: no public software emulator of
 any modern SoC's GPU/VPU/NPU exists (Snapdragon, Apple Silicon, Tegra, Exynos,
@@ -100,10 +119,6 @@ driver in reverse, and the result would be orders of magnitude slower than
 silicon while still not being functionally useful for accelerator development.
 Accelerator work requires real silicon or cycle-accurate RTL simulation; this
 emulator targets BSP / SM-firmware / peripheral-driver development and CI.
-
-Similarly, the display controller (DPU) is stubbed only far enough for its
-Linux probe to complete (`hw/misc/imx95_dpu.c` reports the command sequencer
-idle with FIFO space); there is no scanout.
 
 ---
 
