@@ -37,6 +37,27 @@ terminal. The SM also boots standalone to its debug-monitor prompt
 SPL → U-Boot proper handoff over an emulated SD boot chain, and the U-Boot
 interactive prompt — still work.
 
+**Validated** (full evidence in
+[`docs/imx95/validation-report.md`](docs/imx95/validation-report.md)):
+
+- Reproducible from a clean clone — including a clean `ubuntu:24.04`
+  container as a different user with only the README-documented dependencies.
+- Boots **three distinct kernels** — NXP 6.12.49 vendor, mainline 6.12.0,
+  NXP 6.18.2 vendor — all reaching `/init`, all binding SCMI to the real SM.
+- Boots **two distinct userspaces** — static BusyBox and a glibc-dynamic
+  Yocto trim (real `bash` 5.2.37, dynamic coreutils, file-I/O integrity
+  verified under sustained load).
+- 24 h stability run: stable memory, data-integrity md5 unchanged, no panics
+  or SCMI timeouts.
+- Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
+  stub-only) characterized with precise failure points — see
+  [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
+
+The campaign found and fixed two real bugs in the artifact before any
+external user would have hit them: an LPUART FIFO read-only-bit storm
+(commit `741af2f5e3`) and an undocumented `file` host-package dependency in a
+test script (commit `7def38532a`).
+
 ## Required artifacts
 
 > **The System Manager firmware image is required.** The real SM on the M33 is
