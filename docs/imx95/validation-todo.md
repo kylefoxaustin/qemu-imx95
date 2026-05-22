@@ -58,6 +58,13 @@ userspace is genuinely alive (and exercises Linux-console LPUART RX). The
 BusyBox initramfs + build script becomes a committed artifact
 (`tests/busybox-initramfs/`). ~2-3 h.
 
+**Status: PASSED (commit 741af2f5e3).** Tier 1.3 surfaced a latent bug in the
+LPUART model's FIFO status handling (it latched read-only RXEMPT from a guest
+read-modify-write; fix = store only writable bits on write, derive status fresh
+on read). Both "no interactive console" and "SCMI desync under console input"
+were resolved by the single fix — the campaign working as designed: found the
+bug before strangers did.
+
 ### 1.4 Long-duration stability run
 24 h run; check responsiveness, stable host RAM (±10%), no panics/RCU stalls/
 WARN accumulation. Catches device-model leaks, virtual-time drift, GIC

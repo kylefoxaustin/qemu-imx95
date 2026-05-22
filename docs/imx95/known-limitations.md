@@ -115,8 +115,14 @@ backed by logging stubs and either defer probe or fail soft with `-ENODEV`.
 These produce warnings in the boot log but do not panic or hang Linux —
 userspace runs cleanly (PID 1 via initramfs). A fully populated runtime
 environment (e.g. mounting an actual SD card filesystem, exercising real
-I2C-attached sensors) would require modelling more peripherals for real. The
-serial console (LPUART1 for Linux, LPUART2 for the SM debug monitor) works.
+I2C-attached sensors) would require modelling more peripherals for real.
+
+**The Linux serial console works in both directions** — LPUART1 for Linux's
+stdin/stdout, LPUART2 for the SM debug monitor. The interactive shell from a
+BusyBox initramfs accepts typed input and displays output on the host terminal.
+(A bug in the LPUART model's FIFO status handling was fixed in commit
+741af2f5e3, which also resolved a downstream SCMI desync caused by RX interrupt
+storms — one root cause, two symptoms.)
 
 ---
 

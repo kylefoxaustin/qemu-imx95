@@ -30,7 +30,9 @@ arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
 Run /init as init process
 ```
 
-The SM also boots standalone to its debug-monitor prompt
+The **interactive Linux serial console works** (via a BusyBox initramfs):
+typed commands reach the shell over ttyLP0 and output reaches the host
+terminal. The SM also boots standalone to its debug-monitor prompt
 (`tests/sm-banner/run.sh`). Earlier bring-up milestones — U-Boot SPL banner,
 SPL → U-Boot proper handoff over an emulated SD boot chain, and the U-Boot
 interactive prompt — still work.
