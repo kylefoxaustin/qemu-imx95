@@ -8,9 +8,9 @@ and runs it.
 Build the SM firmware from the NXP imx-sm tree (arm-none-eabi toolchain):
 
 ```
-cd ~/Documents/nxp/sources/imx-sm
+cd <your imx-sm checkout>      # github.com/nxp-imx/imx-sm
 make config=mx95evk all
-# -> build/mx95evk/m33_image.elf
+# -> build/mx95evk/m33_image.elf  (run with SM_ELF=<that path>)
 ```
 
 ## Run
