@@ -19,7 +19,11 @@ echo "fetching busybox-static (arm64) ..."
 wget -qO "$WORK/bb.deb" "$DEB_URL"
 dpkg-deb -x "$WORK/bb.deb" "$WORK/x"
 BB=$(find "$WORK/x" -name busybox -type f | head -1)
-file "$BB" | grep -q "ARM aarch64" || { echo "not an aarch64 busybox: $BB" >&2; exit 1; }
+# Verify it's an AArch64 ELF without depending on the `file` package (absent on
+# minimal hosts): ELF e_machine is 2 bytes at offset 18, little-endian for
+# ELFDATA2LSB, and EM_AARCH64 == 0xB7.
+em=$(od -An -tx1 -j18 -N2 "$BB" | tr -d ' ')
+[ "$em" = "b700" ] || { echo "not an aarch64 busybox (e_machine=$em): $BB" >&2; exit 1; }
 
 root="$WORK/root"
 mkdir -p "$root"/{bin,proc,sys,dev}
