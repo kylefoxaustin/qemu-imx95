@@ -43,6 +43,15 @@ acting. (Bare-name tagging worked through v0.10 by luck; the v1.0 milestone
 surfaced a collision with QEMU's own `v1.0` release tag, hence the project's
 `imx95-vX.Y` tag namespace.)
 
+**Symptoms can share roots.** When multiple failures surface in different
+subsystems, check for a shared upstream cause before treating them as
+independent — the "name the layer" discipline applies to symptoms too. The
+LPUART FIFO bug (`741af2f5e3`) presented as both a dead interactive console and
+an SCMI desync (`Message ... not expected`); they looked unrelated, but a
+single latched read-only status bit caused a 75 kHz RX interrupt storm that
+both blocked RX delivery and starved the MU2 SCMI interrupt. One fix retired
+both.
+
 ---
 
 ## The five debugging pillars
