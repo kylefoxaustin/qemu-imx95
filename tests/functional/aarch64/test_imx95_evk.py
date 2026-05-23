@@ -56,8 +56,8 @@ class Imx95EvkMachine(LinuxKernelTest):
         # the SM debug monitor and is left null here.
         self.vm.set_console(console_index=0)
         # The machine has a fixed heterogeneous topology of 6 Cortex-A55 +
-        # 1 Cortex-M33 (SM), so do not pass -smp; the machine's default of 7
-        # is the only accepted value.
+        # 1 Cortex-M33 (SM) + 1 Cortex-M7 (RT), so do not pass -smp; the
+        # machine's default of 8 is the only accepted value.
         self.vm.add_args(
             '-m', '2G',
             '-kernel', self.artifacts['QEMU_TEST_IMX95_KERNEL'],
