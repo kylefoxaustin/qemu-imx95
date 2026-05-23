@@ -141,6 +141,37 @@ storms — one root cause, two symptoms.)
 
 ---
 
+## 5. The Cortex-M7 real-time core is deferred to v1.x
+
+The i.MX 95 SoC has a heterogeneous CPU topology of 6× Cortex-A55,
+1× Cortex-M33, and 1× Cortex-M7. The current machine models the A55
+cluster and the M33 (which runs the real NXP System Manager firmware and is
+Linux's sole SCMI provider). The Cortex-M7 real-time domain is not yet
+instantiated.
+
+**M7 support is planned for v1.x and is the gating milestone for upstream
+submission.** The artifact submitted to qemu-arm@ will represent the full
+i.MX 95 CPU complement honestly, not a partial SoC. The v1.x M7 scope is:
+
+* Cortex-M7 TCG instance (`TYPE_CORTEX_M7`, on the M33-style pattern from
+  v0.6)
+* TCM and DRAM-carveout regions per the i.MX 95 memory map
+* NVIC wiring and IRQ routing
+* SCMI `CPU_ON` integration so the SM starts the M7 the same way it starts
+  any other core
+* A simple M7 test firmware that demonstrates execution (console-output
+  fingerprint, modeled on the existing A55/M33 boot signals)
+* A functional test exercising M7 boot end-to-end
+
+Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
+audio DSP, etc.) remains future scope beyond initial M7 support — none of
+these are required for the M7 to demonstrate execution.
+
+Until v1.x lands, no Cortex-M7 instance is present and any user/driver
+expecting a running M7 (e.g. Linux's `imx-rproc`) will not find one.
+
+---
+
 ## On "stock NXP DTB boots"
 
 The project boots the **unmodified** NXP EVK device tree — limitations are

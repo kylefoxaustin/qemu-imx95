@@ -23,15 +23,17 @@ upstream-mergeable into QEMU mainline.
 The i.MX 95 SoC has a heterogeneous CPU topology of **6× Cortex-A55** (the
 application cluster), **1× Cortex-M33** (the System Manager core), and
 **1× Cortex-M7** (the real-time domain). This machine currently models the
-**A55 cluster and the M33** — the latter runs the real NXP SM firmware and is
-the load-bearing piece for Linux's SCMI bring-up. The **M7 is deliberately
-deferred**: it hosts an independent FreeRTOS/MCUXpresso real-time workload
-and is not on the path from `-kernel` to Linux userspace, so omitting it
-doesn't block any of the artifact's stated use cases (BSP development, SM
-firmware development, peripheral-driver development, CI). It is a known,
-intentional scope choice rather than an oversight, and adding it is on the
-post-v1 roadmap (its own `ARMv7MState`, ITCM/DTCM regions, separate MU
-channel, and `imx-rproc` integration on the Linux side).
+**A55 cluster and the M33** — the latter runs the real NXP SM firmware and
+serves Linux's SCMI. The **Cortex-M7 is planned for v1.x and is the gating
+milestone for upstream submission**: the artifact landed at qemu-arm@ will
+represent the full i.MX 95 CPU complement, not a partial SoC. The v1.x M7
+scope is a Cortex-M7 TCG instance, TCM and DRAM-carveout regions, NVIC
+wiring, SCMI `CPU_ON` integration, a simple M7 test firmware, and a
+functional test demonstrating M7 boot. Customer-specific real-time
+peripherals (FlexCAN, TSN, audio DSP, etc.) remain further out, beyond the
+v1.x initial-M7 work. See
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
+the full statement.
 
 ## What runs today
 
