@@ -29,6 +29,10 @@ docs/reviews/
 /tests/hello-imx95/hello.bin
 /tests/hello-imx95/hello.elf
 /tests/hello-imx95/hello.o
+/tests/cm7-hello/cm7_image.elf
+/tests/cm7-hello/cm7_image.bin
+/tests/cm7-hello/cm7_image.map
+/tests/cm7-hello/*.o
 /tests/spl-banner/uboot-build/
 
 # v0.1 work-around dir from the QEMU build reconfigure
