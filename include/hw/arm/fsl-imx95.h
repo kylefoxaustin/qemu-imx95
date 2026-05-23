@@ -65,12 +65,31 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslImx95State, FSL_IMX95)
 #define FSL_IMX95_M33_CLK_HZ        333333333U  /* SM runs the M33 ~333 MHz */
 
 /*
+ * Cortex-M7 real-time core (v1.x). Memory map matches the upstream Linux
+ * imx_rproc driver's imx_rproc_att_imx95_m7 table: the M7 sees ITCM at
+ * its 0x00000000 (boot reset vector) and DTCM at 0x20000000; the A55
+ * (and any other system-view observer) sees the same TCM RAM at
+ * 0x203c0000 and 0x20400000 respectively, so a system-side firmware
+ * loader (Linux remoteproc, U-Boot, ...) can populate the M7's TCM from
+ * the A55 side. The M7's reset VTOR is 0 - the ARMv7-M default - because
+ * ITCM is at M7-view 0 in this map.
+ */
+#define FSL_IMX95_M7_ITCM_M7VIEW    0x00000000ULL  /* M7's view of ITCM */
+#define FSL_IMX95_M7_DTCM_M7VIEW    0x20000000ULL  /* M7's view of DTCM */
+#define FSL_IMX95_M7_ITCM_SYSVIEW   0x203c0000ULL  /* A55's view of M7 ITCM */
+#define FSL_IMX95_M7_DTCM_SYSVIEW   0x20400000ULL  /* A55's view of M7 DTCM */
+#define FSL_IMX95_M7_TCM_SIZE       (256 * KiB)
+#define FSL_IMX95_M7_NUM_IRQ        256
+#define FSL_IMX95_M7_CLK_HZ         800000000U  /* M7 runs ~800 MHz */
+
+/*
  * i.MX 95 application processor complex:
- *   - 6x Cortex-A55  (the main APUs we emulate here)
- *   - 1x Cortex-M33  (System Manager, runs SM firmware - stubbed via SCMI)
- *   - 1x Cortex-M7   (real-time domain - not modeled in v0.0.1)
- * In v0.0.1 we only instantiate the A55 cluster. The M33/M7 cores can be
- * added later as heterogeneous CPU contexts within the same QEMU instance.
+ *   - 6x Cortex-A55 (the main APUs)
+ *   - 1x Cortex-M33 (System Manager, runs real NXP SM firmware)
+ *   - 1x Cortex-M7  (real-time domain, runs an RT/MCUXpresso workload)
+ * All three are instantiated; the M33 and M7 are heterogeneous CPU
+ * contexts in the same QEMU instance, each with its own private TCMs
+ * and ARMv7-M NVIC.
  */
 enum FslImx95Configuration {
     FSL_IMX95_NUM_A55_CPUS  = 6,
@@ -102,9 +121,32 @@ struct FslImx95State {
      * actually loaded into its ITCM (checked at reset via this hook,
      * registered late so it runs after the -device loader populates the
      * ITCM). Without firmware the M33 stays halted, so a plain A55 Linux
-     * boot is unaffected.
+     * boot is unaffected. The same notifier also releases the M7 by the
+     * same vector[0]-is-non-zero check.
      */
     Notifier                m33_machine_done;
+
+    /*
+     * Cortex-M7 real-time core (v1.x). Same structural pattern as the
+     * M33: an ARMv7-M instance backed by its own ITCM + DTCM RAM regions
+     * layered over a low-priority alias of the A55 system memory, in an
+     * m7-private 32-bit view. The two *_sysalias regions expose the same
+     * TCM RAM at the system-view addresses (0x203c0000 / 0x20400000) so
+     * an A55-side loader can deposit M7 firmware into TCM from there;
+     * the standalone "-device loader,file=cm7_image.elf,cpu-num=7" path
+     * writes through the M7's own address space and does not need them.
+     * The M7 starts powered-off and is released by the same machine-done
+     * BH that releases the M33, gated on a non-zero vector[0] in its
+     * ITCM (i.e. firmware was actually loaded).
+     */
+    ARMv7MState             m7;
+    MemoryRegion            m7_view;
+    MemoryRegion            m7_sysmem_alias;
+    MemoryRegion            m7_itcm;
+    MemoryRegion            m7_dtcm;
+    MemoryRegion            m7_itcm_sysalias;
+    MemoryRegion            m7_dtcm_sysalias;
+    Clock                  *m7_cpuclk;
 
     GICv3State              gic;
     MemoryRegion            ocram;

@@ -454,12 +454,35 @@ static void fsl_imx95_m33_start_bh(void *opaque)
     }
 }
 
+/*
+ * Same shape as fsl_imx95_m33_start_bh, applied to the M7. Vector[0] in
+ * the M7's ITCM is the initial SP; firmware sets it to a non-zero value
+ * (typically the top of DTCM), so a non-zero first word means a
+ * "-device loader,...,cpu-num=7" actually populated the M7 image. With
+ * no firmware loaded the M7 stays halted and a plain A55+M33 boot is
+ * unaffected.
+ */
+static void fsl_imx95_m7_start_bh(void *opaque)
+{
+    FslImx95State *s = opaque;
+    const void *itcm = memory_region_get_ram_ptr(&s->m7_itcm);
+    uint32_t initial_sp = ldl_le_p(itcm);
+
+    if (initial_sp != 0 && s->m7.cpu) {
+        CPUState *cs = CPU(s->m7.cpu);
+        cs->halted = 0;
+        cpu_resume(cs);
+    }
+}
+
 static void fsl_imx95_machine_done(Notifier *notifier, void *data)
 {
     FslImx95State *s = container_of(notifier, FslImx95State, m33_machine_done);
 
     aio_bh_schedule_oneshot(qemu_get_aio_context(),
                             fsl_imx95_m33_start_bh, s);
+    aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                            fsl_imx95_m7_start_bh, s);
 }
 
 static void fsl_imx95_realize(DeviceState *dev, Error **errp)
@@ -470,19 +493,19 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     const char *cpu_type = ms->cpu_type ?: ARM_CPU_TYPE_NAME("cortex-a55");
     /*
      * The 19x19 EVK has a fixed 6-core A55 cluster. The Cortex-M33 SM
-     * core is an additional, always-present vCPU not part of the A55
-     * cluster (it has its own NVIC, not the GIC), so the A55 wiring below
-     * is sized by the fixed cluster count rather than ms->smp.cpus, which
-     * also counts the M33.
+     * core and the Cortex-M7 real-time core are additional, always-present
+     * vCPUs not part of the A55 cluster (each has its own NVIC, not the
+     * GIC), so the A55 wiring below is sized by the fixed cluster count
+     * rather than ms->smp.cpus, which also counts the M33 and M7.
      */
     const unsigned n_a55 = FSL_IMX95_NUM_A55_CPUS;
     int i;
 
-    if (ms->smp.cpus != n_a55 + 1) {
+    if (ms->smp.cpus != n_a55 + 2) {
         error_setg(errp,
-                   "%s: fixed topology is %u A55 + 1 M33 SM core; "
+                   "%s: fixed topology is %u A55 + 1 M33 + 1 M7; "
                    "run with -smp %u (the default) - %d requested",
-                   TYPE_FSL_IMX95, n_a55, n_a55 + 1, (int)ms->smp.cpus);
+                   TYPE_FSL_IMX95, n_a55, n_a55 + 2, (int)ms->smp.cpus);
         return;
     }
 
@@ -1097,9 +1120,68 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * Register the M33 auto-start check from a machine-done notifier so
-     * its reset hook is installed AFTER the generic -device loader's, and
-     * therefore runs after the SM image has been written into ITCM.
+     * Cortex-M7 real-time core (v1.x). Mirror of the M33 setup above with
+     * M7-specific addresses: ITCM at M7-view 0x00000000 (the M7 boots
+     * here, so its reset VTOR is 0 - the ARMv7-M default), DTCM at
+     * M7-view 0x20000000. The same TCM RAM is also aliased into the
+     * system view at 0x203c0000 / 0x20400000 per the upstream Linux
+     * imx_rproc_att_imx95_m7 table, so an A55-side loader (Linux
+     * remoteproc, U-Boot) can populate the M7's TCM from there. The
+     * standalone -device loader,...,cpu-num=7 path writes through the
+     * M7's own address space and does not need those aliases, but they
+     * match real silicon and don't get in the way.
+     */
+    memory_region_init(&s->m7_view, OBJECT(s), "imx95-m7-view",
+                       4ULL * GiB);
+    memory_region_init_alias(&s->m7_sysmem_alias, OBJECT(s),
+                             "imx95-m7-sysmem", get_system_memory(),
+                             0, 4ULL * GiB);
+    memory_region_add_subregion_overlap(&s->m7_view, 0,
+                                        &s->m7_sysmem_alias, -1);
+
+    memory_region_init_ram(&s->m7_itcm, OBJECT(s), "imx95-m7-itcm",
+                           FSL_IMX95_M7_TCM_SIZE, &error_fatal);
+    memory_region_add_subregion(&s->m7_view, FSL_IMX95_M7_ITCM_M7VIEW,
+                                &s->m7_itcm);
+    memory_region_init_ram(&s->m7_dtcm, OBJECT(s), "imx95-m7-dtcm",
+                           FSL_IMX95_M7_TCM_SIZE, &error_fatal);
+    memory_region_add_subregion(&s->m7_view, FSL_IMX95_M7_DTCM_M7VIEW,
+                                &s->m7_dtcm);
+
+    /* System-view aliases (A55 sees the same TCM RAM at these addrs). */
+    memory_region_init_alias(&s->m7_itcm_sysalias, OBJECT(s),
+                             "imx95-m7-itcm-sysalias", &s->m7_itcm, 0,
+                             FSL_IMX95_M7_TCM_SIZE);
+    memory_region_add_subregion(get_system_memory(),
+                                FSL_IMX95_M7_ITCM_SYSVIEW,
+                                &s->m7_itcm_sysalias);
+    memory_region_init_alias(&s->m7_dtcm_sysalias, OBJECT(s),
+                             "imx95-m7-dtcm-sysalias", &s->m7_dtcm, 0,
+                             FSL_IMX95_M7_TCM_SIZE);
+    memory_region_add_subregion(get_system_memory(),
+                                FSL_IMX95_M7_DTCM_SYSVIEW,
+                                &s->m7_dtcm_sysalias);
+
+    s->m7_cpuclk = clock_new(OBJECT(s), "m7-cpuclk");
+    clock_set_hz(s->m7_cpuclk, FSL_IMX95_M7_CLK_HZ);
+
+    qdev_prop_set_string(DEVICE(&s->m7), "cpu-type",
+                         ARM_CPU_TYPE_NAME("cortex-m7"));
+    qdev_prop_set_uint32(DEVICE(&s->m7), "num-irq", FSL_IMX95_M7_NUM_IRQ);
+    qdev_prop_set_uint32(DEVICE(&s->m7), "init-svtor", 0);
+    qdev_prop_set_bit(DEVICE(&s->m7), "start-powered-off", true);
+    qdev_connect_clock_in(DEVICE(&s->m7), "cpuclk", s->m7_cpuclk);
+    object_property_set_link(OBJECT(&s->m7), "memory",
+                             OBJECT(&s->m7_view), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->m7), errp)) {
+        return;
+    }
+
+    /*
+     * Register the M33 and M7 auto-start checks from a machine-done
+     * notifier so their reset hooks are installed AFTER the generic
+     * -device loader's, and therefore run after the firmware images
+     * have been written into the respective ITCMs.
      */
     s->m33_machine_done.notify = fsl_imx95_machine_done;
     qemu_add_machine_init_done_notifier(&s->m33_machine_done);
@@ -1116,6 +1198,7 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GICV3);
 
     object_initialize_child(obj, "m33", &s->m33, TYPE_ARMV7M);
+    object_initialize_child(obj, "m7", &s->m7, TYPE_ARMV7M);
 
     for (i = 0; i < FSL_IMX95_NUM_LPUARTS; i++) {
         g_autofree char *name = g_strdup_printf("lpuart%d", i + 1);
