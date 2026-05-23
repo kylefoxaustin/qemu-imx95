@@ -141,34 +141,66 @@ storms — one root cause, two symptoms.)
 
 ---
 
-## 5. The Cortex-M7 real-time core is deferred to v1.x
+## 5. Cortex-M7 — in-progress across v1.x
 
 The i.MX 95 SoC has a heterogeneous CPU topology of 6× Cortex-A55,
-1× Cortex-M33, and 1× Cortex-M7. The current machine models the A55
-cluster and the M33 (which runs the real NXP System Manager firmware and is
-Linux's sole SCMI provider). The Cortex-M7 real-time domain is not yet
-instantiated.
+1× Cortex-M33, and 1× Cortex-M7. The M33 has been modelled since v0.6
+(it runs the real NXP System Manager firmware and is Linux's sole SCMI
+provider). The Cortex-M7 real-time domain is being added across the v1.x
+milestone; **completion of all v1.x M7 work is the gating milestone for
+upstream submission to qemu-arm@**, so the artifact submitted to the
+QEMU community represents the full i.MX 95 CPU complement honestly,
+not a partial SoC.
 
-**M7 support is planned for v1.x and is the gating milestone for upstream
-submission.** The artifact submitted to qemu-arm@ will represent the full
-i.MX 95 CPU complement honestly, not a partial SoC. The v1.x M7 scope is:
+The v1.x execution plan has six steps; what's modelled today vs. still
+ahead:
 
-* Cortex-M7 TCG instance (`TYPE_CORTEX_M7`, on the M33-style pattern from
-  v0.6)
-* TCM and DRAM-carveout regions per the i.MX 95 memory map
-* NVIC wiring and IRQ routing
-* SCMI `CPU_ON` integration so the SM starts the M7 the same way it starts
-  any other core
-* A simple M7 test firmware that demonstrates execution (console-output
-  fingerprint, modeled on the existing A55/M33 boot signals)
-* A functional test exercising M7 boot end-to-end
+| Step | Scope | Status |
+| --- | --- | --- |
+| 2 | Cortex-M7 CPU instance + TCMs + NVIC + default parallel reset policy + standalone hello firmware + unit/integration tests | in progress |
+| 3 | M7-first reset sequencing (Scenario 1: M7 released before the A-cluster) | ahead |
+| 4 | A-first → M7 via Linux remoteproc + SCMI `CPU_ON` + SM resource loading (Scenario 2) | ahead |
+| 5 | Lifecycle (SCMI `CPU_OFF`/`CPU_ON` cycling) + cohabitation under load | ahead |
+| 6 | Docs polish + v1.x validation report | ahead |
 
 Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
 audio DSP, etc.) remains future scope beyond initial M7 support — none of
 these are required for the M7 to demonstrate execution.
 
-Until v1.x lands, no Cortex-M7 instance is present and any user/driver
-expecting a running M7 (e.g. Linux's `imx-rproc`) will not find one.
+### A note on the M7 fingerprint address
+
+The Step 2 standalone M7 test firmware (`tests/cm7-hello`) writes a
+fingerprint magic word + ASCII string to **M7-view `0x20000000` (the
+start of the M7's own DTCM)**, observable from the A55/system side via
+the architectural system-view alias of M7 DTCM at **`0x20400000`** per
+the upstream Linux `imx_rproc_att_imx95_m7` attribute table.
+
+This is **not** the same as the M-core DRAM carveout that Linux's
+`imx-rproc` driver uses for remoteproc — that carveout lives in shared
+DDR starting at `0x88000000` and includes the `rsc_table` at
+`0x88220000` (the resource-table contract between Linux and the M-core
+firmware). The Step 2 hello firmware deliberately stays out of shared
+DDR entirely: a fingerprint there would have to compete with whatever
+Linux placed in general DRAM (initramfs, page cache, etc.), and an
+earlier draft of this firmware that wrote to a "looks-safe-enough" DDR
+address (`0x88200000`, just below `rsc_table`) was found to corrupt the
+initramfs and prevent Linux from booting. The right channel for a
+cross-CPU fingerprint is the M7's own private memory, exposed through
+its designed-in system-view alias — which is exactly the channel the
+upstream remoteproc driver uses to deposit firmware *into* the M7.
+
+The full Linux-remoteproc protocol — which uses `rsc_table` to
+negotiate memory regions, virtio devices and trace buffers between
+Linux and the M-core — is **not** implemented in the Step 2 hello
+firmware. That belongs to the Step 4 A-first → M7 scenario, where
+Linux's `imx-rproc` driver loads and starts the M7 firmware via SCMI
+and expects a valid resource table at the DTS address.
+
+Until the v1.x steps above complete: SCMI-driven CPU_ON for the M7 is
+not yet wired (a loaded M7 firmware starts at machine-init-done under
+the default parallel reset policy), and Linux's `imx-rproc` will not
+find a running M7 unless the firmware implements the resource-table
+contract above.
 
 ---
 
