@@ -2,30 +2,36 @@
  * Cortex-M7 hello firmware for the i.MX 95 v1.x M7 bring-up.
  *
  * Writes a machine-readable 32-bit magic word and a human-readable ASCII
- * fingerprint into a known DDR location (0x88200000), then returns; the
- * startup code halts the M7 in WFI from there.
+ * fingerprint to the start of the M7's own DTCM (M7-view 0x20000000),
+ * then returns; startup.S halts the M7 in WFI from there. The fingerprint
+ * is observable from the A55 side via the system-view alias of the M7
+ * DTCM at 0x20400000 (per the upstream Linux imx_rproc_att_imx95_m7
+ * attribute table, which says "A55 sees M7 DTCM here").
  *
- * 0x88200000 sits in the wider shared M-core DDR carveout the upstream
- * BSP DTS lays out (vdev*vring@8800{0,1,2}000, rsc_table@88220000); the
- * fingerprint address is just below rsc_table, so writing here doesn't
- * collide with the resource-table contract.
+ * Writing into the M7's private TCM rather than shared DDR is
+ * deliberate: a Step-2 fixture should not depend on the placement of
+ * Linux's initramfs, kernel, or other DRAM allocations - the M7 has
+ * its own memory and the architectural cross-view alias is the right
+ * channel for an A55-side observer.
  *
- * The QEMU-side functional test (added in a later v1.x patch) reads this
- * address from the A55 to confirm the M7 actually executed.
+ * The QEMU-side functional/integration tests (added in this step) read
+ * 0x20400000 from the A55 side to confirm the M7 executed.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include <stdint.h>
 
-#define CM7_FINGERPRINT_ADDR    0x88200000U
+/* M7-view of the start of DTCM; A55 sees the same RAM at 0x20400000. */
+#define CM7_FINGERPRINT_ADDR    0x20000000U
 #define CM7_FINGERPRINT_MAGIC   0xC0FFEE07U  /* "coffee for the M7" */
 
 int main(void)
 {
     /*
-     * volatile is correct here: cross-CPU shared DDR. The A55 reads this
-     * fingerprint to verify the M7 actually executed, so the compiler
+     * volatile is correct here: cross-CPU observed memory. The A55 reads
+     * this fingerprint via the system-view alias of M7 DTCM
+     * (0x20400000) to verify the M7 actually executed, so the compiler
      * must not elide the stores or reorder them across the return.
      */
     volatile uint8_t *fp = (volatile uint8_t *)CM7_FINGERPRINT_ADDR;

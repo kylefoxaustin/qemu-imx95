@@ -14,10 +14,17 @@ side to confirm the M7 actually executed.
 2. `Reset_Handler` (in `startup.S`) calls `main()` and then spins in
    WFI.
 3. `main()` (in `main.c`) writes:
-   - the 32-bit magic word `0xC0FFEE07` at physical address
-     `0x88200000` (shared DDR, in the M-core carveout per the upstream
-     BSP DTS), and
+   - the 32-bit magic word `0xC0FFEE07` at M7-view address
+     `0x20000000` (start of the M7's own DTCM), and
    - the ASCII string `"CM7 RUNNING\n"` immediately after.
+
+   An A55-side observer reads the same RAM via the architectural
+   system-view alias of M7 DTCM at `0x20400000` (per the upstream Linux
+   `imx_rproc_att_imx95_m7` attribute table). The fingerprint lives in
+   the M7's private memory and is exposed to the A55 through the
+   designed-in cross-view alias - no shared DDR is touched, so the
+   Step-2 fixture cannot accidentally collide with Linux's initramfs,
+   kernel image, or other DRAM allocations.
 
 ## Memory map
 
