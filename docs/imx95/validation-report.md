@@ -223,3 +223,22 @@ The artifact is not validated for: a literally different physical machine /
 host kernel; an actual Android boot; hardware-accelerated GPU/VPU/NPU
 workloads; or a stranger using it for a real BSP development task. Those
 remain as honest follow-ups (1.2-physical, 3.3, 3.4-extended, 3.5).
+
+---
+
+## Trajectory: upstream submission gated on v1.x (Cortex-M7 integration)
+
+v1.0 represents the M33 + Linux integration story on the imx95-19x19-evk
+machine, validated above against three kernels, two userspaces, and a 24h+
+stability run. **Upstream submission to qemu-arm@ is planned for v1.x, after
+the Cortex-M7 real-time core is integrated**, so the artifact submitted to
+the QEMU community represents the full i.MX 95 CPU complement (6× A55 + 1×
+M33 + 1× M7) honestly rather than a partial SoC. This is a deliberate scope
+choice: shipping a 7-CPU model when the SoC has 8 would invite immediate
+"why isn't the M7 modelled?" review feedback, and the right answer is to
+model it before submitting.
+
+The validation work documented in this report applies to v1.0. v1.x will
+have its own validation pass focused on M7 integration before the
+upstream-submission window opens. The v1.x M7 scope is listed in
+[`docs/imx95/known-limitations.md`](known-limitations.md) §5.
