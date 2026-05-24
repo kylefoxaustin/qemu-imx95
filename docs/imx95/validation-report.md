@@ -242,3 +242,29 @@ The validation work documented in this report applies to v1.0. v1.x will
 have its own validation pass focused on M7 integration before the
 upstream-submission window opens. The v1.x M7 scope is listed in
 [`docs/imx95/known-limitations.md`](known-limitations.md) §5.
+
+---
+
+## v1.0 stability soak — PASSED (recorded 2026-05-23)
+
+The v1.0 24 h+ stability run completed cleanly past its 36 h target,
+gating-stop scheduled by an unattended watcher that snapshotted the
+final state and SIGTERMed the qemu instance. Recorded final state:
+
+- **Heartbeats:** 4274 (one every ~31 s; 24 h ≈ 2800, 36 h ≈ 4200)
+- **Guest uptime at stop:** ~36 h 4 min
+- **MemAvailable trend:** 1795224 kB → 1860048 kB (no leak)
+- **Data-integrity heartbeats with bad md5:** 0
+- **Anomaly counts:** panics=0, SCMI timeouts=0, RCU stalls=0, BUGs=0
+- **Host RSS over the run:** min=372632 kB / max=420244 kB / avg=412654 kB / samples=213 / spread=11.5%
+
+No panics, no SCMI timeouts, no RCU stalls, no BUGs. Memory remained
+stable across the entire run; data integrity held across every
+heartbeat; host RSS stayed within the ±10 % campaign target. The v1.0
+artifact has passed its long-duration stability gate.
+
+The v1.x Step 2 soak (A55 + M33 + M7 all active, 36 h target) runs
+next under a parallel watcher.
+
+---
+
