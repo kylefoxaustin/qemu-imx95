@@ -243,6 +243,7 @@ have its own validation pass focused on M7 integration before the
 upstream-submission window opens. The v1.x M7 scope is listed in
 [`docs/imx95/known-limitations.md`](known-limitations.md) §5.
 
+
 ---
 
 ## v1.0 stability soak — PASSED (recorded 2026-05-23)
@@ -268,3 +269,185 @@ next under a parallel watcher.
 
 ---
 
+## First-customer ecosystem readiness check (post-v1.0)
+
+Shortly after v1.0 was tagged, a parallel project codenamed *Ratchet*
+(an independent drone-emulator effort) began evaluating qemu-imx95 v1.0
+as an aarch64 Linux-userspace install target for an ORB-SLAM3-class
+SLAM build. The exchange surfaced enough about how the artifact looks
+to a non-author user that the findings are worth recording here as
+evidence-of-fit alongside the campaign's own results.
+
+### Methodology surfaced during the exchange
+
+The most efficient way to characterize the guest environment turned
+out to be a clean split:
+
+- **System facts** (kernel banner, `/proc/cmdline`, `/proc/meminfo`,
+  `/proc/cpuinfo`) — captured by a live guest boot. These depend on
+  the machine model and the boot recipe, not the rootfs choice.
+- **Userspace facts** (`/etc/os-release`, toolchain presence,
+  `/usr/include` headers, `/usr/lib` runtime libraries) — captured by
+  file-inspecting an extracted rootfs on the host. The rootfs is just
+  files; "is gcc present" is a `stat()`, not an `exec()`. Faster than
+  booting, contamination-free (no risk of accidental in-guest
+  installs), and gives the same answer either way.
+
+This is worth memorializing as a recurring shape: anyone characterizing
+"what does qemu-imx95 look like to a downstream user" for a given
+rootfs should use the same split.
+
+### qemu-imx95 is a machine model, not a distribution
+
+The exchange surfaced a misconception worth clearing up explicitly in
+the report. **qemu-imx95 doesn't bundle a userspace.** What runs in the
+guest is whatever rootfs / initramfs the user boots with. The project
+ships pointers to two:
+
+- The static-BusyBox initramfs (`tests/busybox-initramfs/build.sh`) —
+  minimal; useful for proving Linux comes up.
+- The NXP Yocto BSP `imx-image-full-imx95evk` rootfs from NXP's Linux
+  Factory release zip (`LF_v6.12.49-2.2.0_images_IMX95.zip`) — the
+  canonical "what an NXP-BSP-based downstream developer would have."
+
+For sub-phase 0.1 of Ratchet's ORB-SLAM3 build attempt, the second is
+the relevant target. Its `/etc/os-release` confirms it as
+`ID=fsl-imx-xwayland`, `VERSION_ID=6.12-walnascar` — NXP's Yocto
+walnascar release of the i.MX 95 reference distro.
+
+### Native toolchain confirmed in the BSP rootfs
+
+A real question for downstream users is whether the NXP `imx-image-full`
+image is a *dev-class* image with a native toolchain or a *runtime-only*
+image that assumes cross-compile from a Yocto SDK on the host. The
+question matters because the answer changes the user's workflow
+entirely.
+
+The image **is dev-class with a native aarch64 toolchain**. Verified by
+reading the ELF `e_machine` field of each binary (`0xB7` = EM_AARCH64):
+
+| Binary | Resolved path in rootfs | Arch |
+| --- | --- | --- |
+| `gcc` | `/usr/bin/aarch64-poky-linux-gcc` | aarch64-ELF |
+| `g++` | `/usr/bin/aarch64-poky-linux-g++` | aarch64-ELF |
+| `cmake` | `/usr/bin/cmake` | aarch64-ELF |
+| `make` | `/usr/bin/make` | aarch64-ELF |
+| `pkg-config` | `/usr/bin/pkg-config` | aarch64-ELF |
+| `ld` | `/usr/bin/aarch64-poky-linux-ld` | aarch64-ELF |
+
+Plus the glibc dynamic loader and `libc.so.6`. The Poky-cross-target
+binary name is just NXP's symlink convention; the binaries themselves
+are aarch64 ELFs and run natively on the guest A55s. Conclusion:
+**in-guest native build of large C++ projects (incl. ORB-SLAM3-class)
+is on the table** without a cross-compile path.
+
+### SLAM dep-chain coverage in the stock BSP rootfs
+
+The same image was probed for the standard SLAM/CV dep chain. The
+runtime / header split is the conventional Yocto one — runtime libs go
+in the base image, dev headers go in `-dev` packages that the base
+image doesn't pull in.
+
+**Runtime libraries present** (in `/usr/lib`):
+
+- **OpenCV 4.12.0** — full 104-`.so` stack including the SLAM-relevant
+  modules: `features2d`, `xfeatures2d`, `flann`, `calib3d`, `stereo`,
+  `rgbd`, `tracking`, `aruco`, `dnn`, `optflow`, `videoio`, `highgui`,
+  `imgproc`, `imgcodecs`, `core`, plus another ~25 modules
+- **Boost 1.87** — `libboost_system.so.1.87.0` and
+  `libboost_filesystem.so.1.87.0` only (other Boost components absent)
+- **GL stack** — `libGL.so.1.2.0`, `libGLESv2.so.2.1.0`,
+  `libGLESv1_CM.so.1.1.0`, `libEGL.so.1.5.0`, `libvulkan.so.*`,
+  `libdrm*` (full driver-hook set)
+
+**Dev headers absent** from the base image:
+
+- No `eigen3/`, no `opencv2/`/`opencv4/`, no `pangolin/`, no `sophus/`,
+  no Boost include tree
+- No `.pc` files for any of the above in `/usr/lib/pkgconfig/`
+- `/usr/include/GL`, `/usr/include/EGL`, `/usr/include/drm`,
+  `/usr/include/CL` (OpenCL), and `/usr/include/c++` (libstdc++) **are**
+  present — so anything linking purely against the GL stack and the
+  C++ stdlib will compile in-guest as-is
+
+The dep-header gap is fixable without recipe authoring: the NXP
+`imx-yocto-bsp` source tree on the development host has matching
+recipes for everything in the runtime list —
+`meta-imx/meta-imx-bsp/recipes-support/opencv/opencv_4.12.0.imx.bb`
+(the exact runtime variant in the rootfs),
+`meta-openembedded/meta-oe/recipes-support/libeigen/libeigen_3.4.0.bb`,
+`poky/meta/recipes-support/boost/boost_1.87.0.bb`. So an
+`IMAGE_INSTALL:append = " opencv-dev libeigen boost-dev"` to
+`imx-image-full.bb` and a `bitbake` rebuild produces a rootfs in which
+in-guest native build is fully self-contained. (Pangolin and Sophus
+have no recipes locally and would need fresh `.bb` files — Sophus is
+header-only, Pangolin is a CMake project.)
+
+### Apt is present, but `apt install` doesn't work in v1.0
+
+`/usr/bin/apt` is in the rootfs and `/etc/apt/sources.list.d/` is
+populated. **But qemu-imx95 v1.0 has no functional networking** (NETC
+is a logging stub — see [known-limitations](known-limitations.md) §6),
+so `apt update` / `apt install` can't reach any mirror inline from
+inside the guest. Three workarounds, all without machine-model
+changes:
+
+1. Pre-bake the needed packages into the rootfs via the Yocto image
+   recipe (`IMAGE_INSTALL:append`), as above. The cleanest long-term
+   posture for downstream users.
+2. Populate the rootfs's apt cache on the host (`apt download` from an
+   x86 box configured against NXP's repos, copy `.deb` files into
+   `var/cache/apt/archives/`), then `apt install -y --no-download
+   <pkg>` from inside the guest.
+3. Cross-compile from a Yocto SDK on the host (`bitbake … -c
+   populate_sdk` produces the standard NXP toolchain installer) and
+   bind-mount the result into the rootfs at runtime.
+
+This isn't a new limitation — it's a downstream-visible consequence of
+the existing §3.1 networking gap. The known-limitations entry has been
+extended to call it out so future downstream users don't bounce off it.
+
+### Compile-time RAM headroom
+
+`/proc/meminfo` from a live boot at the default `-m 2G`:
+
+```
+MemTotal:      2006068 kB
+MemFree:       1812908 kB
+MemAvailable:  1781104 kB
+SwapTotal:           0 kB
+```
+
+~1.78 GiB available before any workload. The machine has no hard
+`-m` cap; for an ORB-SLAM3-class C++ template build, `-m 8G` is the
+recommended starting point. On a development host with enough RAM,
+this is a one-flag change.
+
+### What this contributes to the validation evidence base
+
+Three things worth naming:
+
+1. **First non-author user use case.** Until this exchange, all
+   validation evidence in this report came from the author's own runs.
+   Ratchet's recon is the first "the artifact is being looked at by
+   someone who hasn't built it" data point. It confirms the v1.0
+   machine is, in fact, usable as a Linux-userspace install target by
+   a downstream party — the canonical NXP image boots on it, the
+   native toolchain inside that image is real, and the SLAM dep chain
+   is partially available with a documented path to completion.
+2. **Methodology recurrence.** The host-side-rootfs-inspection vs.
+   live-guest-boot split is the right shape for any future
+   "characterize the guest environment for downstream X" exercise.
+   Reusing it for follow-up integrations (ROS, MAVLink, Vulkan
+   benchmarks, …) avoids the temptation to boot-and-poke around
+   inside the guest, which is slower and risks accidental state
+   contamination.
+3. **New known-limitation surfaced.** The apt-but-no-network reality
+   is a real downstream papercut and is now documented in
+   [`known-limitations.md`](known-limitations.md) §6 rather than left
+   as an in-band discovery for the next user.
+
+The v1.x M7 work and the upstream-submission timing are unaffected by
+this. This section records evidence that the v1.0 artifact has
+real-world fit for at least one downstream use case, alongside the
+campaign's own tier results.

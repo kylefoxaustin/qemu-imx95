@@ -204,6 +204,42 @@ contract above.
 
 ---
 
+## 6. Networking — no functional interfaces
+
+Only the loopback interface `lo` appears in the guest. The NETC / enetc
+blocks are logging stubs at probe time, so no ethernet interface comes
+up; `ping` reports `Network is unreachable`. The integrated-PCIe ECAM
+probes but enumerates no devices (empty slots by design), so PCIe NICs
+aren't an option either.
+
+**Downstream consequence — `apt install` does not work from inside the
+guest.** NXP's BSP rootfs (`imx-image-full-imx95evk`) ships `/usr/bin/apt`
+configured with a populated `/etc/apt/sources.list.d/`, but with no
+functional network, package downloads can't reach a mirror. Three
+working paths for downstream users who need to add packages to the
+rootfs:
+
+1. **Pre-bake via Yocto** — edit the image recipe (or a local
+   `bbappend`) to add `IMAGE_INSTALL:append = " <pkg-dev> <pkg2-dev>"`
+   and `bitbake imx-image-full`. The cleanest long-term posture for any
+   workflow that wants a self-contained rootfs.
+2. **Pre-populate the apt cache** — `apt download` the needed `.deb`
+   files on the host (against NXP's repos), copy them into the rootfs's
+   `var/cache/apt/archives/` before booting, then `apt install -y
+   --no-download <pkg>` from inside the guest.
+3. **Cross-compile from a Yocto SDK** — `bitbake imx-image-full -c
+   populate_sdk` produces the standard NXP toolchain installer; install
+   to `/opt/fsl-imx-xwayland/walnascar/`, source the
+   `environment-setup-armv8a-poky-linux` script, cross-build, bind-mount
+   the result into the rootfs.
+
+This is a downstream-visible consequence of the networking gap, not a
+separate model bug. Surfaced during the first non-author install-target
+evaluation (see `validation-report.md`'s "First-customer ecosystem
+readiness check" section).
+
+---
+
 ## On "stock NXP DTB boots"
 
 The project boots the **unmodified** NXP EVK device tree — limitations are
