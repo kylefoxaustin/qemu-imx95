@@ -24,6 +24,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
+#include "hw/core/irq.h"
 #include "migration/vmstate.h"
 
 #define TYPE_IMX95_SRC "imx95.src"
@@ -42,10 +43,33 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95SRCState, IMX95_SRC)
 #define SRC_FUNC_STAT_PUP       0x00000004u
 #define SRC_FUNC_STAT_PDN       0x00005511u
 
+/*
+ * SRC_GEN.SCR - the boot-reset-release latch register at offset 0x10
+ * within SRC_GEN (which sits at the SRC block base). Bit 12 is the
+ * M7MIX release; per the i.MX 95 reference manual it is sticky:
+ * "M7MIX will be held under reset until boot core writes this bit to 1.
+ * Once this bit is set to 1, it will be locked." The SM's
+ * DEV_SM_CpuStart(M7) path writes this bit during the LMM_Boot phase;
+ * we use the 0->1 transition as a rising edge on the m7mix_release
+ * gpio-out so the machine wrapper can release the M7 CPU from
+ * start-powered-off (v1.x Step 3: silicon-faithful M7 release).
+ */
+#define SRC_GEN_SCR_OFFSET                      0x10u
+#define SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX    (1u << 12)
+
 struct IMX95SRCState {
     SysBusDevice    parent_obj;
     MemoryRegion    iomem;
     uint32_t        regs[IMX95_SRC_NUM_WORDS];
+
+    /*
+     * Rising edge when SRC_GEN.SCR.BOOT_RESET_RELEASE_M7MIX goes 0 -> 1.
+     * Wired by the machine to a handler that releases the M7 CPU,
+     * complementing the existing machine-init-done BH path (which
+     * releases M7 when -device loader has staged firmware into ITCM,
+     * used by tests that boot the M7 standalone without the SM).
+     */
+    qemu_irq        m7mix_release;
 };
 
 static uint64_t imx95_src_read(void *opaque, hwaddr offset, unsigned size)
@@ -68,6 +92,26 @@ static void imx95_src_write(void *opaque, hwaddr offset,
                             uint64_t value, unsigned size)
 {
     IMX95SRCState *s = opaque;
+
+    /*
+     * SRC_GEN.SCR: bit 12 (M7MIX release) is sticky/locked once set per
+     * the RM. Track the 0->1 transition and pulse the m7mix_release out
+     * so the machine releases the M7 CPU.
+     */
+    if (offset == SRC_GEN_SCR_OFFSET) {
+        uint32_t old = s->regs[offset / 4];
+        uint32_t new = (uint32_t)value;
+
+        /* Lock any bit that was already 1: hardware-sticky behaviour. */
+        new |= old & SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX;
+        s->regs[offset / 4] = new;
+
+        if (!(old & SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX) &&
+             (new & SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX)) {
+            qemu_irq_raise(s->m7mix_release);
+        }
+        return;
+    }
 
     s->regs[offset / 4] = value;
 }
@@ -101,6 +145,13 @@ static void imx95_src_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &imx95_src_ops, s,
                           TYPE_IMX95_SRC, IMX95_SRC_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
+
+    /*
+     * Named gpio-out for SRC_GEN.SCR.M7MIX rising edge. Connected by
+     * the machine wrapper to a handler that releases the M7 CPU.
+     */
+    qdev_init_gpio_out_named(DEVICE(obj), &s->m7mix_release,
+                             "m7mix-release", 1);
 }
 
 static const VMStateDescription vmstate_imx95_src = {

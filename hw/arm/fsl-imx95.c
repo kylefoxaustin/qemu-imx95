@@ -43,6 +43,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/i2c/i2c.h"
+#include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/misc/unimp.h"
 #include "hw/sd/sdhci.h"
@@ -481,6 +482,29 @@ static void fsl_imx95_machine_done(Notifier *notifier, void *data)
 
     aio_bh_schedule_oneshot(qemu_get_aio_context(),
                             fsl_imx95_m33_start_bh, s);
+    aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                            fsl_imx95_m7_start_bh, s);
+}
+
+/*
+ * SRC-driven M7 release path (v1.x Step 3). When the SM's
+ * DEV_SM_CpuStart(M7) writes SRC_GEN.SCR.BOOT_RESET_RELEASE_M7MIX
+ * (bit 12) from 0 to 1, hw/misc/imx95_src raises this irq. We defer
+ * the actual cpu_resume to a BH so it runs in the AIO context rather
+ * than inside the M33's TCG block that issued the SCR write. The
+ * underlying fsl_imx95_m7_start_bh's vector[0] guard keeps the release
+ * safe when no M7 firmware is loaded - in that case it's a no-op
+ * (preserves the v1.0 Linux-only boot path's behaviour). Edge-triggered
+ * so a re-write of the bit (locked, won't change) doesn't repeatedly
+ * fire; the SRC model only raises on the 0 -> 1 transition.
+ */
+static void fsl_imx95_src_m7_release_handler(void *opaque, int n, int level)
+{
+    FslImx95State *s = opaque;
+
+    if (!level) {
+        return;
+    }
     aio_bh_schedule_oneshot(qemu_get_aio_context(),
                             fsl_imx95_m7_start_bh, s);
 }
@@ -982,6 +1006,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->src), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(s->src), 0,
                     fsl_imx95_memmap[FSL_IMX95_SRC].addr);
+    /*
+     * Wire SRC_GEN.SCR.BOOT_RESET_RELEASE_M7MIX rising edge to the M7
+     * release path. This is the silicon-faithful M7 lifecycle handle:
+     * the SM's CpuStart(M7_cpu_id) writes the bit, our SRC model raises
+     * the named gpio-out, the handler schedules fsl_imx95_m7_start_bh.
+     * Complements the existing machine-init-done BH (which serves the
+     * M7-only test boots that have no SM running); fsl_imx95_m7_start_bh
+     * is idempotent so both paths firing for the same M7 boot is safe.
+     */
+    qdev_connect_gpio_out_named(s->src, "m7mix-release", 0,
+        qemu_allocate_irq(fsl_imx95_src_m7_release_handler, s, 0));
 
     /*
      * ANATOP/PLL: the SM's DVFS path powers a PLL up and polls
