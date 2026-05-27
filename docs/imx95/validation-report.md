@@ -451,3 +451,49 @@ The v1.x M7 work and the upstream-submission timing are unaffected by
 this. This section records evidence that the v1.0 artifact has
 real-world fit for at least one downstream use case, alongside the
 campaign's own tier results.
+
+---
+
+## v1.x Step 2 stability soak — PASSED (recorded 2026-05-26)
+
+The 36 h parallel-CPU stability soak — A55 cluster + M33 (real NXP SM
+firmware) + M7 (cm7-hello fingerprint firmware) all active throughout —
+completed cleanly at its auto-stop watcher, mirroring the v1.0 soak's
+pattern. This is the explicit Step 2 completion gate per the v1.x
+execution plan: "24 h soak run with all three CPU complements active
+passes."
+
+Recorded final state at the 36 h auto-stop (2026-05-25 07:26 CDT):
+
+- **Heartbeats:** 4260 (36 h target ≈ 4200; ~31 min of margin)
+- **Guest uptime at stop:** ~36 h 1 min (129666 s)
+- **MemAvailable trend:** 1804988 kB → 1866824 kB (no leak; slight
+  uptrend across the run, mirroring the v1.0 soak's pattern)
+- **Data-integrity heartbeats with bad md5:** 0
+- **Anomaly counts:** panics=0, SCMI timeouts=0, RCU stalls=0, BUGs=0
+- **Boot recipe:** `tests/parallel-boot/run.sh` invocation pattern —
+  full NXP 6.12.49 kernel + DTB + busybox initramfs +
+  `-device loader,...,m33_image.elf,cpu-num=6` +
+  `-device loader,...,cm7_image.elf,cpu-num=7`. Same daemonized setup
+  as the v1.0 soak, plus the M7 firmware.
+
+No anomalies of any class across 4260 heartbeats. The M7 instance
+(added in commit `867aa98550`), its standalone hello firmware
+(`tests/cm7-hello`, commit `c649249025`, with the DTCM-fingerprint fix
+`636f561896`), the unit test (`tests/m7-boot`, `e6b138636d`), and the
+integration test (`tests/parallel-boot` + `tests/run-all`, `90f73ba1fc`)
+all co-exist with the v1.0 A55+M33+Linux boot path without disturbing
+it. The default reset policy (machine-init-done BH releases each
+heterogeneous core whose ITCM has been populated by `-device loader`)
+held across the full run.
+
+This closes v1.x Step 2's deliverables: M7 CPU instance modelled,
+standalone firmware loadable, parallel boot validated, 36 h soak
+passed with zero anomalies, v1.0 regression intact.
+
+Steps 3–6 of the v1.x execution plan (M7-first / A-first reset
+sequencing scenarios, SCMI `CPU_ON` gating + Linux `imx-rproc`
+integration, lifecycle cycling, and the v1.x validation report) remain
+the gating work for the upstream qemu-arm@ submission. See
+[`known-limitations.md`](known-limitations.md) §5 for the step
+trajectory.
