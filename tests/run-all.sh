@@ -12,10 +12,12 @@
 #      (M7 hello firmware standalone)
 #   3. v1.x Step 2 integration: tests/parallel-boot/run.sh
 #      (A55 + M33 + M7 all up in parallel)
+#   4. v1.x Step 3 integration: tests/m7-first/run.sh
+#      (parallel-boot + assertion that SRC_GEN.SCR.M7MIX_RELEASE was
+#      written, proving the SM-driven release path also fired)
 #
-# Future v1.x steps will add tests/m7-first/run.sh,
-# tests/a-first/run.sh, and lifecycle/cohabitation tests; each gets
-# its own entry here.
+# Future v1.x steps will add tests/a-first/run.sh and lifecycle /
+# cohabitation tests; each gets its own entry here.
 #
 # Required artifacts (paths set via env vars):
 #   QEMU SM_ELF KERNEL DTB INITRD CM7_ELF
@@ -65,8 +67,17 @@ tests/parallel-boot/run.sh
 
 echo
 echo "============================================="
+echo "=== v1.x Step 3 integration:                ==="
+echo "===   tests/m7-first                        ==="
+echo "===   (SM-driven SRC.SCR.M7MIX-release path) ==="
+echo "============================================="
+tests/m7-first/run.sh
+
+echo
+echo "============================================="
 echo "All tests passed:"
 echo "  - v1.0 regression (A55 + M33 + Linux to userspace)"
 echo "  - v1.x Step 2 unit (M7 hello firmware)"
 echo "  - v1.x Step 2 integration (A55 + M33 + M7 parallel)"
+echo "  - v1.x Step 3 integration (SM-driven M7 release path)"
 echo "============================================="
