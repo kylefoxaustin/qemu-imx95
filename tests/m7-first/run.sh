@@ -20,11 +20,18 @@
 #      the M7MIX-release latch; sticky/locked per the i.MX 95 RM, so it
 #      will read 1 forever after the first SM-side write). THIS IS THE
 #      NEW STEP-3 SIGNAL - parallel-boot doesn't check it.
+#   5. Ordering: M7 fingerprint is visible BEFORE Linux reaches its
+#      PID-1 banner. Polled in parallel during boot, wall-clock-timed
+#      on the host. Caveat: with both release paths active (the
+#      machine-init-done BH AND the SM-driven SRC.SCR write), the BH
+#      path likely fires first - so this assertion really proves "M7
+#      came up well before A55", which is what Scenario 1 wants. To
+#      isolate the SM-driven path you'd disable the BH (future work).
 #
 # A "Scenario 1 vs Step 2" failure surfaces as #4 missing (the SM never
 # wrote the bit, even though M7 ran via the BH fallback). A regression
 # in v1.0 surfaces as #1 or #2 missing. A regression in v1.x Step 2
-# surfaces as #3 missing.
+# surfaces as #3 missing. A boot-ordering regression surfaces as #5.
 
 set -u
 
@@ -79,13 +86,31 @@ CMDLINE="earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1
     -monitor unix:"$SOCK",server,nowait \
     -daemonize -pidfile "$PIDFILE"
 
-# Wait up to 60s for Linux to reach userspace (slowest of the three
-# signals; M7 finishes in microseconds, SM banners during SCMI bring-up).
-echo "waiting for Linux userspace (up to 60s)..."
+# Parallel poll for the two ordering events: M7 fingerprint visible
+# via HMP `xp`, and Linux userspace banner visible in the serial log.
+# Both deadlines run on the same 60 s window; record the first-seen
+# wall-clock timestamp for each (high-resolution via date +%s.%N).
+#
+# nc -q 1 closes the client end after 1 s of stdin idle; we don't
+# send HMP "quit" here because we still need the monitor after this
+# loop for the final fingerprint + SCR readback.
+echo "polling for M7 fingerprint + Linux userspace (up to 60s)..."
+M7_TS=
+USERSPACE_TS=
 deadline=$(( $(date +%s) + 60 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    grep -q "=== imx95 busybox userspace ===" "$LOG" 2>/dev/null && break
-    sleep 1
+    if [ -z "$M7_TS" ]; then
+        out=$(echo "xp /1wx 0x20400000" \
+              | timeout 2 nc -U -q 1 "$SOCK" 2>&1 || true)
+        if echo "$out" | grep -qE '20400000: 0x[cC]0[fF][fF][eE][eE]07'; then
+            M7_TS=$(date +%s.%N)
+        fi
+    fi
+    if [ -z "$USERSPACE_TS" ] && grep -q "=== imx95 busybox userspace ===" "$LOG" 2>/dev/null; then
+        USERSPACE_TS=$(date +%s.%N)
+    fi
+    [ -n "$M7_TS" ] && [ -n "$USERSPACE_TS" ] && break
+    sleep 0.5
 done
 
 fail=0
@@ -152,8 +177,28 @@ case "$SCR" in
         ;;
 esac
 
+# Ordering assertion (Scenario 1): M7 must come up before Linux PID-1.
+# Both timestamps captured by the parallel-poll loop above. awk -v
+# arithmetic handles the sub-second float comparison portably.
+if [ -z "$M7_TS" ]; then
+    echo "FAIL: M7 fingerprint was never observed during the 60 s ordering poll"
+    fail=1
+elif [ -z "$USERSPACE_TS" ]; then
+    echo "FAIL: Linux userspace banner was never observed during the 60 s ordering poll"
+    fail=1
+else
+    delta=$(awk -v u="$USERSPACE_TS" -v m="$M7_TS" 'BEGIN{printf "%.2f", u - m}')
+    if awk -v u="$USERSPACE_TS" -v m="$M7_TS" 'BEGIN{exit !(m < u)}'; then
+        echo "PASS: M7 came up before Linux userspace (delta=${delta}s; m7=$M7_TS, userspace=$USERSPACE_TS)"
+    else
+        echo "FAIL: ordering violated - M7 fingerprint observed AFTER Linux userspace"
+        echo "      m7_ts=$M7_TS userspace_ts=$USERSPACE_TS delta=${delta}s"
+        fail=1
+    fi
+fi
+
 if [ "$fail" -eq 0 ]; then
-    echo "=== Scenario 1 (M7-first) verified: both M7 release paths fired, A55+M33+M7 all up ==="
+    echo "=== Scenario 1 (M7-first) verified: both M7 release paths fired, M7-before-A55 ordering held ==="
 else
     echo "=== tests/m7-first FAILED ==="
     exit 1
