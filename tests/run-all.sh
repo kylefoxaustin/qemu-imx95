@@ -14,7 +14,11 @@
 #      (A55 + M33 + M7 all up in parallel)
 #   4. v1.x Step 3 integration: tests/m7-first/run.sh
 #      (parallel-boot + assertion that SRC_GEN.SCR.M7MIX_RELEASE was
-#      written, proving the SM-driven release path also fired)
+#      written, proving the SM-driven release path also fired,
+#      plus an M7-before-Linux-userspace ordering assertion)
+#   5. v1.x boot-matrix: tests/m33-m7-only/run.sh
+#      (SM + M7 with no A55 cluster - fills the "M-side runs
+#      independently of Linux" matrix gap)
 #
 # Future v1.x steps will add tests/a-first/run.sh and lifecycle /
 # cohabitation tests; each gets its own entry here.
@@ -75,9 +79,18 @@ tests/m7-first/run.sh
 
 echo
 echo "============================================="
+echo "=== v1.x boot-matrix:                       ==="
+echo "===   tests/m33-m7-only                     ==="
+echo "===   (SM + M7, no A55 cluster)            ==="
+echo "============================================="
+tests/m33-m7-only/run.sh
+
+echo
+echo "============================================="
 echo "All tests passed:"
 echo "  - v1.0 regression (A55 + M33 + Linux to userspace)"
 echo "  - v1.x Step 2 unit (M7 hello firmware)"
 echo "  - v1.x Step 2 integration (A55 + M33 + M7 parallel)"
 echo "  - v1.x Step 3 integration (SM-driven M7 release path)"
+echo "  - v1.x boot-matrix (SM + M7, no A55)"
 echo "============================================="
