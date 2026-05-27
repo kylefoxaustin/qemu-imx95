@@ -22,16 +22,25 @@ upstream-mergeable into QEMU mainline.
 
 The i.MX 95 SoC has a heterogeneous CPU topology of **6× Cortex-A55** (the
 application cluster), **1× Cortex-M33** (the System Manager core), and
-**1× Cortex-M7** (the real-time domain). This machine currently models the
-**A55 cluster and the M33** — the latter runs the real NXP SM firmware and
-serves Linux's SCMI. The **Cortex-M7 is planned for v1.x and is the gating
-milestone for upstream submission**: the artifact landed at qemu-arm@ will
-represent the full i.MX 95 CPU complement, not a partial SoC. The v1.x M7
-scope is a Cortex-M7 TCG instance, TCM and DRAM-carveout regions, NVIC
-wiring, SCMI `CPU_ON` integration, a simple M7 test firmware, and a
-functional test demonstrating M7 boot. Customer-specific real-time
-peripherals (FlexCAN, TSN, audio DSP, etc.) remain further out, beyond the
-v1.x initial-M7 work. See
+**1× Cortex-M7** (the real-time domain). This machine models **all three**
+CPU complements; the M33 runs the real NXP SM firmware and serves Linux's
+SCMI, and the M7 is being added incrementally across the v1.x milestone —
+which **gates the upstream qemu-arm@ submission** so the artifact landed
+there represents the full i.MX 95 CPU complement, not a partial SoC.
+
+The v1.x M7 work is a six-step plan; the current state is:
+
+- **Step 2 done** — Cortex-M7 TCG instance, TCM regions (per
+  `imx_rproc_att_imx95_m7`), NVIC wiring, default parallel-reset policy,
+  standalone hello firmware (`tests/cm7-hello/`), unit test
+  (`tests/m7-boot/`), integration test (`tests/parallel-boot/`), and a
+  36 h+ parallel-CPU stability soak — all merged and validated.
+- **Steps 3–6 ahead** — M7-first / A-first reset sequencing scenarios,
+  SCMI `CPU_ON` gating + Linux `imx-rproc` integration, lifecycle
+  cycling, and the v1.x validation report.
+
+Customer-specific real-time peripherals (FlexCAN, TSN, audio DSP, etc.)
+remain further out, beyond the v1.x initial-M7 work. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -69,6 +78,13 @@ interactive prompt — still work.
   verified under sustained load).
 - 24 h stability run: stable memory, data-integrity md5 unchanged, no panics
   or SCMI timeouts.
+- **v1.x Step 2 (Cortex-M7) validated**: M7 instance modelled, runs
+  standalone firmware end-to-end (`tests/m7-boot/`), A55 + M33 + M7
+  parallel boot test passes (`tests/parallel-boot/`), and a
+  **36 h+ parallel-CPU stability soak completed with 0 panics, 0 SCMI
+  timeouts, 0 RCU stalls, 0 BUGs, and no memory leak**. SCMI-driven
+  start / Linux remoteproc integration / lifecycle cycling are Steps
+  3–6 of v1.x (ahead).
 - Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
   stub-only) characterized with precise failure points — see
   [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
