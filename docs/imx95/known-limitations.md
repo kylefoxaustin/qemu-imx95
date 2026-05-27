@@ -157,7 +157,7 @@ ahead:
 
 | Step | Scope | Status |
 | --- | --- | --- |
-| 2 | Cortex-M7 CPU instance + TCMs + NVIC + default parallel reset policy + standalone hello firmware + unit/integration tests | in progress |
+| 2 | Cortex-M7 CPU instance + TCMs + NVIC + default parallel reset policy + standalone hello firmware + unit/integration tests | **done** (36 h+ parallel-CPU soak passed 2026-05-25, zero anomalies) |
 | 3 | M7-first reset sequencing (Scenario 1: M7 released before the A-cluster) | ahead |
 | 4 | A-first → M7 via Linux remoteproc + SCMI `CPU_ON` + SM resource loading (Scenario 2) | ahead |
 | 5 | Lifecycle (SCMI `CPU_OFF`/`CPU_ON` cycling) + cohabitation under load | ahead |
