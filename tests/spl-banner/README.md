@@ -137,7 +137,7 @@ top of the unnamed-bus stack — see the comment in
 Pointing the payload at U-Boot proper (`u-boot.bin`) currently
 does *not* reach the U-Boot prompt: the SD read stalls at ~512 KiB
 into the 1.3 MiB transfer (still under investigation; tracked in
-TODO.md under "Before v0.3").
+`docs/imx95/todo.md` under "Before v0.3").
 
 ## Loading SPL via `-device loader`
 
