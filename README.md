@@ -3,6 +3,12 @@
 A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 (LPDDR5) variant.
 
+> **This is a fork of QEMU mainline.** The i.MX 95 work lives on the
+> `imx95-scaffold` branch, from its tip back to the upstream branch point
+> `edcc429e9e`; the vast majority of the ~129k-commit history is inherited
+> from upstream QEMU. The upstream QEMU README is preserved at
+> [`README.rst`](README.rst) — this file describes the i.MX 95-specific work.
+
 qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
 Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
 cluster's SCMI traffic. Intended use cases are BSP development, System Manager
