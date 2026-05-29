@@ -223,6 +223,16 @@ struct FslImx95State {
     IMXMUState              m7_sm_mu_b;
     MemoryRegion            m7_shmem;
     MemoryRegion            m7_shmem_b;
+    /*
+     * MU7: the A55<->M7 rpmsg notification mailbox (Linux cm7 remoteproc
+     * kicks through it). mu7_a is the Linux-side MUA @0x42430000 (IRQ ->
+     * GIC SPI 234); mu7_b is the M7-side MUB @0x42440000 (IRQ -> M7 NVIC
+     * 207). Peer-linked so a TR write on one lands in the other's RR and
+     * raises its RX interrupt; the vrings/buffers live in the 0x88000000
+     * carveout (ordinary DRAM, seen by both cores).
+     */
+    IMXMUState              mu7_a;
+    IMXMUState              mu7_b;
     IMX95ELEServerState     ele_server;
     /* ELE responder for the SM's elemu0 channel (0x47520000). */
     IMX95ELEServerState     ele_server0;
@@ -449,5 +459,13 @@ enum FslImx95Irqs {
  */
 #define FSL_IMX95_M7_SM_MU_M7_IRQ   205
 #define FSL_IMX95_M7_SM_MU_B_M33_IRQ 232
+
+/*
+ * MU7 (A55<->M7 rpmsg) interrupts. MUA is the Linux side: GIC SPI 234
+ * (= MU7_A_IRQn, matching the dtsi mu7 node). MUB is the M7 side: M7 NVIC
+ * 207 (= MU7_B_IRQn in MIMX95_COMMON.h).
+ */
+#define FSL_IMX95_MU7_A_IRQ         234
+#define FSL_IMX95_MU7_B_M7_IRQ      207
 
 #endif /* FSL_IMX95_H */
