@@ -209,6 +209,20 @@ struct FslImx95State {
      * iterate them cleanly without hanging on TX-empty polls.
      */
     IMXMUState              stub_mu[6];
+    /*
+     * M7<->SM SCMI-over-SMT channel (MUI_A5), the mirror of the A55<->SM
+     * MU2 cross-connect above for the M7's SCMI agent. m7_sm_mu is the
+     * M7-side MUA @0x44610000; m7_sm_mu_b is the SM-side MUB @0x44620000,
+     * peer-linked to it with its IRQ routed to the M33 NVIC. m7_shmem is
+     * the 1 KiB SMT shared-memory page at MUA+0x1000 (0x44611000), with
+     * m7_shmem_b aliasing the same RAM at MUB+0x1000 (0x44621000) so both
+     * sides exchange messages through one buffer. The SM brings this MU up
+     * eagerly in LMM_Init and waits interrupt-driven for the M7's doorbell.
+     */
+    IMXMUState              m7_sm_mu;
+    IMXMUState              m7_sm_mu_b;
+    MemoryRegion            m7_shmem;
+    MemoryRegion            m7_shmem_b;
     IMX95ELEServerState     ele_server;
     /* ELE responder for the SM's elemu0 channel (0x47520000). */
     IMX95ELEServerState     ele_server0;
@@ -423,5 +437,17 @@ enum FslImx95Irqs {
  * doorbells on its side of MU2.
  */
 #define FSL_IMX95_SM_MU_B_M33_IRQ   227
+
+/*
+ * MUI_A5 (the M7<->SM SCMI channel) interrupt numbers, from the SM's
+ * MIMX95 device header (MIMX95_COMMON.h IRQn enum):
+ *   - MU5_A_IRQn = 205: the M7-side IRQ, raised on the M7's NVIC when the
+ *     SM rings its doorbell back (m7_sm_mu @0x44610000 -> M7).
+ *   - MU5_B_IRQn = 232: the SM-side IRQ, raised on the M33's NVIC when the
+ *     M7 rings its doorbell (m7_sm_mu_b @0x44620000 -> M33). The SM enables
+ *     this in MB_MU_Init for MU9 and dispatches SCMI from its handler.
+ */
+#define FSL_IMX95_M7_SM_MU_M7_IRQ   205
+#define FSL_IMX95_M7_SM_MU_B_M33_IRQ 232
 
 #endif /* FSL_IMX95_H */

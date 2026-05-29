@@ -325,12 +325,15 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
      * create_unimplemented_device is a low-priority background, so the
      * cpu-sema RAM at 0x44231000 still overrides inside 0x44230000.
      * Addresses from the M33_ENUM enumeration of the config-op phase; the
-     * real SCMI MU (0x445c0000) is intentionally absent (it is sm_mu_b).
+     * real SCMI MUs (0x445c0000 = sm_mu_b, 0x44620000 = m7_sm_mu_b) are
+     * intentionally absent - the SM's eager LMM_Init touches 0x44620000 as
+     * MU9/MU5_B, so the real MU + its SMT alias at 0x44621000 must own that
+     * window, not a dead logging stub.
      */
     {
         static const uint64_t sm_cfgop_regions[] = {
             0x42460000, 0x42470000, 0x42810000, 0x44230000, 0x44280000,
-            0x44620000, 0x49000000, 0x49010000, 0x49020000, 0x49060000,
+            0x49000000, 0x49010000, 0x49020000, 0x49060000,
             0x4ac40000, 0x4ac50000, 0x4aff0000, 0x4b040000, 0x4b050000,
             0x4c040000, 0x4c050000, 0x4c440000, 0x4c450000, 0x4c840000,
             0x4c850000, 0x4d810000, 0x4d840000, 0x4d850000,
@@ -911,6 +914,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * MUI_A5 @0x44610000 - the M7-side MUA of the M7<->SM SCMI channel.
+     * Realised + mapped here so the window exists; its peer (MUB), the
+     * SMT shared-memory page, and both cores' IRQs are wired in one block
+     * after the M33 and M7 are realised (see the M7 cross-connect below).
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->m7_sm_mu), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->m7_sm_mu), 0, 0x44610000);
+
+    /*
      * Wire the second ELE responder to the stub MU at 0x47550000.
      * imx9_probe_mu() in U-Boot proper (SCMI variant, arch/arm/
      * mach-imx/imx9/scmi/soc.c:1953) hard-codes "mailbox@47550000" as
@@ -1213,6 +1227,51 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * M7<->SM SCMI channel cross-connect (MUI_A5), the mirror of the MU2
+     * block above. m7_sm_mu (MUA @0x44610000) is already mapped; here we
+     * route its IRQ to the M7's NVIC, instantiate the SM-side MUB
+     * (@0x44620000, = MUA + 0x10000) with its IRQ on the M33's NVIC, peer
+     * the two, and back the SMT shared-memory page. The M7 rings its
+     * doorbell on MUA -> GIP latches on MUB -> M33 MU5_B IRQ -> the SM's
+     * MB_MU_Handler services MU9 and replies on MUB -> GIP on MUA -> M7
+     * MU5_A IRQ. The SM already brought MU9 up in LMM_Init and is waiting.
+     * Done after both cores are realised so their NVIC inputs exist.
+     */
+    {
+        IMXMUState *mub = &s->m7_sm_mu_b;
+        hwaddr mua_base = 0x44610000;
+        hwaddr mub_base = mua_base + 0x10000;     /* 0x44620000 */
+        hwaddr shmem    = mua_base + 0x1000;      /* 0x44611000 */
+        hwaddr shmem_b  = mub_base + 0x1000;      /* 0x44621000 */
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->m7_sm_mu), 0,
+            qdev_get_gpio_in(DEVICE(&s->m7), FSL_IMX95_M7_SM_MU_M7_IRQ));
+
+        object_initialize_child(OBJECT(s), "m7_sm_mu_b", mub, TYPE_IMX_MU);
+        if (!sysbus_realize(SYS_BUS_DEVICE(mub), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(mub), 0, mub_base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(mub), 0,
+            qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_M7_SM_MU_B_M33_IRQ));
+        imx_mu_set_peer(&s->m7_sm_mu, mub);
+
+        /*
+         * 1 KiB SMT page at MUA+0x1000, aliased to MUB+0x1000 so both sides
+         * share one buffer. The SM's three MU9 SCMI channels live at
+         * +0x000/+0x080/+0x100 within it (SM_MB_MU_BUF_SIZE = 128), well
+         * inside the page.
+         */
+        memory_region_init_ram(&s->m7_shmem, OBJECT(s), "imx95-m7-shmem",
+                               1 * KiB, &error_fatal);
+        memory_region_add_subregion(get_system_memory(), shmem, &s->m7_shmem);
+        memory_region_init_alias(&s->m7_shmem_b, OBJECT(s), "imx95-m7-shmem-b",
+                                 &s->m7_shmem, 0, 1 * KiB);
+        memory_region_add_subregion(get_system_memory(), shmem_b,
+                                    &s->m7_shmem_b);
+    }
+
+    /*
      * Register the M33 and M7 auto-start checks from a machine-done
      * notifier so their reset hooks are installed AFTER the generic
      * -device loader's, and therefore run after the firmware images
@@ -1247,6 +1306,7 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("stub_mu%d", i);
         object_initialize_child(obj, name, &s->stub_mu[i], TYPE_IMX_MU);
     }
+    object_initialize_child(obj, "m7_sm_mu", &s->m7_sm_mu, TYPE_IMX_MU);
     object_initialize_child(obj, "ele-server", &s->ele_server,
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server0", &s->ele_server0,
