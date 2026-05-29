@@ -159,13 +159,60 @@ ahead:
 | --- | --- | --- |
 | 2 | Cortex-M7 CPU instance + TCMs + NVIC + default parallel reset policy + standalone hello firmware + unit/integration tests | **done** (36 h+ parallel-CPU soak passed 2026-05-25, zero anomalies) |
 | 3 | M7-first reset sequencing (Scenario 1: M7 released before the A-cluster) | **done** (SRC.SCR.M7MIX-release latch + machine wiring + `tests/m7-first` integration test; 36 h stability soak passed 2026-05-28, zero anomalies, RSS stable, SRC.SCR latch sticky) |
-| 4 | A-first → M7 via Linux remoteproc + SCMI `CPU_ON` + SM resource loading (Scenario 2) | ahead — known prereq: Linux `imx-rproc` bails at `imx_rproc_addr_init` with ENOMEM trying to ioremap the `rsc_table` carveout because the DTS declares it as a `size=0` reserved-memory node |
+| 4 | SM boots the M7 (real FreeRTOS) before the A-cluster; Linux `imx-rproc` **attaches** to the SM-managed core; full M7↔Linux rpmsg round-trip (Scenario 2) | **done** — see "M7 lifecycle — SM-orchestrated, Linux-attached" below; verified end-to-end with the stock NXP `imx_rpmsg_pingpong` 100-message exchange |
 | 5 | Lifecycle (SCMI `CPU_OFF`/`CPU_ON` cycling) + cohabitation under load | ahead |
 | 6 | Docs polish + v1.x validation report | ahead |
 
 Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
 audio DSP, etc.) remains future scope beyond initial M7 support — none of
 these are required for the M7 to demonstrate execution.
+
+### M7 lifecycle — SM-orchestrated, Linux-attached
+
+Unlike a generic remoteproc model where Linux owns the M-core lifecycle,
+**the i.MX 95 System Manager boots the M7 before the A-cluster** (per the
+SM board configuration `imx-sm/configs/mx95evk.cfg`: `LM1 M7 boot=2`,
+`LM2 AP/Linux boot=3`). The AP logical machine does not own the M7 LM, so
+Linux cannot start the M7; it only **attaches** to the already-running,
+SM-managed core.
+
+Linux's `imx_rproc` driver attaches via the LMM protocol:
+
+```
+imx-rproc imx95-cm7: lmm(1) not under Linux Control
+```
+
+This is the normal Linux-side behaviour on this board, not an error. (An
+earlier draft of this section attributed the Step 4 probe failure to a
+`size=0` `rsc_table` reserved-memory node; that hypothesis was wrong. The
+real blocker was initrd/DTB **placement**: `arm_load_kernel` landed the
+initrd at loader+128 MiB = `0x88000000` and the DTB just above it —
+exactly the M7 remoteproc carveout — so the no-map reserved-memory pass
+returned `-EBUSY`, the page stayed linear-mapped, and `ioremap` refused
+it with `-ENOMEM`. The fix presets the board's initrd start clear of the
+carveout.)
+
+The M7 firmware itself is an SCMI agent: the M7's first act after reset
+is an SCMI handshake with the SM via MU9 (modelled as the MUI_A5
+cross-connect in `hw/misc/imx_mu.c`). This is in addition to the A55↔SM
+SCMI channel via MU2.
+
+Once the M7 is running, Linux's `imx_rproc` and the M7's rpmsg-lite
+client communicate over the modelled MU7 cross-connect for kick
+notifications, with payload exchange via shared vrings in the M7 DRAM
+carveout (`0x88000000`). This is the standard OpenAMP architecture:
+mailbox notifies, shared memory carries data.
+
+Verified end-to-end with the stock NXP `imx_rpmsg_pingpong` kernel module
+performing a 100-message ping/pong exchange in a full A55+M33+M7 boot.
+
+**Known unknown (deferred to a later milestone):** MU TR/RR
+back-pressure — what real i.MX 95 hardware does when `TR` is written
+while `RR` is already full. The current model overwrites silently. The
+tested workload (rpmsg-pingpong) does not exercise this case because the
+receiver drains `RR` before the sender can issue another kick; the
+correct guard behaviour needs reference-manual review before it is
+modelled.
 
 ### A note on the M7 fingerprint address
 
@@ -192,15 +239,13 @@ upstream remoteproc driver uses to deposit firmware *into* the M7.
 The full Linux-remoteproc protocol — which uses `rsc_table` to
 negotiate memory regions, virtio devices and trace buffers between
 Linux and the M-core — is **not** implemented in the Step 2 hello
-firmware. That belongs to the Step 4 A-first → M7 scenario, where
-Linux's `imx-rproc` driver loads and starts the M7 firmware via SCMI
-and expects a valid resource table at the DTS address.
+firmware. That belongs to the Step 4 scenario above, where the SM boots
+the real FreeRTOS M7 firmware and Linux's `imx_rproc` driver **attaches**
+to the already-running core (it does not start it) and reads the
+resource table the firmware publishes at the DTS address.
 
-Until the v1.x steps above complete: SCMI-driven CPU_ON for the M7 is
-not yet wired (a loaded M7 firmware starts at machine-init-done under
-the default parallel reset policy), and Linux's `imx-rproc` will not
-find a running M7 unless the firmware implements the resource-table
-contract above.
+Step 4 wires this end-to-end; the remaining v1.x work is lifecycle
+(SCMI `CPU_OFF`/`CPU_ON` cycling, Step 5) and docs polish (Step 6).
 
 ---
 
