@@ -35,13 +35,14 @@ The v1.x M7 work is a six-step plan; the current state is:
   standalone hello firmware (`tests/cm7-hello/`), unit test
   (`tests/m7-boot/`), integration test (`tests/parallel-boot/`), and a
   36 h+ parallel-CPU stability soak — all merged and validated.
-- **Step 3 implemented** — silicon-faithful M7 release path: the SM's
+- **Step 3 done** — silicon-faithful M7 release path: the SM's
   `DEV_SM_CpuStart(M7)` writes `SRC_GEN.SCR.M7MIX_RELEASE` (bit 12 at
   `0x44460010`), our SRC model emulates the sticky-bit semantics and
   raises a named gpio-out, the machine wiring schedules a BH that
   releases the M7 CPU. New integration test `tests/m7-first/` asserts
   the SM-driven path actually fired (not the machine-init-done BH
-  fallback). 36 h stability soak in progress.
+  fallback). 36 h stability soak passed 2026-05-28 (zero anomalies,
+  RSS stable, SRC.SCR latch sticky throughout).
 - **Steps 4–6 ahead** — A-first → M7 via Linux remoteproc + SCMI
   `CPU_ON` + SM resource loading, lifecycle (`CPU_OFF`/`CPU_ON`)
   cycling, and the v1.x validation report.
@@ -90,12 +91,12 @@ interactive prompt — still work.
   parallel boot test passes (`tests/parallel-boot/`), and a
   **36 h+ parallel-CPU stability soak completed with 0 panics, 0 SCMI
   timeouts, 0 RCU stalls, 0 BUGs, and no memory leak**.
-- **v1.x Step 3 (SM-driven M7 release) implemented**: `SRC_GEN.SCR`
+- **v1.x Step 3 (SM-driven M7 release) done**: `SRC_GEN.SCR`
   M7MIX-release latch + machine wiring + `tests/m7-first/` integration
-  test. The Step-3 36 h stability soak is in progress; once it
-  completes the milestone will be tagged and the upstream submission
-  picked up. Steps 4–6 (remoteproc integration / lifecycle cycling /
-  validation report) remain ahead.
+  test. The Step-3 36 h stability soak passed 2026-05-28 (4154
+  heartbeats, 0 panics/SCMI-timeouts/RCU-stalls/BUGs, RSS stable
+  299→329 MB, SRC.SCR bit12 sticky throughout). Steps 4–6 (remoteproc
+  integration / lifecycle cycling / validation report) remain ahead.
 - Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
   stub-only) characterized with precise failure points — see
   [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
