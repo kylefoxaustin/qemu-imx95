@@ -150,8 +150,17 @@ static uint64_t imx_mu_read(void *opaque, hwaddr offset, unsigned size)
          * so the next sender can re-queue. The SCMI transport doesn't
          * rely on this in v0.1, but it matches the documented HW
          * behaviour and lets the U-Boot probe drain pending data.
+         *
+         * For a peer-linked MU this completes the TX handshake: the word
+         * was delivered into RR[n] by the peer's TR[n] write (which left
+         * the peer's TSR.TEn clear), so draining it re-asserts the peer's
+         * TX-empty and lets a blocked mbox send finish.
          */
         s->rsr &= ~IMX_MU_V2_BIT(idx);
+        if (s->peer) {
+            s->peer->tsr |= IMX_MU_V2_BIT(idx);
+            imx_mu_update_irq(s->peer);
+        }
         imx_mu_update_irq(s);
         return value;
     }
@@ -218,16 +227,24 @@ static void imx_mu_write(void *opaque, hwaddr offset,
         unsigned idx = (offset - IMX_MU_TR_BASE) / 4;
         s->tr[idx] = value;
         /*
-         * Writing TR[n] clears TSR.TEn (TX empty). If a TR-write
-         * handler is registered, it consumes the word synchronously
-         * and we re-set TEn so subsequent writes to the same slot
-         * succeed without polling. Absent a handler the slot stays
-         * "full" forever, which is correct for an unattached MU.
+         * Writing TR[n] clears TSR.TEn (TX empty). Three delivery modes:
+         *  - TR-write handler (C-stub responders): consumes the word
+         *    synchronously and we re-set TEn so the next write succeeds
+         *    without polling.
+         *  - peer linked (the other side of a real MU, e.g. the A55<->M7
+         *    rpmsg channel on MU7): deliver the word into the peer's RR[n]
+         *    and raise its RX interrupt. TEn stays clear until the peer
+         *    reads RR[n] (see the RR read path), which is the real MU TX
+         *    full/empty handshake the imx-mailbox driver waits on.
+         *  - neither (unattached MU): the slot stays "full" forever, which
+         *    is correct for a mailbox with nothing on the far side.
          */
         s->tsr &= ~IMX_MU_V2_BIT(idx);
         if (s->tr_write_handler) {
             s->tr_write_handler(s->tr_write_opaque, idx, value);
             s->tsr |= IMX_MU_V2_BIT(idx);
+        } else if (s->peer) {
+            imx_mu_deliver_rr(s->peer, idx, (uint32_t)value);
         }
         imx_mu_update_irq(s);
         return;
