@@ -15,7 +15,7 @@ Structural and stylistic conventions follow the upstream i.MX 8MP code
 (`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`); the long-term aim is to be
 upstream-mergeable into QEMU mainline.
 
-**Maintainer:** Kyle Fox &lt;@kylefoxaustin&gt;
+**Maintainer:** Kyle Fox ([@kylefoxaustin](https://github.com/kylefoxaustin))
 (see [`MAINTAINERS`](MAINTAINERS) for the canonical entry).
 
 ## Scope: what's modelled and what's deferred
