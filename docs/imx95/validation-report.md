@@ -24,7 +24,7 @@ stranger would have, and turned three "we don't know if X works" items into
 | 1.1 | Fresh-clone reproducibility (same machine) | PASS |
 | 1.2 | Fresh-clone reproducibility (different env, clean container) | PASS — **bug found + fixed** |
 | 1.3 | BusyBox initramfs interactive shell | PASS — **bug found + fixed** |
-| 1.4 | 24 h stability run | IN PROGRESS (healthy in progress) |
+| 1.4 | 24 h stability run | PASS (ran to ~36 h, recorded below 2026-05-23) |
 | 2.1 | Different kernel (×3) | PASS |
 | 2.2 | Different DTB variant (15×15 EVK) | PARTIAL (expected) |
 | 2.3 | Larger initramfs + fuller (glibc-dynamic) userspace | PASS |
@@ -92,11 +92,13 @@ Deeper stress: 300 fork/execs, 10 rapid DVFS `scaling_setspeed` changes
 extensive `/proc` and `/sys` reads — all clean, 0 panics, 0 RCU stalls,
 0 SCMI timeouts.
 
-**1.4 24 h stability — in progress.** Detached run, heartbeat every ~30 s
+**1.4 24 h stability — PASS.** Detached run, heartbeat every ~30 s
 recording `MemAvailable`, an md5 over a 4 MiB scratch file, and the current
-A55 cpufreq. At the time of writing, ~7 h in: MemAvailable stable (no leak),
-md5 stable across all heartbeats (data integrity), 0 panics/SCMI-timeouts/
-RCU/BUGs. Analysis will be appended once it completes.
+A55 cpufreq. The run completed cleanly, going past its 24 h target to
+~36 h — full final-state analysis is recorded below under
+["v1.0 stability soak — PASSED (recorded 2026-05-23)"](#v10-stability-soak--passed-recorded-2026-05-23):
+MemAvailable stable (no leak), md5 stable across all 4274 heartbeats
+(data integrity), 0 panics/SCMI-timeouts/RCU/BUGs.
 
 ---
 
