@@ -101,8 +101,18 @@ interactive prompt — still work.
   M7MIX-release latch + machine wiring + `tests/m7-first/` integration
   test. The Step-3 36 h stability soak passed 2026-05-28 (4154
   heartbeats, 0 panics/SCMI-timeouts/RCU-stalls/BUGs, RSS stable
-  299→329 MB, SRC.SCR bit12 sticky throughout). Steps 4–6 (remoteproc
-  integration / lifecycle cycling / validation report) remain ahead.
+  299→329 MB, SRC.SCR bit12 sticky throughout).
+- **v1.x Step 4 (SM-orchestrated M7 + rpmsg) done**: the SM boots the
+  M7 running real FreeRTOS firmware before the A-cluster, and Linux's
+  `imx_rproc` driver attaches to the SM-managed core (it does not start
+  it — the SM owns the M7 lifecycle on this board). The stock NXP
+  `imx_rpmsg_pingpong` kernel module performs a full **100-message
+  ping/pong exchange** with the M7 over the modelled MU7 cross-connect
+  (kicks) and shared vrings (payload) in a full A55 + M33 + M7 boot.
+  This also surfaced a generic ARMv7-M PMSAv7 MPU fix in
+  `target/arm/ptw.c` (misaligned region base now aligned down to match
+  Cortex-M silicon, rather than dropped). Steps 5–6 (lifecycle cycling /
+  validation report) remain ahead.
 - Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
   stub-only) characterized with precise failure points — see
   [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
