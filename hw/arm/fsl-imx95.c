@@ -290,7 +290,7 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
             uint64_t addr;
             const char *name;
         } linux_mus[] = {
-            { 0x42430000, "mu7" },
+            /* mu7 (0x42430000) is a real cross-connect to the M7, below. */
             { 0x42730000, "mu8" },
             { 0x44220000, "mu1" },
             { 0x445d0000, "mu3" },
@@ -1272,6 +1272,40 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * MU7: the A55<->M7 rpmsg notification mailbox. Linux's cm7 remoteproc
+     * kicks the M7 by writing the virtqueue id into mu7's TR register
+     * (mbox "tx" = <&mu7 0 1>); the M7's rpmsg_lite ISR reads it from RR on
+     * its side and vice-versa. Unlike the SCMI MUs (doorbell + shared SMT
+     * page) this channel carries data in TR/RR, which imx_mu forwards
+     * across the peer link. No tr-write handler here - the peer link is the
+     * consumer. Both endpoints are real IMX_MU: mu7_a (MUA @0x42430000,
+     * Linux side, IRQ -> GIC SPI 234) and mu7_b (MUB @0x42440000, M7 side,
+     * IRQ -> M7 NVIC 207). The vrings/buffers sit in the 0x88000000
+     * carveout, ordinary DRAM both cores already see. Done after the M7 is
+     * realised so its NVIC input exists.
+     */
+    {
+        SysBusDevice *mua = SYS_BUS_DEVICE(&s->mu7_a);
+        SysBusDevice *mub = SYS_BUS_DEVICE(&s->mu7_b);
+
+        if (!sysbus_realize(mua, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mua, 0, 0x42430000);
+        sysbus_connect_irq(mua, 0,
+            qdev_get_gpio_in(gicdev, FSL_IMX95_MU7_A_IRQ));
+
+        if (!sysbus_realize(mub, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mub, 0, 0x42440000);
+        sysbus_connect_irq(mub, 0,
+            qdev_get_gpio_in(DEVICE(&s->m7), FSL_IMX95_MU7_B_M7_IRQ));
+
+        imx_mu_set_peer(&s->mu7_a, &s->mu7_b);
+    }
+
+    /*
      * Register the M33 and M7 auto-start checks from a machine-done
      * notifier so their reset hooks are installed AFTER the generic
      * -device loader's, and therefore run after the firmware images
@@ -1307,6 +1341,8 @@ static void fsl_imx95_init(Object *obj)
         object_initialize_child(obj, name, &s->stub_mu[i], TYPE_IMX_MU);
     }
     object_initialize_child(obj, "m7_sm_mu", &s->m7_sm_mu, TYPE_IMX_MU);
+    object_initialize_child(obj, "mu7_a", &s->mu7_a, TYPE_IMX_MU);
+    object_initialize_child(obj, "mu7_b", &s->mu7_b, TYPE_IMX_MU);
     object_initialize_child(obj, "ele-server", &s->ele_server,
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server0", &s->ele_server0,
