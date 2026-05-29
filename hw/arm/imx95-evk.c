@@ -41,6 +41,18 @@ static void imx95_evk_init(MachineState *machine)
         .board_id     = -1,
         .ram_size     = machine->ram_size,
         .psci_conduit = QEMU_PSCI_CONDUIT_SMC,
+        /*
+         * The default arm_load_kernel() heuristic lands the initrd (and the
+         * DTB right after it) at loader_start + 128 MiB == 0x88000000. That
+         * is exactly where the NXP BSP device tree places the Cortex-M7
+         * remoteproc carveout (vdev vrings + rsc-table @0x88220000). The
+         * collision makes Linux reserve those pages for the initrd/FDT, so
+         * the later reserved-memory no-map pass fails (-EBUSY) and imx-rproc
+         * cannot ioremap the rsc-table (probe fails with -ENOMEM). Force the
+         * initrd/DTB up to 0x90000000, in the free gap above the M7 carveout
+         * and below the GPU/VPU carveouts at 0xa0000000.
+         */
+        .initrd_start = FSL_IMX95_RAM_START + 256 * MiB,
     };
 
     s = FSL_IMX95(object_new(TYPE_FSL_IMX95));
