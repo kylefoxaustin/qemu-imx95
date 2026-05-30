@@ -263,6 +263,8 @@ struct FslImx95State {
     DeviceState            *gpc;
     /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
     DeviceState            *src;
+    /* BLK_CTRL_S_AONMIX - M7 CPU-WAIT gate (SM-managed M7 lifecycle). */
+    DeviceState            *aonmix;
     /* ANATOP/PLL - SM DVFS PLL lock + DFS status (A55 perf level). */
     DeviceState            *anatop;
 
@@ -467,5 +469,16 @@ enum FslImx95Irqs {
  */
 #define FSL_IMX95_MU7_A_IRQ         234
 #define FSL_IMX95_MU7_B_M7_IRQ      207
+
+/*
+ * M33 NVIC inputs for the Cortex-M7 fault/reset sources the SRC routes to
+ * the System Manager (MIMX95_COMMON.h IRQn enum). When the M7 asserts
+ * SYSRESETREQ (or locks up) the SM takes the fault and, for an LM with
+ * reaction=lm_reset (the M7 LM on mx95evk), cold-resets the M7 LM via the
+ * SRC M7 mix-slice. We wire the M7's NVIC SYSRESETREQ gpio-out to
+ * CM7_SYSRESETREQ_IRQn so the real SM firmware drives the recovery.
+ */
+#define FSL_IMX95_M7_SYSRESETREQ_M33_IRQ 167
+#define FSL_IMX95_M7_LOCKUP_M33_IRQ      168
 
 #endif /* FSL_IMX95_H */
