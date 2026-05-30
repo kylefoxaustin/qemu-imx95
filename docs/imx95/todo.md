@@ -157,6 +157,17 @@ prereq pass; both are now done. The remainder are v0.4 prereqs.)
 These are fabricated values that don't break current functionality
 but a maintainer will flag in review.
 
+- **SRC `RSTR_STAT` mirror — confirm uniform slice semantics.** The
+  v1.x M7 fault-recovery model mirrors all four
+  `SLICE_SW_CTRL.RST_RSTR[3:0]` → `RSTR_STAT.RST_STAT[3:0]` bits
+  instantly, for every slice (`hw/misc/imx95_src.c`). This assumes
+  every reset slice tracks identically with no acknowledgement delay
+  or differential behaviour. Cross-check the i.MX 95 RM "SRC reset
+  slice" semantics: if any slice specifies a tracking delay or differs,
+  the mirror needs slice-specific handling. ~30 min RM read; if the RM
+  is ambiguous, leave it as a documented known-unknown. Not blocking
+  (the SM's M7 LM-reset path works with the uniform mirror).
+
 - **OCRAM-A total size.** `FSL_IMX95_OCRAM` covers
   `0x20480000-0x204DFFFF` (384 KiB), sized to fit U-Boot SPL's
   TEXT base through its BSS+stack. The Linux DTS only exposes a
