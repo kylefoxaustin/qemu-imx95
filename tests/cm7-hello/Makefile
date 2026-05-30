@@ -18,18 +18,27 @@ CPU_FLAGS := -mcpu=cortex-m7 -mthumb -mfloat-abi=soft
 CFLAGS    := $(CPU_FLAGS) -ffreestanding -nostdlib -nostartfiles \
              -Wall -Wextra -O2 -g
 LDFLAGS   := $(CPU_FLAGS) -T cm7.ld -nostdlib -nostartfiles \
-             -Wl,--gc-sections -Wl,-Map=cm7_image.map
+             -Wl,--gc-sections
 
 OBJS := startup.o main.o
 
 .PHONY: all info clean
 
-all: cm7_image.elf cm7_image.bin
+all: cm7_image.elf cm7_image.bin cm7_fault.elf cm7_fault.bin
 
 cm7_image.elf: $(OBJS) cm7.ld
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(CC) $(LDFLAGS) -Wl,-Map=cm7_image.map -o $@ $(OBJS)
 
 cm7_image.bin: cm7_image.elf
+	$(OBJCOPY) -O binary $< $@
+
+# Fault-recovery fixture (v1.x Step 5): self-faults via SYSRESETREQ on the
+# first boot so the SM cold-resets the M7 LM; bumps a DTCM boot counter so
+# the A55-side test can confirm the cycle happened.
+cm7_fault.elf: startup.o main_fault.o cm7.ld
+	$(CC) $(LDFLAGS) -Wl,-Map=cm7_fault.map -o $@ startup.o main_fault.o
+
+cm7_fault.bin: cm7_fault.elf
 	$(OBJCOPY) -O binary $< $@
 
 %.o: %.S
@@ -45,4 +54,5 @@ info: cm7_image.elf
 	@$(READELF) -S $< | grep -E "Name|\.vectors|\.text|\.data|\.bss"
 
 clean:
-	rm -f *.o cm7_image.elf cm7_image.bin cm7_image.map
+	rm -f *.o cm7_image.elf cm7_image.bin cm7_image.map \
+	      cm7_fault.elf cm7_fault.bin cm7_fault.map
