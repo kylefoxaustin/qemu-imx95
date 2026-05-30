@@ -266,7 +266,9 @@ on the live default branch, and `gh repo view --json repositoryTopics` showed
 the repo was clean and current. Acting on the rendered page would have "fixed"
 three non-problems and missed that the cache simply needed a new commit to bust.
 Same rule as everywhere else here: measure the source of truth (git, the API),
-not a cached view of it.
+not a cached view of it. The reviewer-facing version of this — including the
+concrete blob-URL-vs-root-URL cache workaround for fresh-eyes passes — is in
+[`reviewer-discipline.md`](reviewer-discipline.md).
 
 ---
 
