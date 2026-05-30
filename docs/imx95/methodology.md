@@ -239,6 +239,37 @@ number is the pin number, the vector index is offset.
 
 ---
 
+## Presentation drifts separately from code — and verify "regressions" against ground truth
+
+Code, tests, and `docs/imx95/` stay consistent through development because they
+are part of the working codebase — you touch them to make changes. Two classes
+of artifact do **not** get touched by normal development and so drift behind
+reality at milestone boundaries:
+
+- **Outside-the-codebase metadata.** GitHub Releases, the "Latest" badge, repo
+  topics, the project description. Tagging a milestone doesn't promote a
+  Release; that's a separate manual step. After each milestone tag, promote the
+  tag to a Release and move "Latest" — or the front page shows a stale version
+  as the newest visible state, which directly undercuts a cover letter's claims.
+- **Summary sections that per-step edits skip.** A README's "What runs today"
+  bullet list got a new entry each step, but the higher-level "Scope" *summary*
+  — written once, early — kept saying "Steps 4–6 ahead" long after they shipped.
+  The detailed list and the summary disagreed. Re-read the *summaries*, not just
+  the change-logs, at each milestone.
+
+A companion discipline learned the same pass: **a "regression" seen on a
+rendered page is a hypothesis — verify it against the git content, not the
+HTML.** A fresh-eyes review reported a personal email back in the README, the
+"Latest" release reverted, and topics missing. All three were GitHub
+**CDN/render-cache** artifacts: `git grep` over tracked files, `gh api .../contents`
+on the live default branch, and `gh repo view --json repositoryTopics` showed
+the repo was clean and current. Acting on the rendered page would have "fixed"
+three non-problems and missed that the cache simply needed a new commit to bust.
+Same rule as everywhere else here: measure the source of truth (git, the API),
+not a cached view of it.
+
+---
+
 ## Authority: BSP over guesswork, generated config over prose
 
 Addresses and IRQ numbers come from the NXP BSP — the Linux DTS for peripherals
