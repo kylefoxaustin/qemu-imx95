@@ -121,6 +121,9 @@ config IMX95_GPC
 config IMX95_SRC
     bool
 
+config IMX95_AONMIX
+    bool
+
 config IMX95_ANATOP
     bool
 
