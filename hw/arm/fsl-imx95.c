@@ -249,7 +249,8 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
     static const int unimplemented_regions[] = {
         FSL_IMX95_CCM, FSL_IMX95_IOMUXC,
         FSL_IMX95_TRDC_AON,
-        FSL_IMX95_BLK_CTRL_S_AONMIX, FSL_IMX95_BLK_CTRL_NS_ANOMIX,
+        /* BLK_CTRL_S_AONMIX has a real model (M7 CPU-WAIT gate) below. */
+        FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
@@ -445,6 +446,56 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
  * generic -device loader commits its ROM blob during the reset, after any
  * reset hook a device could register).
  */
+/*
+ * Boot-ROM handover (v1.x Step 5). On silicon the boot ROM loads each LM's
+ * image and records it in a handover table the SM reads at startup
+ * (DEV_SM_RomBootCpuGet via LMM_CpuInit) to learn which cores it owns and
+ * their boot vectors - which is what lets the SM boot, manage and
+ * fault-recover them. Our flow loads the M7 image directly (-device loader),
+ * bypassing the ROM, so we fabricate a minimal handover with a single M7
+ * EXEC entry. That makes LMM_CpuInit set s_bootFlags[M7], so the SM boots
+ * the M7 via LMM_CpuStart - releasing CPUWAIT through our AONMIX model and
+ * enabling the CM7_SYSRESETREQ fault IRQ. M7-only by design: the A55 boots
+ * outside the SM's LMM path, so leaving its handover absent doesn't perturb
+ * it (its s_bootFlags stays 0, exactly as before).
+ *
+ * The blob lives at 0x2003dc00 in the M33's DTCM, which is the SM's
+ * __StackTop - reserved DTCM above the stack the SM never writes, exactly
+ * where the ROM places it on hardware. Written here (M33 release time) so it
+ * is in place before the SM runs LMM_CpuInit, and only when M7 firmware was
+ * actually staged.
+ */
+#define M7_HANDOVER_DTCM_OFFSET (0x2003dc00ULL - FSL_IMX95_M33_DTCM_BASE)
+#define M7_HANDOVER_BARKER      0xc0ffee16u
+#define M7_HANDOVER_VER         0x0002u
+#define M7_HANDOVER_SIZE        0x0100u
+/*
+ * img->flags: bits[7:0] = cpu (M7 = CPU_IDX_M7P = 1), [15:8] = type (EXEC = 0).
+ */
+#define M7_HANDOVER_IMG_FLAGS   0x00000001u
+
+static void fsl_imx95_write_m7_handover(FslImx95State *s)
+{
+    uint8_t *dtcm = memory_region_get_ram_ptr(&s->m33_dtcm);
+    uint8_t *h = dtcm + M7_HANDOVER_DTCM_OFFSET;
+    const void *m7_itcm = memory_region_get_ram_ptr(&s->m7_itcm);
+
+    /* Only if M7 firmware was actually staged into its ITCM. */
+    if (ldl_le_p(m7_itcm) == 0) {
+        return;
+    }
+
+    memset(h, 0, M7_HANDOVER_SIZE);
+    stl_le_p(h + 0x00, M7_HANDOVER_BARKER);     /* barker */
+    stw_le_p(h + 0x04, M7_HANDOVER_VER);        /* ver   */
+    stw_le_p(h + 0x06, M7_HANDOVER_SIZE);       /* size  */
+    h[0x08] = 1;                                /* num images */
+    /* img[0] at 0x10: addr(u64), cpu(u16), resv(u16), flags(u32). */
+    stq_le_p(h + 0x10, FSL_IMX95_M7_ITCM_SYSVIEW);
+    stw_le_p(h + 0x18, 1);                      /* cpu = CPU_IDX_M7P */
+    stl_le_p(h + 0x1c, M7_HANDOVER_IMG_FLAGS);
+}
+
 static void fsl_imx95_m33_start_bh(void *opaque)
 {
     FslImx95State *s = opaque;
@@ -453,6 +504,8 @@ static void fsl_imx95_m33_start_bh(void *opaque)
 
     if (initial_sp != 0 && s->m33.cpu) {
         CPUState *cs = CPU(s->m33.cpu);
+        /* Place the M7 boot-ROM handover before the SM starts. */
+        fsl_imx95_write_m7_handover(s);
         cs->halted = 0;
         cpu_resume(cs);
     }
@@ -469,8 +522,22 @@ static void fsl_imx95_m33_start_bh(void *opaque)
 static void fsl_imx95_m7_start_bh(void *opaque)
 {
     FslImx95State *s = opaque;
-    const void *itcm = memory_region_get_ram_ptr(&s->m7_itcm);
-    uint32_t initial_sp = ldl_le_p(itcm);
+    const void *m7_itcm = memory_region_get_ram_ptr(&s->m7_itcm);
+    const void *m33_itcm = memory_region_get_ram_ptr(&s->m33_itcm);
+    uint32_t initial_sp = ldl_le_p(m7_itcm);
+
+    /*
+     * When the SM (M33 firmware) is loaded it owns the M7 lifecycle: it boots
+     * the M7 via DEV_SM_CpuStart (driven by our boot-ROM handover above),
+     * which our AONMIX M7_CFG.WAIT model turns into the release and which also
+     * enables the M7 fault IRQ. Force-starting the M7 here would race that
+     * managed release, so skip it when the SM is present. This force start is
+     * only for SM-less M7 boots (tests/m7-boot), where nothing else releases
+     * the core.
+     */
+    if (ldl_le_p(m33_itcm) != 0) {
+        return;
+    }
 
     if (initial_sp != 0 && s->m7.cpu) {
         CPUState *cs = CPU(s->m7.cpu);
@@ -510,6 +577,79 @@ static void fsl_imx95_src_m7_release_handler(void *opaque, int n, int level)
     }
     aio_bh_schedule_oneshot(qemu_get_aio_context(),
                             fsl_imx95_m7_start_bh, s);
+}
+
+/*
+ * M7 run gate (v1.x Step 5). The SM manages the M7 lifecycle via its CPUWAIT
+ * (AONMIX M7_CFG.WAIT): it releases the M7 on DEV_SM_CpuStart and holds it on
+ * DEV_SM_CpuStop. The fault-recovery path (reaction=lm_reset) does stop then
+ * start, cold-cycling the M7. imx95_aonmix drives the m7-run line with the
+ * released state; we halt the M7 when held and reset+resume it when released.
+ *
+ * Both run as work on the M7 vCPU so the state change is applied with the
+ * core stopped (the WAIT write happens in the M33's TCG block, a different
+ * CPU). On release we cpu_reset the M7 first: for ARMv7-M that reloads SP/PC
+ * from the reset vector in ITCM (which still holds the firmware image - we
+ * don't wipe it), so the M7 re-runs from the top, exactly as after the SM's
+ * real DEV_SM_CpuStart. cpu_reset re-applies start-powered-off (halted = 1),
+ * so we clear halted afterwards to release it.
+ */
+static void fsl_imx95_m7_power_off_work(CPUState *cs, run_on_cpu_data data)
+{
+    cs->halted = 1;
+}
+
+static void fsl_imx95_m7_power_on_work(CPUState *cs, run_on_cpu_data data)
+{
+    cpu_reset(cs);
+    cs->halted = 0;
+}
+
+static void fsl_imx95_m7_power_off_bh(void *opaque)
+{
+    FslImx95State *s = opaque;
+
+    if (s->m7.cpu) {
+        async_run_on_cpu(CPU(s->m7.cpu), fsl_imx95_m7_power_off_work,
+                         RUN_ON_CPU_NULL);
+    }
+}
+
+static void fsl_imx95_m7_power_on_bh(void *opaque)
+{
+    FslImx95State *s = opaque;
+
+    if (s->m7.cpu) {
+        async_run_on_cpu(CPU(s->m7.cpu), fsl_imx95_m7_power_on_work,
+                         RUN_ON_CPU_NULL);
+    }
+}
+
+/*
+ * The M7's NVIC SYSRESETREQ gpio-out (pulsed when firmware writes
+ * AIRCR.SYSRESETREQ) - forward it to the SM as CM7_SYSRESETREQ_IRQn on the
+ * M33's NVIC, the way the SRC routes it on silicon.
+ */
+static void fsl_imx95_m7_sysresetreq_handler(void *opaque, int n, int level)
+{
+    FslImx95State *s = opaque;
+
+    qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->m33),
+                                  FSL_IMX95_M7_SYSRESETREQ_M33_IRQ), level);
+}
+
+static void fsl_imx95_m7_run_handler(void *opaque, int n, int level)
+{
+    FslImx95State *s = opaque;
+
+    /*
+     * Defer to a BH so the cross-CPU async work is queued from the AIO
+     * context rather than inside the M33's TCG block that wrote M7_CFG.
+     * level: 1 = released (start), 0 = held (stop).
+     */
+    aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                            level ? fsl_imx95_m7_power_on_bh
+                                  : fsl_imx95_m7_power_off_bh, s);
 }
 
 static void fsl_imx95_realize(DeviceState *dev, Error **errp)
@@ -1033,6 +1173,21 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         qemu_allocate_irq(fsl_imx95_src_m7_release_handler, s, 0));
 
     /*
+     * BLK_CTRL_S_AONMIX: real model for the M7 CPU-WAIT gate. Its M7_CFG.WAIT
+     * bit reads as held at reset, so the SM's CPU_RunModeGet sees the M7 in
+     * HOLD and runs the full DEV_SM_CpuStart (releasing CPUWAIT and enabling
+     * the M7 fault IRQ). The m7-run gpio carries the released state (1 = run,
+     * 0 = held); we wire it to the M7 run handler so the SM's stop/start of
+     * the M7 LM (incl. fault-recovery lm_reset) actually cycles the core.
+     */
+    s->aonmix = qdev_new("imx95.aonmix");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->aonmix), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->aonmix), 0,
+                    fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_S_AONMIX].addr);
+    qdev_connect_gpio_out_named(s->aonmix, "m7-run", 0,
+        qemu_allocate_irq(fsl_imx95_m7_run_handler, s, 0));
+
+    /*
      * ANATOP/PLL: the SM's DVFS path powers a PLL up and polls
      * PLL_STATUS.LOCK, then enables each DFS and polls DFS_STATUS.DFS_OK
      * (an unbounded wait). The model makes LOCK mirror CTRL.POWERUP and
@@ -1225,6 +1380,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->m7), errp)) {
         return;
     }
+
+    /*
+     * Route the M7's NVIC SYSRESETREQ to the SM (v1.x Step 5). On silicon the
+     * SRC turns an M7 SYSRESETREQ into CM7_SYSRESETREQ_IRQn on the M33; the SM
+     * takes the fault and, for the M7 LM (reaction=lm_reset), cold-resets it
+     * via the SRC M7 mix-slice - which our m7mix-power path then turns into a
+     * real halt+reset+resume of the M7. Without this wire, the NVIC's default
+     * unconnected behaviour would reset the whole machine. Done after both
+     * cores are realised so the M33 NVIC input exists.
+     */
+    qdev_connect_gpio_out_named(DEVICE(&s->m7), "SYSRESETREQ", 0,
+        qemu_allocate_irq(fsl_imx95_m7_sysresetreq_handler, s, 0));
 
     /*
      * M7<->SM SCMI channel cross-connect (MUI_A5), the mirror of the MU2
