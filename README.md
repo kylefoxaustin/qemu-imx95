@@ -111,8 +111,16 @@ interactive prompt — still work.
   (kicks) and shared vrings (payload) in a full A55 + M33 + M7 boot.
   This also surfaced a generic ARMv7-M PMSAv7 MPU fix in
   `target/arm/ptw.c` (misaligned region base now aligned down to match
-  Cortex-M silicon, rather than dropped). Steps 5–6 (lifecycle cycling /
-  validation report) remain ahead.
+  Cortex-M silicon, rather than dropped).
+- **v1.x Step 5 (SM-driven M7 fault recovery) done**: the real System
+  Manager boots, manages and **fault-recovers** the M7. When the M7
+  faults (asserts `SYSRESETREQ`), the SM takes `CM7_SYSRESETREQ_IRQn`
+  and cold-resets the M7 logical machine (`reaction=lm_reset`) —
+  stopping then restarting the core — exactly as on silicon. This
+  required modelling the M7 CPU-WAIT gate (AONMIX `M7_CFG`) and
+  fabricating the boot-ROM image handover the SM reads to learn it owns
+  the M7. `tests/m7-fault-recovery` proves the M7 faults and the SM
+  restarts it. Step 6 (docs polish / validation report) remains ahead.
 - Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
   stub-only) characterized with precise failure points — see
   [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).

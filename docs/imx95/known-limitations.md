@@ -160,7 +160,7 @@ ahead:
 | 2 | Cortex-M7 CPU instance + TCMs + NVIC + default parallel reset policy + standalone hello firmware + unit/integration tests | **done** (36 h+ parallel-CPU soak passed 2026-05-25, zero anomalies) |
 | 3 | M7-first reset sequencing (Scenario 1: M7 released before the A-cluster) | **done** (SRC.SCR.M7MIX-release latch + machine wiring + `tests/m7-first` integration test; 36 h stability soak passed 2026-05-28, zero anomalies, RSS stable, SRC.SCR latch sticky) |
 | 4 | SM boots the M7 (real FreeRTOS) before the A-cluster; Linux `imx-rproc` **attaches** to the SM-managed core; full M7↔Linux rpmsg round-trip (Scenario 2) | **done** — see "M7 lifecycle — SM-orchestrated, Linux-attached" below; verified end-to-end with the stock NXP `imx_rpmsg_pingpong` 100-message exchange |
-| 5 | Lifecycle (SCMI `CPU_OFF`/`CPU_ON` cycling) + cohabitation under load | ahead |
+| 5 | M7 lifecycle: the SM boots, manages and **fault-recovers** the M7 (cold-resets the M7 LM on a fault) | **done** — see "M7 fault recovery — SM cold-resets the M7 LM" below; `tests/m7-fault-recovery` verifies the M7 faults and the real SM restarts it |
 | 6 | Docs polish + v1.x validation report | ahead |
 
 Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
@@ -214,6 +214,42 @@ receiver drains `RR` before the sender can issue another kick; the
 correct guard behaviour needs reference-manual review before it is
 modelled.
 
+### M7 fault recovery — SM cold-resets the M7 LM
+
+The real System Manager owns the M7's whole lifecycle, including
+**fault recovery**: the M7 LM is configured (`mx95evk.cfg`:
+`FAULT_M7_LOCKUP/RESET/WDOG5 reaction=lm_reset`) so that on an M7
+fault the SM cold-resets the M7 logical machine. The model wires this
+end-to-end:
+
+- The M7's NVIC `SYSRESETREQ` is routed to the SM as
+  `CM7_SYSRESETREQ_IRQn` on the M33's NVIC, the way the SRC routes it
+  on silicon. When the M7 asserts `SYSRESETREQ` (or locks up), the SM
+  takes the fault.
+- The SM's fault handler runs `LMM_SystemLmReset` → shutdown then boot
+  of the M7 LM: `DEV_SM_CpuStop` holds the M7 (it asserts the M7-mix
+  reset lines via `SRC SLICE_SW_CTRL.RST_RSTR` and sets CPUWAIT in
+  AONMIX `M7_CFG`), then `DEV_SM_CpuStart` releases it. The model turns
+  the CPUWAIT set into a halt and the clear into a `cpu_reset` + resume,
+  so the M7 re-runs from its ITCM reset vector.
+
+For the SM to **manage** the M7 at all, it must learn the M7 from the
+boot-ROM handover table it reads at startup
+(`LMM_CpuInit` → `DEV_SM_RomBootCpuGet`). On hardware the boot ROM
+loads the M7 image and records it; this emulator loads the M7 image
+directly (`-device loader`), bypassing the ROM, so the machine
+fabricates a minimal one-entry handover for the M7 in reserved M33 DTCM
+before the SM runs. That is what lets the SM boot the M7 via
+`LMM_CpuStart` (releasing CPUWAIT and enabling the fault IRQ) rather
+than the machine force-starting it. The handover is M7-only by design:
+the A55 boots outside the SM's LMM path, so it is unaffected.
+
+`tests/m7-fault-recovery` proves the chain: an M7 fixture that
+deliberately asserts `SYSRESETREQ` on its first boot, with a DTCM boot
+counter that survives the core reset. The counter reaching 2 confirms
+the M7 faulted **and** the real SM restarted it — with no SM the M7
+would fault once and never come back.
+
 ### A note on the M7 fingerprint address
 
 The Step 2 standalone M7 test firmware (`tests/cm7-hello`) writes a
@@ -244,8 +280,9 @@ the real FreeRTOS M7 firmware and Linux's `imx_rproc` driver **attaches**
 to the already-running core (it does not start it) and reads the
 resource table the firmware publishes at the DTS address.
 
-Step 4 wires this end-to-end; the remaining v1.x work is lifecycle
-(SCMI `CPU_OFF`/`CPU_ON` cycling, Step 5) and docs polish (Step 6).
+Step 4 wires this end-to-end; Step 5 adds SM-driven M7 fault recovery
+(above). The remaining v1.x work is docs polish + the validation report
+(Step 6).
 
 ---
 
