@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Regression wrapper: runs the project's growing test suite in order
 # and stops on the first failure (set -e). Each subtest is independent;

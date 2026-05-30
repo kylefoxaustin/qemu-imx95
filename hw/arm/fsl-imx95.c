@@ -879,9 +879,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                            "imx95-blk-ctrl-hsiomix",
                            fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].size,
                            &error_fatal);
-    memory_region_add_subregion(get_system_memory(),
-                                fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].addr,
-                                &s->blk_ctrl_hsiomix);
+    memory_region_add_subregion(
+        get_system_memory(),
+        fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_HSIOMIX].addr,
+        &s->blk_ctrl_hsiomix);
 
     /*
      * Fuse Shadow Block as RAM. On real silicon the ROM/ELE populates it
@@ -902,7 +903,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * enough; no fault-injection or IRQ behaviour is modelled (v1.0 item).
      */
     memory_region_init_ram(&s->vfccu, OBJECT(dev), "imx95-vfccu",
-                           fsl_imx95_memmap[FSL_IMX95_VFCCU].size, &error_fatal);
+                           fsl_imx95_memmap[FSL_IMX95_VFCCU].size,
+                           &error_fatal);
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_VFCCU].addr,
                                 &s->vfccu);

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # v1.x Step 5: SM-orchestrated M7 fault recovery (CPU stop/start cycle).
 #
