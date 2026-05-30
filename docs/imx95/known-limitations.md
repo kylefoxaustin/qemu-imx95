@@ -161,7 +161,7 @@ ahead:
 | 3 | M7-first reset sequencing (Scenario 1: M7 released before the A-cluster) | **done** (SRC.SCR.M7MIX-release latch + machine wiring + `tests/m7-first` integration test; 36 h stability soak passed 2026-05-28, zero anomalies, RSS stable, SRC.SCR latch sticky) |
 | 4 | SM boots the M7 (real FreeRTOS) before the A-cluster; Linux `imx-rproc` **attaches** to the SM-managed core; full M7↔Linux rpmsg round-trip (Scenario 2) | **done** — see "M7 lifecycle — SM-orchestrated, Linux-attached" below; verified end-to-end with the stock NXP `imx_rpmsg_pingpong` 100-message exchange |
 | 5 | M7 lifecycle: the SM boots, manages and **fault-recovers** the M7 (cold-resets the M7 LM on a fault) | **done** — see "M7 fault recovery — SM cold-resets the M7 LM" below; `tests/m7-fault-recovery` verifies the M7 faults and the real SM restarts it |
-| 6 | Docs polish + v1.x validation report | ahead |
+| 6 | Docs polish + v1.x validation report | **done** — methodology cross-layer patterns in [`methodology.md`](methodology.md); v1.x Steps 3–5 validation in [`validation-report.md`](validation-report.md) |
 
 Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
 audio DSP, etc.) remains future scope beyond initial M7 support — none of

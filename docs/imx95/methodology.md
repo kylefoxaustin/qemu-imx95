@@ -157,6 +157,77 @@ an existing model stays suspect for a new consumer path until checked.
 
 ---
 
+## Cross-layer patterns (v1.x Cortex-M7 integration)
+
+The M7 milestone surfaced four patterns that generalize beyond this SoC.
+
+**1. Multi-layer probe failures present as single-driver symptoms.**
+Linux `imx-rproc` failed probe with `-ENOMEM` on an `ioremap`, which reads as
+memory pressure. The real chain had three stacked layers: `arm_load_kernel`
+placed the initrd/DTB on the M7 remoteproc carveout → the no-map
+reserved-memory pass returned `-EBUSY` → the page stayed linear-mapped →
+`ioremap` refused it. The fix was in the *loader's* default placement, not in
+`imx-rproc` at all. The surface error name lies about the depth; trace the
+whole chain before believing the driver that reported it is where the bug is.
+(This is the vertical companion to "symptoms can share roots" above — there,
+one cause fanned out to many symptoms; here, one symptom stacked many causes.)
+
+**2. A platform-specific symptom can be a generic bug — and a separable
+upstream fix.** The M7's first peripheral access took a MemManage fault that
+looked like an "i.MX 95 M7" problem. It was a generic ARMv7-M fidelity gap:
+QEMU's PMSAv7 path *dropped* an MPU region whose `DRBAR` base was misaligned to
+its size, where Cortex-M silicon masks the sub-size bits and keeps the region
+(`RBAR.ADDR` is bits[31:N], lower zero). The fix lives in `target/arm/ptw.c`,
+benefits every ARMv7-M guest, and went to qemu-devel as a standalone patch
+*before* the machine series. When a fix lands in generic infrastructure, ask
+two questions: is the *bug* generic, and does the *fix* belong upstream on its
+own? A self-contained generic patch lands faster and builds maintainer rapport.
+
+**3. One device model serves multiple protocols; the protocol decides which
+registers are load-bearing.** The same `imx_mu` block carries two unrelated
+protocols: SCMI (doorbell + an SMT shared-memory page; the MU's `TR`/`RR` data
+registers are never used) and rpmsg (the virtqueue id travels *in* `TR`/`RR`,
+payload in shared vrings). Extending the model for rpmsg — a `TR[n]` write
+delivering into the peer's `RR[n]` and re-asserting the TX-empty handshake —
+had to stay invisible to the SCMI MUs, which is automatic precisely because
+they never write `TR`. Model the *protocol* a consumer speaks over a block, not
+just the block's registers.
+
+**4. Each fix can reveal the next precondition — descend to bedrock before
+declaring a feature impossible.** Step 5's SM-managed M7 fault recovery hit a
+wall at every layer in turn, each measured wall pointing one level deeper: the
+fault IRQ was disabled → because `CpuStart` never ran → because the SM saw the
+M7 as already-running (`CPU_RunModeGet` read an unmodelled CPU-WAIT bit) →
+and even once that was fixed, `CpuStart` *still* didn't run → because the M7
+logical machine's `bootSkip` gate requires `s_bootFlags` → which `LMM_CpuInit`
+sets only from a **boot-ROM handover table** the SM reads at startup, which our
+direct-ELF load never produced. The feature was reachable only by satisfying
+the *bottom* precondition (fabricate that handover in reserved M33 DTCM), after
+which every layer above resolved at once. The "name the layer" discipline has a
+corollary: **a wall at layer N is a hypothesis that the feature is blocked, not
+proof.** Keep descending until you reach bedrock (here, a data structure the
+boot ROM owns) or a genuine impossibility. This was the eleventh measure-first
+catch and the one that descended the most layers — and twice mid-descent the
+pattern tempted a premature "this needs a much bigger sub-project" conclusion
+that the next layer down dissolved.
+
+A companion register-class note from the same work: **mirror every status bit a
+firmware poll-walk reads, not just the first.** The SM's LM-reset walks several
+SRC reset lines, each polling a *different* `RSTR_STAT` bit; a mirror that
+satisfied only the first reset line let the SM spin forever on the second. When
+a status register is a poll target, model the whole field it can poll, not the
+one bit the first call happens to read.
+
+A debugging-harness gotcha that cost a full diagnostic loop here: **`-daemonize`
+sends the child's stderr to `/dev/null`,** so every `fprintf` probe vanished and
+a working signal looked dead. For stderr-instrumented runs, launch with
+`setsid ... &` (or foreground) and redirect stderr to a file instead. And when
+wiring an interrupt into an ARMv7-M NVIC, remember **gpio input pin N maps to
+exception/vector N + 16** (`NVIC_FIRST_IRQ`) — the firmware's external IRQ
+number is the pin number, the vector index is offset.
+
+---
+
 ## Authority: BSP over guesswork, generated config over prose
 
 Addresses and IRQ numbers come from the NXP BSP — the Linux DTS for peripherals
