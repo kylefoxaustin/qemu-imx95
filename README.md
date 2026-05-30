@@ -24,6 +24,43 @@ upstream-mergeable into QEMU mainline.
 **Maintainer:** Kyle Fox ([@kylefoxaustin](https://github.com/kylefoxaustin))
 (see [`MAINTAINERS`](MAINTAINERS) for the canonical entry).
 
+## Quickstart for newcomers
+
+This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
+machine is already on the `imx95-scaffold` branch. Nothing needs patching.
+(The `docs/reviews/` patch artifacts are for *contributing back* to upstream
+QEMU; you never apply them to use this fork.)
+
+**1. Clone and build** — a standard QEMU build (verified on Ubuntu 22.04+; see
+[Building](#building) for host packages):
+
+    git clone https://github.com/kylefoxaustin/qemu-imx95.git
+    cd qemu-imx95
+    mkdir build && cd build
+    ../configure --target-list=aarch64-softmmu
+    ninja qemu-system-aarch64
+    ./qemu-system-aarch64 -M help | grep imx95     # -> imx95-19x19-evk
+
+**2. First boot in seconds — no external artifacts.** The in-tree Cortex-M7
+firmware boots the M7 standalone and writes a fingerprint the test checks. You
+need a bare-metal `arm-none-eabi` toolchain (Ubuntu: `gcc-arm-none-eabi`). Run
+from the repo root (`cd ..` if you're still in `build/`):
+
+    make -C tests/cm7-hello TOOLCHAIN=arm-none-eabi-
+    tests/m7-boot/run.sh        # -> "M7 fingerprint 0xC0FFEE07 detected"
+
+That proves the emulator end-to-end without downloading anything from NXP.
+
+**3. The full stack — Linux + System Manager + M7.** Booting Linux to userspace
+needs four artifacts built from NXP sources (the SM firmware, a kernel `Image`,
+a DTB, an initramfs). They are not redistributable, so they aren't in the repo —
+see [Required artifacts](#required-artifacts) for the build recipes and
+[Quick start](#quick-start) for the boot command. The repo ships the initramfs
+builder (`tests/busybox-initramfs/build.sh`), so the real work is just building
+the NXP SM firmware + a kernel. For the M7's SM-managed lifecycle (boot,
+rpmsg, fault recovery), see
+[`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst).
+
 ## Scope: what's modelled and what's deferred
 
 The i.MX 95 SoC has a heterogeneous CPU topology of **6× Cortex-A55** (the
