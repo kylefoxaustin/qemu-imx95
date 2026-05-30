@@ -57,6 +57,21 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95SRCState, IMX95_SRC)
 #define SRC_GEN_SCR_OFFSET                      0x10u
 #define SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX    (1u << 12)
 
+/*
+ * Per-slice reset line. SLICE_SW_CTRL.RST_RSTR_0 (bit 20) asserts the
+ * slice's core reset; the read-only RSTR_STAT.RSTR_0_RST_STAT (bit 0, slice
+ * offset 0xb8) reports it back. The SM's SRC_MixSetResetLine writes RST_RSTR_0
+ * and SRC_MixGetResetLine polls RSTR_STAT until it matches, so - like
+ * FUNC_STAT mirroring PDN_SOFT - we derive RSTR_STAT from RST_RSTR_0 so the
+ * SM's assert/deassert wait loops converge.
+ */
+#define SRC_RSTR_STAT                           0xb8
+/*
+ * SLICE_SW_CTRL.RST_RSTR[3:0] live in bits [23:20]; RSTR_STAT.RST_STAT[3:0] in
+ * bits [3:0]. The reset lines (M7MIX + sub-resets) each use one of these.
+ */
+#define SRC_SLICE_SW_CTRL_RST_RSTR_SHIFT        20
+
 struct IMX95SRCState {
     SysBusDevice    parent_obj;
     MemoryRegion    iomem;
@@ -84,6 +99,21 @@ static uint64_t imx95_src_read(void *opaque, hwaddr offset, unsigned size)
 
         return (ctrl & SRC_SLICE_SW_CTRL_PDN_SOFT) ? SRC_FUNC_STAT_PDN
                                                    : SRC_FUNC_STAT_PUP;
+    }
+
+    /*
+     * RSTR_STAT mirrors that slice's SLICE_SW_CTRL reset lines: the SM
+     * asserts one of RST_RSTR[3:0] (SLICE_SW_CTRL bits [23:20]) and polls the
+     * matching RST_STAT[3:0] (RSTR_STAT bits [3:0]) until it tracks. The M7 LM
+     * reset walks several reset lines (M7MIX + associated sub-resets), each on
+     * a different RST_RSTR bit, so mirror all four.
+     */
+    if (offset >= SRC_SLICE_STRIDE &&
+        (offset & (SRC_SLICE_STRIDE - 1)) == SRC_RSTR_STAT) {
+        hwaddr slice = offset & ~(hwaddr)(SRC_SLICE_STRIDE - 1);
+        uint32_t ctrl = s->regs[(slice + SRC_SLICE_SW_CTRL) / 4];
+
+        return (ctrl >> SRC_SLICE_SW_CTRL_RST_RSTR_SHIFT) & 0xf;
     }
     return s->regs[offset / 4];
 }
