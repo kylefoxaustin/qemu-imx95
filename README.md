@@ -65,33 +65,24 @@ rpmsg, fault recovery), see
 
 The i.MX 95 SoC has a heterogeneous CPU topology of **6× Cortex-A55** (the
 application cluster), **1× Cortex-M33** (the System Manager core), and
-**1× Cortex-M7** (the real-time domain). This machine models **all three**
-CPU complements; the M33 runs the real NXP SM firmware and serves Linux's
-SCMI, and the M7 is being added incrementally across the v1.x milestone —
-which **gates the upstream qemu-arm@ submission** so the artifact landed
-there represents the full i.MX 95 CPU complement, not a partial SoC.
+**1× Cortex-M7** (the real-time domain). **This machine models all three CPU
+complements.** The M33 runs the real NXP SM firmware (Linux's sole SCMI
+provider); the SM in turn **boots, manages, and fault-recovers the M7**
+alongside the A-cluster — the full i.MX 95 CPU complement, not a partial SoC.
 
-The v1.x M7 work is a six-step plan; the current state is:
-
-- **Step 2 done** — Cortex-M7 TCG instance, TCM regions (per
-  `imx_rproc_att_imx95_m7`), NVIC wiring, default parallel-reset policy,
-  standalone hello firmware (`tests/cm7-hello/`), unit test
-  (`tests/m7-boot/`), integration test (`tests/parallel-boot/`), and a
-  36 h+ parallel-CPU stability soak — all merged and validated.
-- **Step 3 done** — silicon-faithful M7 release path: the SM's
-  `DEV_SM_CpuStart(M7)` writes `SRC_GEN.SCR.M7MIX_RELEASE` (bit 12 at
-  `0x44460010`), our SRC model emulates the sticky-bit semantics and
-  raises a named gpio-out, the machine wiring schedules a BH that
-  releases the M7 CPU. New integration test `tests/m7-first/` asserts
-  the SM-driven path actually fired (not the machine-init-done BH
-  fallback). 36 h stability soak passed 2026-05-28 (zero anomalies,
-  RSS stable, SRC.SCR latch sticky throughout).
-- **Steps 4–6 ahead** — A-first → M7 via Linux remoteproc + SCMI
-  `CPU_ON` + SM resource loading, lifecycle (`CPU_OFF`/`CPU_ON`)
-  cycling, and the v1.x validation report.
+The M7 integration was the `imx95-v1.x` milestone, delivered in six steps —
+**all done**: the M7 TCG instance + TCMs + soak (Step 2); the silicon-faithful
+SM-driven release (Step 3); SM-orchestrated boot + Linux `imx_rproc` attach +
+stock `imx_rpmsg_pingpong` round-trip (Step 4); SM fault recovery, i.e. the SM
+cold-resetting the M7 logical machine on a fault (Step 5); and the methodology
++ validation docs (Step 6). See
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for the
+per-step detail, and
+[`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
+machine documentation.
 
 Customer-specific real-time peripherals (FlexCAN, TSN, audio DSP, etc.)
-remain further out, beyond the v1.x initial-M7 work. See
+remain further out, beyond the v1.x M7 work. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -110,6 +101,14 @@ arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
 Run /init as init process
 ```
 
+The SM also **boots and manages the Cortex-M7** (running real FreeRTOS
+firmware), alongside the A-cluster. Linux's `imx_rproc` driver **attaches** to
+the SM-managed M7 over the modelled MU7 cross-connect (it cannot start it — the
+SM owns the M7 lifecycle on this board), and the stock NXP `imx_rpmsg_pingpong`
+kernel module runs a **100-message** bidirectional exchange with an M7
+rpmsg-lite client. The SM **cold-recovers the M7 on a fault** (`SYSRESETREQ` →
+`lm_reset`) while the A-cluster boot continues unaffected.
+
 The **interactive Linux serial console works** (via a BusyBox initramfs):
 typed commands reach the shell over ttyLP0 and output reaches the host
 terminal. The SM also boots standalone to its debug-monitor prompt
@@ -127,8 +126,10 @@ interactive prompt — still work.
 - Boots **two distinct userspaces** — static BusyBox and a glibc-dynamic
   Yocto trim (real `bash` 5.2.37, dynamic coreutils, file-I/O integrity
   verified under sustained load).
-- 24 h stability run: stable memory, data-integrity md5 unchanged, no panics
-  or SCMI timeouts.
+- 24 h stability run (v1.0 A55 + M33 path): stable memory, data-integrity md5
+  unchanged, no panics or SCMI timeouts. (The M7-integrated path has its own
+  36 h soaks — see the Step 2/3 bullets below; a 24 h soak on the Step-5
+  SM-managed-M7 path is the current pre-merge validation gate.)
 - **v1.x Step 2 (Cortex-M7) validated**: M7 instance modelled, runs
   standalone firmware end-to-end (`tests/m7-boot/`), A55 + M33 + M7
   parallel boot test passes (`tests/parallel-boot/`), and a
