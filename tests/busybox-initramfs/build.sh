@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Build a static-aarch64 BusyBox initramfs for exercising userspace on the
 # imx95 machine (validation Tier 1.3). No cross-compiler needed: it fetches

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Full boot: the REAL NXP System Manager (M33) serves the A55's SCMI, and
 # Linux boots on top of it.

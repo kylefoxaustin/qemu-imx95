@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # v1.x boot-matrix coverage: M33 (SM firmware) + M7 (cm7-hello) with
 # NO A55 cluster brought up. Fills the "is the M-side independently
