@@ -493,9 +493,68 @@ This closes v1.x Step 2's deliverables: M7 CPU instance modelled,
 standalone firmware loadable, parallel boot validated, 36 h soak
 passed with zero anomalies, v1.0 regression intact.
 
-Steps 3–6 of the v1.x execution plan (M7-first / A-first reset
-sequencing scenarios, SCMI `CPU_ON` gating + Linux `imx-rproc`
-integration, lifecycle cycling, and the v1.x validation report) remain
-the gating work for the upstream qemu-arm@ submission. See
+Steps 3–5 of the v1.x execution plan are now complete (recorded below);
+Step 6 (docs polish + this validation report) is the remaining gating
+work for the upstream qemu-arm@ submission. See
 [`known-limitations.md`](known-limitations.md) §5 for the step
 trajectory.
+
+---
+
+## v1.x Steps 3–5 (M7 lifecycle) — validated (recorded 2026-05-29)
+
+Steps 3–5 take the M7 from "an instance that runs standalone firmware"
+(Step 2) to "a core the real System Manager boots, manages, and
+fault-recovers, alongside Linux on the A55s." Each step is gated by an
+integration test that runs from a clean tree; all pass, and the full
+A55 + M33 + Linux boot is unregressed throughout.
+
+**Step 3 — M7-first reset sequencing (SM-driven release).** The SM's
+`DEV_SM_CpuStart(M7)` writes `SRC_GEN.SCR.M7MIX_RELEASE` (a sticky
+latch), which the machine turns into the M7 release — silicon-faithful,
+not a host-side cheat. `tests/m7-first` asserts the latch fired *and*
+that the M7 came up before Linux userspace (Scenario 1 ordering). A 36 h
+parallel-CPU stability soak passed 2026-05-28 (4154 heartbeats; 0
+panics / SCMI-timeouts / RCU-stalls / BUGs; RSS stable 299→329 MB; the
+`SRC.SCR` latch sticky throughout).
+
+**Step 4 — SM-orchestrated M7 + Linux attach + rpmsg.** The SM boots the
+M7 running real FreeRTOS firmware before the A-cluster; Linux's
+`imx_rproc` driver *attaches* to the SM-managed core (it cannot start it
+— the SM owns the M7 LM on this board, per the kernel's `lmm(1) not
+under Linux Control`). End-to-end inter-processor communication is
+proven with the **stock NXP `imx_rpmsg_pingpong` kernel module
+performing a 100-message ping/pong exchange** over the modelled MU7
+cross-connect (kicks) and shared vrings (payload) in a full A55 + M33 +
+M7 boot. This step also surfaced — and fixed — a *generic* ARMv7-M
+PMSAv7 MPU fidelity bug in `target/arm/ptw.c` (misaligned region base
+aligned down to match Cortex-M silicon rather than dropped), filed as a
+standalone upstream qemu-devel patch that benefits all ARMv7-M guests.
+
+**Step 5 — SM fault recovery (cold-reset the M7 LM).** The real SM
+boots, manages, and **fault-recovers** the M7. When the M7 faults
+(asserts `SYSRESETREQ`), the machine routes it to the SM as
+`CM7_SYSRESETREQ_IRQn`; the SM's fault handler runs `LMM_SystemLmReset`
+(`reaction=lm_reset`) → `CpuStop` (hold the M7) → `CpuStart` (restart
+it). For the SM to manage the M7 at all it must learn it from the
+boot-ROM handover table it reads at startup, which this emulator
+fabricates (a one-entry M7 handover in reserved M33 DTCM) since the
+direct-ELF load bypasses the boot ROM. `tests/m7-fault-recovery` proves
+the chain: an M7 fixture deliberately faults on its first boot and keeps
+a DTCM boot counter that survives the core reset; the counter reaching 2
+confirms the M7 faulted **and** the real SM restarted it (with no SM it
+would fault once and never return). SM log evidence: `Reset LM 1,
+reason=fccu`.
+
+**Regression.** Across Steps 3–5 the SM-managed M7 path and the
+A55/Linux boot stay independent: `tests/m7-first` reaches Linux
+userspace with the M7 up; `tests/m33-m7-only` and `tests/m7-boot` cover
+the SM-managed and SM-less M7 boots respectively; all green. The M7
+handover is M7-only by design, so the A55 (which boots outside the SM's
+LMM path) is untouched.
+
+This closes the v1.x M7 *functional* deliverables. What remains before
+the upstream window is the broader validation campaign in
+[`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility,
+longer soaks against the M7-managed path) and the Phase-5 submission
+prep (functional test, `.rst` docs, patch series).
