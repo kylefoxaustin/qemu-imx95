@@ -203,13 +203,24 @@ logical machine's `bootSkip` gate requires `s_bootFlags` → which `LMM_CpuInit`
 sets only from a **boot-ROM handover table** the SM reads at startup, which our
 direct-ELF load never produced. The feature was reachable only by satisfying
 the *bottom* precondition (fabricate that handover in reserved M33 DTCM), after
-which every layer above resolved at once. The "name the layer" discipline has a
-corollary: **a wall at layer N is a hypothesis that the feature is blocked, not
-proof.** Keep descending until you reach bedrock (here, a data structure the
-boot ROM owns) or a genuine impossibility. This was the eleventh measure-first
-catch and the one that descended the most layers — and twice mid-descent the
-pattern tempted a premature "this needs a much bigger sub-project" conclusion
-that the next layer down dissolved.
+which every layer above resolved at once.
+
+The "name the layer" discipline has a corollary: **a wall is a hypothesis, not
+proof.** When investigation appears to dead-end ("this can't work from QEMU",
+"this is just silicon behaviour"), treat the wall as a *layer claim* worth
+checking, and reframe it as a specific question about a specific precondition —
+*who sets this state? what reads this register? what gate is open or closed
+here?* Each answer typically reveals the next question one layer down.
+**Terminate** when you reach a layer that is either (a) genuinely architectural
+(silicon-fixed semantics, the ARM ARM), (b) owned by something the project
+cannot modify (boot-ROM data structures, fuses, mask ROM), or (c) tractably
+modelable from a documented contract (a small data structure the firmware reads
+at a known address). Step 5 descended five layers before hitting case (c) — the
+boot-ROM handover table — and twice mid-descent the pattern tempted a premature
+"this needs a much bigger sub-project" conclusion that the next question
+dissolved. The discipline isn't "dig forever"; it's "each wall is a question —
+ask it." This was the eleventh measure-first catch and the one that descended
+the most layers.
 
 A companion register-class note from the same work: **mirror every status bit a
 firmware poll-walk reads, not just the first.** The SM's LM-reset walks several
