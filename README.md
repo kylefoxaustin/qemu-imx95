@@ -268,9 +268,14 @@ addresses and IRQ numbers.
 | `hw/i2c/imx_lpi2c.c`        | LPI2C master (interrupt-driven) |
 | `hw/timer/imx95_sysctr.c`   | system-counter clockevent timer |
 | `hw/misc/imx95_{src,anatop,gpc,pmic,dpu,ele_server,wdog}.c` | SM/Linux bring-up device models |
+| `hw/misc/imx95_aonmix.c`    | AONMIX M7 CPU-WAIT gate (v1.x Step 5 — the SM's M7 run/hold control) |
 | `tests/swap-boot/run.sh`    | full Linux-on-real-SM boot |
 | `tests/sm-banner/run.sh`    | SM standalone to its debug monitor |
+| `tests/cm7-hello/`, `tests/m7-boot/` | in-tree M7 firmware + standalone M7 boot test |
+| `tests/m7-fault-recovery/`  | SM-driven M7 fault recovery test (v1.x Step 5) |
+| `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
+| `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
 | `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
 | `docs/imx95/known-limitations.md` | full limitation diagnoses |
 
@@ -297,6 +302,10 @@ pkg-config, python3, libglib2.0-dev, libpixman-1-dev) is assumed present.
     ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
         -kernel tests/hello-imx95/hello.bin      # -> "Hello from i.MX 95!"
 
+    # M7 fingerprint (no SM firmware needed - verifies the M7 instance + TCMs)
+    make -C tests/cm7-hello TOOLCHAIN=arm-none-eabi-
+    tests/m7-boot/run.sh     # -> "M7 fingerprint 0xC0FFEE07 detected"
+
     # SM standalone to its monitor
     SM_ELF=<m33_image.elf> tests/sm-banner/run.sh
 
@@ -307,10 +316,15 @@ pkg-config, python3, libglib2.0-dev, libpixman-1-dev) is assumed present.
 
 The project is built measure-first: propose a hypothesis, verify it against
 data, and re-plan when measurement disagrees. The debugging techniques that
-recur (the "five pillars"), the register-class triage pattern, and the
-working mode itself are written up in
-[`docs/imx95/methodology.md`](docs/imx95/methodology.md). Per-milestone design and review
-notes live in `docs/reviews/` (local working artifacts).
+recur (the "five pillars"), the register-class triage pattern, the v1.x
+cross-layer patterns (multi-layer probe failures, generic bugs surfaced by
+platform-specific symptoms, one device model serving multiple protocols, "a
+wall is a hypothesis"), and the working mode itself are written up in
+[`docs/imx95/methodology.md`](docs/imx95/methodology.md); a fresh-eyes review
+discipline (the GitHub render-cache pitfall) is in
+[`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
+Per-milestone design and review notes live in `docs/reviews/` (local working
+artifacts).
 
 ## Milestone history
 
@@ -339,3 +353,12 @@ notes live in `docs/reviews/` (local working artifacts).
 - **v1.0** — polish: boot time cut ~9× (icount off the default boot path), the
   system counter modelled as a real clockevent timer, the vestigial C-stub SCMI
   server removed (real SM is now the only provider), and documentation.
+- **v1.0.1** — LPUART RX read-only-bit storm fix (commit `741af2f5e3`).
+- **v1.x** — Cortex-M7 integration, completing the i.MX 95 CPU complement
+  (6× A55 + M33 SM + M7). Six steps: M7 instance + parallel boot + 36 h soak
+  (Step 2); silicon-faithful SM-driven release via `SRC_GEN.SCR.M7MIX_RELEASE`
+  + 36 h soak (Step 3); SM-orchestrated boot + Linux `imx_rproc` attach + stock
+  NXP `imx_rpmsg_pingpong` 100-message exchange + a generic ARMv7-M PMSAv7 fix
+  in `target/arm/ptw.c` (Step 4); SM-driven M7 fault recovery via
+  `CM7_SYSRESETREQ_IRQn` → `lm_reset` (Step 5); methodology + validation docs
+  (Step 6). Tagged `imx95-v1.x` at commit `42d3e4ef7b`.
