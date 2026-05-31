@@ -1,7 +1,7 @@
 /*
  * Hello-world bare-metal binary for the qemu-imx95 emulator.
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Prints "Hello from i.MX 95!\n" over LPUART1 (the 19x19 EVK console

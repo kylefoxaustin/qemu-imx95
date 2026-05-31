@@ -1,7 +1,7 @@
 /*
  * NXP i.MX Messaging Unit (MU) device model - V2 register layout
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

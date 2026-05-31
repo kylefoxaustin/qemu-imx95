@@ -4,7 +4,7 @@
  *   - PCAL6408A 8-bit IO expander (TYPE_PCAL6408A,  addr 0x20)
  *   - PF53 buck regulator         (TYPE_PF53_PMIC,  addr 0x2a/0x29)
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

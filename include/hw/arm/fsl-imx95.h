@@ -1,7 +1,7 @@
 /*
  * NXP i.MX 95 SoC definitions
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * Modeled on hw/arm/fsl-imx8mp.h
  *

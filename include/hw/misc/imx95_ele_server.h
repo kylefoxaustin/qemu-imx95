@@ -1,7 +1,7 @@
 /*
  * Minimal NXP EdgeLock Enclave (ELE) responder stub
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
