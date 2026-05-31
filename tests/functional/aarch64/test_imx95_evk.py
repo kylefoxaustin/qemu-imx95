@@ -77,6 +77,49 @@ class Imx95EvkMachine(LinuxKernelTest):
         # /init in the committed initramfs (tests/busybox-initramfs/build.sh).
         self.wait_for_console_pattern('=== imx95 busybox userspace ===')
 
+    def test_aarch64_imx95_evk_m7_rpmsg_pingpong(self):
+        """Linux + the SM-booted M7 run NXP's rpmsg_lite ping/pong over MU7.
+
+        The full A55 + M33(SM) + M7 stack: the SM boots the M7 running NXP's
+        rpmsg_lite pingpong firmware, Linux's imx_rproc attaches to the
+        SM-managed core, and the stock imx_rpmsg_pingpong module exchanges
+        100 messages with the M7 - kicks over the modelled MU7 cross-connect,
+        payload in the shared vrings. The module prints "goodbye!" after the
+        final round-trip. The initramfs must bundle the matching
+        imx_rpmsg_pingpong.ko and an /init that loads it (see
+        docs/system/arm/imx95-evk.rst and tests/m7-rpmsg/).
+        """
+        art = self._require('QEMU_TEST_IMX95_KERNEL', 'QEMU_TEST_IMX95_DTB',
+                            'QEMU_TEST_IMX95_RPMSG_INITRD',
+                            'QEMU_TEST_IMX95_SM_FW',
+                            'QEMU_TEST_IMX95_M7_RPMSG_FW')
+        self.require_accelerator("tcg")
+        self.set_machine('imx95-19x19-evk')
+        self.vm.set_console(console_index=0)
+        self.vm.add_args(
+            '-m', '2G',
+            '-kernel', art['QEMU_TEST_IMX95_KERNEL'],
+            '-dtb',    art['QEMU_TEST_IMX95_DTB'],
+            '-initrd', art['QEMU_TEST_IMX95_RPMSG_INITRD'],
+            '-device', 'loader,file=%s,cpu-num=6' % art['QEMU_TEST_IMX95_SM_FW'],
+            # The rpmsg pingpong firmware is a raw M7 TCM image; load it at the
+            # M7 TCM alias the remoteproc carveout points at (0x203c0000),
+            # rather than as an ELF with cpu-num.
+            '-device', 'loader,file=%s,addr=0x203c0000,force-raw=on'
+                       % art['QEMU_TEST_IMX95_M7_RPMSG_FW'],
+            '-append',
+            'earlycon=lpuart32,mmio32,0x44380010 '
+            'console=ttyLP0,115200 cpuidle.off=1 rdinit=/init',
+        )
+        self.vm.launch()
+        # SCMI handshake against the real SM (as in the boot test) - the M7
+        # cannot come up without the SM, which is the only SCMI provider.
+        self.wait_for_console_pattern(
+            "SCMI Protocol v2.1 'NXP:IMX' Firmware version 0x333")
+        # The 100-message ping/pong completed: imx_rpmsg_pingpong prints
+        # "goodbye!" after the final round-trip with the M7 rpmsg-lite client.
+        self.wait_for_console_pattern('goodbye!')
+
     def test_aarch64_imx95_evk_m7_fault_recovery(self):
         """The real SM boots the M7, takes its fault, and cold-resets it.
 

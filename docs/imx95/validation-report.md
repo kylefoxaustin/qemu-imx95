@@ -526,7 +526,10 @@ under Linux Control`). End-to-end inter-processor communication is
 proven with the **stock NXP `imx_rpmsg_pingpong` kernel module
 performing a 100-message ping/pong exchange** over the modelled MU7
 cross-connect (kicks) and shared vrings (payload) in a full A55 + M33 +
-M7 boot. This step also surfaced — and fixed — a *generic* ARMv7-M
+M7 boot — reproducible via the env-gated `m7_rpmsg_pingpong` functional
+test (asserting the module's `goodbye!` completion) with a standalone
+harness and firmware/initramfs recipe in `tests/m7-rpmsg/`. This step
+also surfaced — and fixed — a *generic* ARMv7-M
 PMSAv7 MPU fidelity bug in `target/arm/ptw.c` (misaligned region base
 aligned down to match Cortex-M silicon rather than dropped), filed as a
 standalone upstream qemu-devel patch that benefits all ARMv7-M guests.

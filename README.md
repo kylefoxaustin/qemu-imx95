@@ -106,7 +106,9 @@ firmware), alongside the A-cluster. Linux's `imx_rproc` driver **attaches** to
 the SM-managed M7 over the modelled MU7 cross-connect (it cannot start it — the
 SM owns the M7 lifecycle on this board), and the stock NXP `imx_rpmsg_pingpong`
 kernel module runs a **100-message** bidirectional exchange with an M7
-rpmsg-lite client. The SM **cold-recovers the M7 on a fault** (`SYSRESETREQ` →
+rpmsg-lite client (reproducible via the env-gated `m7_rpmsg_pingpong`
+functional test; recipe in `tests/m7-rpmsg/`). The SM **cold-recovers the M7 on
+a fault** (`SYSRESETREQ` →
 `lm_reset`) while the A-cluster boot continues unaffected.
 
 The **interactive Linux serial console works** (via a BusyBox initramfs):
@@ -151,7 +153,10 @@ interactive prompt — still work.
   `imx_rpmsg_pingpong` kernel module performs a full **100-message
   ping/pong exchange** with the M7 over the modelled MU7 cross-connect
   (kicks) and shared vrings (payload) in a full A55 + M33 + M7 boot.
-  This also surfaced a generic ARMv7-M PMSAv7 MPU fix in
+  This is reproducible via the env-gated `m7_rpmsg_pingpong` functional
+  test (`tests/functional/aarch64/test_imx95_evk.py`); see `tests/m7-rpmsg/`
+  for a standalone harness and the firmware/initramfs recipe.
+  It also surfaced a generic ARMv7-M PMSAv7 MPU fix in
   `target/arm/ptw.c` (misaligned region base now aligned down to match
   Cortex-M silicon, rather than dropped).
 - **v1.x Step 5 (SM-driven M7 fault recovery) done**: the real System
