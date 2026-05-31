@@ -558,3 +558,43 @@ the upstream window is the broader validation campaign in
 [`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility,
 longer soaks against the M7-managed path) and the Phase-5 submission
 prep (functional test, `.rst` docs, patch series).
+
+## Independent third-party workload — ORB-SLAM3 ran in-machine (recorded 2026-05-30)
+
+The strongest adoption signal to date: an **independent session (not the
+author)** cross-built and ran **ORB-SLAM3** — a real classical visual-SLAM
+stack (OpenCV 4.12 + g2o + DBoW2 + Sophus + boost-serialization, 14 shared
+libraries, a 139 MB DBoW2 vocabulary) — to **converged tracking inside the
+`imx95-19x19-evk` machine**. Full reproducible recipe (patches, aarch64
+toolchain file, initramfs builder, boot wrapper, logs) at
+<https://github.com/kylefoxaustin/orbslam3-imx95> (`phase0_orbslam3_inventory.md`
++ `patches/orbslam3-imx95-headless-crosscompile.patch` + `qemu_work/` +
+`CROSS_COMPILE_NOTES.md`, a worked guest-software cross-build writeup).
+
+**Result:** 250 frames processed; Atlas initialized (508 points); tracking
+converged to a single coherent map (1 map, 24 keyframes on the frame subset —
+no fragmentation, no track loss); `exit=0`. Per-frame tracking median 178.5 ms
+(mean 207.9 ms) vs 8.3 ms on the x86 host — a ~21× slowdown that is **TCG
+emulation overhead, not an i.MX 95 silicon performance estimate**; this run
+establishes *functional portability* to the A55 target, not timing.
+
+**What it independently confirms** (in someone else's hands, not the author's):
+- `-m 8G` is honored — the guest saw 7.7 GiB, the DTB `/memory` node sized to
+  `machine->ram_size`; guest RAM is **not** pinned by the DTB.
+- A full **glibc-dynamic** userspace runs a real OpenCV/g2o C++ app with 14
+  shared libraries resolved via `LD_LIBRARY_PATH`.
+- The **initramfs is the (only) transfer path** — a ~134 MB cpio (trim rootfs +
+  cross-built binary + readelf-walked dependency closure + 139 MB vocab + a
+  frame subset + a custom `/init`), confirming there is no virtio/block-storage
+  host-share (a documented limitation, here exercised in practice).
+
+**Bug surfaced (now documented):** the guest's `poweroff` does not terminate
+QEMU, and the uSDHC model spews `sdhci-esdhc-imx` debug-status on the shutdown
+path (see [`known-limitations.md`](known-limitations.md) §7) — found by this
+run, and correlated with the tail of our own stability-soak logs.
+
+This is qualitatively beyond a self-test: a stranger found the machine useful
+enough to build a real SLAM application against it, succeeded end-to-end, and
+in doing so re-validated three core machine claims and found a real bug. It is
+the canonical "works for someone other than the author, doing something the
+author didn't script" evidence for the upstream cover letter.
