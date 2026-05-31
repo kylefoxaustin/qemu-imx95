@@ -23,11 +23,23 @@
 #include "system/qtest.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "net/can_emu.h"
+
+#define TYPE_IMX95_EVK_MACHINE MACHINE_TYPE_NAME("imx95-19x19-evk")
+OBJECT_DECLARE_SIMPLE_TYPE(Imx95EvkMachineState, IMX95_EVK_MACHINE)
+
+struct Imx95EvkMachineState {
+    MachineState parent_obj;
+    /* Optional CAN buses, attached via -machine canbus0=...,canbus1=... */
+    CanBusState *canbus[FSL_IMX95_NUM_FLEXCAN];
+};
 
 static void imx95_evk_init(MachineState *machine)
 {
+    Imx95EvkMachineState *m = IMX95_EVK_MACHINE(machine);
     static struct arm_boot_info boot_info;
     FslImx95State *s;
+    int i;
 
     if (machine->ram_size > FSL_IMX95_RAM_SIZE_MAX) {
         error_report("RAM size " RAM_ADDR_FMT
@@ -57,6 +69,16 @@ static void imx95_evk_init(MachineState *machine)
 
     s = FSL_IMX95(object_new(TYPE_FSL_IMX95));
     object_property_add_child(OBJECT(machine), "soc", OBJECT(s));
+
+    /* Forward any user-attached CAN buses to the SoC's FlexCAN controllers. */
+    for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
+        if (m->canbus[i]) {
+            g_autofree char *name = g_strdup_printf("canbus%d", i);
+            object_property_set_link(OBJECT(s), name, OBJECT(m->canbus[i]),
+                                     &error_abort);
+        }
+    }
+
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s), &error_fatal);
 
     memory_region_add_subregion(get_system_memory(), FSL_IMX95_RAM_START,
@@ -111,4 +133,37 @@ static void imx95_19x19_evk_machine_init(MachineClass *mc)
     mc->get_default_cpu_type  = imx95_evk_get_default_cpu_type;
 }
 
-DEFINE_MACHINE_AARCH64("imx95-19x19-evk", imx95_19x19_evk_machine_init)
+static void imx95_evk_machine_instance_init(Object *obj)
+{
+    int i;
+
+    /*
+     * Per-FlexCAN CAN-bus links, settable from the command line, e.g.
+     *   -object can-bus,id=canbus0 -machine canbus0=canbus0
+     * The machine forwards each to the matching SoC FlexCAN controller.
+     */
+    for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
+        g_autofree char *name = g_strdup_printf("canbus%d", i);
+        object_property_add_link(obj, name, TYPE_CAN_BUS,
+                                 (Object **)&IMX95_EVK_MACHINE(obj)->canbus[i],
+                                 object_property_allow_set_link, 0);
+    }
+}
+
+static void imx95_19x19_evk_class_init(ObjectClass *oc, const void *data)
+{
+    imx95_19x19_evk_machine_init(MACHINE_CLASS(oc));
+}
+
+static const TypeInfo imx95_19x19_evk_machine_types[] = {
+    {
+        .name          = TYPE_IMX95_EVK_MACHINE,
+        .parent        = TYPE_MACHINE,
+        .instance_size = sizeof(Imx95EvkMachineState),
+        .instance_init = imx95_evk_machine_instance_init,
+        .class_init    = imx95_19x19_evk_class_init,
+        .interfaces    = aarch64_machine_interfaces,
+    },
+};
+
+DEFINE_TYPES(imx95_19x19_evk_machine_types)
