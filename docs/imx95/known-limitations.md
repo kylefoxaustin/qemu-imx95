@@ -322,28 +322,6 @@ readiness check" section).
 
 ---
 
-## 7. Guest shutdown does not terminate QEMU; uSDHC spews on the shutdown path
-
-A guest `poweroff` / `reboot` does **not** exit the QEMU process. The guest's
-power-off request (the SM SCMI `SYSTEM_POWER_STATE` off path, or PSCI
-`SYSTEM_OFF`) is not wired through to `qemu_system_shutdown_request()`, so the
-VM keeps running after the workload is done. Compounding it, the uSDHC model
-loops emitting `mmc1: sdhci-esdhc-imx: … DEBUG STATUS DUMP` (DMA/ADMA/FIFO
-status `0x0000`) on the shutdown path — the same spew seen at the tail of the
-long stability-soak logs, so it is not workload-specific.
-
-**Workaround:** the workload completes cleanly *before* this (exit status and
-all output are flushed) — scrape results from the serial console, then
-`kill`/`SIGKILL` the QEMU PID. Don't rely on guest `poweroff` to terminate the
-VM, and don't treat the trailing MMC spew as a failure.
-
-Both are likely small fixes (wire the SM/PSCI system-off to QEMU shutdown;
-quiet the uSDHC error-dump loop) and are on the post-upstream list. Surfaced by
-an independent session running ORB-SLAM3 in the machine (see
-`validation-report.md`'s ORB-SLAM3 entry).
-
----
-
 ## On "stock NXP DTB boots"
 
 The project boots the **unmodified** NXP EVK device tree — limitations are

@@ -588,10 +588,19 @@ establishes *functional portability* to the A55 target, not timing.
   frame subset + a custom `/init`), confirming there is no virtio/block-storage
   host-share (a documented limitation, here exercised in practice).
 
-**Bug surfaced (now documented):** the guest's `poweroff` does not terminate
-QEMU, and the uSDHC model spews `sdhci-esdhc-imx` debug-status on the shutdown
-path (see [`known-limitations.md`](known-limitations.md) §7) — found by this
-run, and correlated with the tail of our own stability-soak logs.
+**Bug surfaced and fixed:** the guest's `poweroff` did not terminate QEMU, and
+the uSDHC model spewed `sdhci-esdhc-imx` debug-status on the shutdown path —
+found by this run and correlated with the tail of our own stability-soak logs.
+Root cause was a generic SDHCI modelling gap: the i.MX (u)SDHC has no software
+`SDCLK_EN` bit (the card clock is auto-gated in hardware), so the Linux
+`sdhci-esdhc-imx` driver never sets it, but `sdhci_can_issue_command()` gated
+on it — every command to the empty eMMC/SD slots was silently dropped, the mmc
+layer spun on 10s host-side timeouts, and `device_shutdown()` never reached
+PSCI `SYSTEM_OFF`. Fixed by `SDHCI_QUIRK_SDCLK_AUTO_GATE`
+(commit `hw/sd/sdhci: let i.MX (u)SDHC issue commands without SDCLK_EN`):
+poweroff now terminates the VM cleanly (`reboot: Power down` → PSCI →
+exit code 0) with no MMC spew, and the fix is a standalone generic-QEMU
+prereq alongside the `ptw.c`/`tlb_helper.c` patches.
 
 This is qualitatively beyond a self-test: a stranger found the machine useful
 enough to build a real SLAM application against it, succeeded end-to-end, and
