@@ -92,9 +92,10 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-The **FlexCAN** controllers are modelled (all five, on QEMU's CAN bus — see
-"What runs today"); other customer-specific real-time peripherals (TSN, audio
-SAI/DSP, etc.) remain further out, beyond the v1.x M7 work. See
+**FlexCAN is supported** — all five controllers are modelled on QEMU's CAN bus
+and validated end-to-end with the real Linux `flexcan` driver (see "What runs
+today"); other customer-specific real-time peripherals (TSN, audio SAI/DSP,
+etc.) remain further out, beyond the v1.x M7 work. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -158,11 +159,15 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
-**CAN.** All five **FlexCAN** controllers are modelled
+**CAN — supported.** All five **FlexCAN** controllers are modelled
 (`hw/net/can/flexcan.c`) on QEMU's CAN bus subsystem — real frame TX/RX, the
-Linux-driver MCR handshake, individual RX mailboxes and CAN-FD geometry,
-validated by `tests/qtest/flexcan-test.c`. Attach a host SocketCAN backend
-(the stock EVK DT leaves the CAN nodes disabled, so enable the node you want):
+Linux-driver MCR handshake, individual RX mailboxes and CAN-FD geometry.
+**Validated end-to-end with the real Linux `flexcan` driver:** the
+`tests/flexcan/` harness boots two FlexCANs on one bus and the stock
+`can-utils`-free self-test round-trips frames `can0` ⇄ `can1` at 500 kbps
+(plus a kernel-free model check in `tests/qtest/flexcan-test.c`). Attach a host
+SocketCAN backend (the stock EVK DT leaves the CAN nodes disabled, so enable
+the node you want):
 
 ```
 -object can-bus,id=canbus0 \
@@ -190,7 +195,7 @@ three generic-QEMU prereq patches (`target/arm/ptw.c`,
 |---|---|---|
 | **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MACs as PCIe endpoint functions, MSIs routed to the GIC ITS; the first network interface beyond `lo` | **v2.x** (post-upstream) |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
-| Real-time peripherals | ~~FlexCAN~~ (**done** — all 5 modelled on QEMU's CAN bus); TSN, audio SAI/DSP for M7 / mixed-criticality workloads | partly done |
+| Real-time peripherals | ~~FlexCAN~~ (**done & Linux-validated** — all 5, `tests/flexcan/`); TSN, audio SAI/DSP for M7 / mixed-criticality workloads | partly done |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
 The deferred rows are characterized with precise failure points in
@@ -295,6 +300,7 @@ addresses and IRQ numbers.
 | `hw/char/imx_lpuart.c`      | LPUART model (console) |
 | `hw/misc/imx_mu.c`          | NXP MU (V2) model — doorbell + peer cross-connect |
 | `hw/i2c/imx_lpi2c.c`        | LPI2C master (interrupt-driven) |
+| `hw/net/can/flexcan.c`      | FlexCAN controller (all 5; QEMU CAN bus, CAN-FD) |
 | `hw/timer/imx95_sysctr.c`   | system-counter clockevent timer |
 | `hw/misc/imx95_{src,anatop,gpc,pmic,dpu,ele_server,wdog}.c` | SM/Linux bring-up device models |
 | `hw/misc/imx95_aonmix.c`    | AONMIX M7 CPU-WAIT gate (v1.x Step 5 — the SM's M7 run/hold control) |
@@ -302,6 +308,7 @@ addresses and IRQ numbers.
 | `tests/sm-banner/run.sh`    | SM standalone to its debug monitor |
 | `tests/cm7-hello/`, `tests/m7-boot/` | in-tree M7 firmware + standalone M7 boot test |
 | `tests/m7-fault-recovery/`  | SM-driven M7 fault recovery test (v1.x Step 5) |
+| `tests/flexcan/`, `tests/qtest/flexcan-test.c` | FlexCAN Linux end-to-end harness + model qtest |
 | `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
 | `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
