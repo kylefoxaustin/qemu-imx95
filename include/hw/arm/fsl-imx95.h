@@ -31,6 +31,7 @@
 #include "hw/misc/imx95_ele_server.h"
 #include "hw/misc/imx_mu.h"
 #include "hw/sd/sdhci.h"
+#include "hw/net/flexcan.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
@@ -95,6 +96,7 @@ enum FslImx95Configuration {
     FSL_IMX95_NUM_A55_CPUS  = 6,
     FSL_IMX95_NUM_LPUARTS   = 8,    /* LPUART1..LPUART8 */
     FSL_IMX95_NUM_USDHCS    = 3,    /* uSDHC1..uSDHC3 */
+    FSL_IMX95_NUM_FLEXCAN   = 5,    /* FlexCAN1..FlexCAN5 */
     FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
 };
 
@@ -247,6 +249,9 @@ struct FslImx95State {
      */
     IMX95ELEServerState     ele_server2;
     SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
+    FlexCanState            flexcan[FSL_IMX95_NUM_FLEXCAN];
+    /* Optional per-controller CAN bus links (set via machine canbusN=...). */
+    CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
     DeviceState            *wdog2;
     DeviceState            *wdog3;
     /* M33 XCACHE controllers (PC @0x44400000, PS @0x44400800). */
@@ -437,6 +442,12 @@ enum FslImx95Irqs {
     FSL_IMX95_USDHC1_IRQ    = 86,
     FSL_IMX95_USDHC2_IRQ    = 87,
     FSL_IMX95_USDHC3_IRQ    = 191,
+    /* FlexCAN1..5 (dtsi can@443a0000/425b0000/42600000/427c0000/427d0000). */
+    FSL_IMX95_FLEXCAN1_IRQ  = 8,
+    FSL_IMX95_FLEXCAN2_IRQ  = 38,
+    FSL_IMX95_FLEXCAN3_IRQ  = 40,
+    FSL_IMX95_FLEXCAN4_IRQ  = 42,
+    FSL_IMX95_FLEXCAN5_IRQ  = 44,
     /* system counter compare-match (dtsi: timer@44290000). */
     FSL_IMX95_SYSCNT_IRQ    = 72,
     /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */

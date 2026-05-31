@@ -46,6 +46,7 @@
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/misc/unimp.h"
+#include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
@@ -407,11 +408,10 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4d900000, 0x100000 }, /* gpu */
             { 0x4ab00000, 0x100000 }, /* neutron npu */
             /*
-             * Audio (SAI/XCVR/MICFIL) and FlexCAN: not yet modelled. Stub
-             * them so that a board/use case enabling these nodes degrades
-             * gracefully (reads-as-0) instead of taking an unmapped-access
-             * fault on the first MMIO. The default NXP EVK boot does not
-             * probe them; FlexCAN modelling is on the roadmap.
+             * Audio (SAI/XCVR/MICFIL): not yet modelled. Stub them so a
+             * board/use case enabling these nodes degrades gracefully
+             * (reads-as-0) instead of taking an unmapped-access fault on the
+             * first MMIO. (FlexCAN is a real model, wired below.)
              */
             { 0x42650000, 64 * KiB }, /* sai3 */
             { 0x42660000, 64 * KiB }, /* sai4 */
@@ -420,11 +420,6 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x443b0000, 64 * KiB }, /* sai1 */
             { 0x4c880000, 64 * KiB }, /* sai2 */
             { 0x44520000, 64 * KiB }, /* micfil (pdm mic) */
-            { 0x425b0000, 64 * KiB }, /* flexcan2 */
-            { 0x42600000, 64 * KiB }, /* flexcan3 */
-            { 0x427c0000, 64 * KiB }, /* flexcan4 */
-            { 0x427d0000, 64 * KiB }, /* flexcan5 */
-            { 0x443a0000, 64 * KiB }, /* flexcan1 */
         };
         for (size_t i = 0; i < ARRAY_SIZE(linux_periph_regions); i++) {
             g_autofree char *name =
@@ -1283,6 +1278,40 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * FlexCAN1..5. Real controllers (hw/net/can/flexcan.c) on QEMU's CAN
+     * bus subsystem; each connects to a host/emulated bus via the SoC's
+     * canbus0..4 link (NULL = register-only, frames dropped). The stock NXP
+     * EVK DT leaves these disabled, so a default boot does not probe them.
+     */
+    {
+        static const struct {
+            hwaddr addr;
+            int irq;
+        } flexcan_table[FSL_IMX95_NUM_FLEXCAN] = {
+            { 0x443a0000, FSL_IMX95_FLEXCAN1_IRQ },
+            { 0x425b0000, FSL_IMX95_FLEXCAN2_IRQ },
+            { 0x42600000, FSL_IMX95_FLEXCAN3_IRQ },
+            { 0x427c0000, FSL_IMX95_FLEXCAN4_IRQ },
+            { 0x427d0000, FSL_IMX95_FLEXCAN5_IRQ },
+        };
+
+        for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
+            SysBusDevice *sbd = SYS_BUS_DEVICE(&s->flexcan[i]);
+
+            if (s->canbus[i]) {
+                object_property_set_link(OBJECT(&s->flexcan[i]), "canbus",
+                                         OBJECT(s->canbus[i]), &error_abort);
+            }
+            if (!sysbus_realize(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0, flexcan_table[i].addr);
+            sysbus_connect_irq(sbd, 0,
+                qdev_get_gpio_in(gicdev, flexcan_table[i].irq));
+        }
+    }
+
+    /*
      * Cortex-M33 System Manager core (v0.6). Build the M33's 32-bit
      * address space: its private ITCM/DTCM RAM layered over a
      * low-priority alias of the A55 system memory (so the M33 can also
@@ -1568,13 +1597,32 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("usdhc%d", i + 1);
         object_initialize_child(obj, name, &s->usdhc[i], TYPE_IMX_USDHC);
     }
+
+    for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
+        g_autofree char *name = g_strdup_printf("flexcan%d", i + 1);
+        object_initialize_child(obj, name, &s->flexcan[i], TYPE_FLEXCAN);
+    }
 }
+
+static const Property fsl_imx95_properties[] = {
+    DEFINE_PROP_LINK("canbus0", FslImx95State, canbus[0], TYPE_CAN_BUS,
+                     CanBusState *),
+    DEFINE_PROP_LINK("canbus1", FslImx95State, canbus[1], TYPE_CAN_BUS,
+                     CanBusState *),
+    DEFINE_PROP_LINK("canbus2", FslImx95State, canbus[2], TYPE_CAN_BUS,
+                     CanBusState *),
+    DEFINE_PROP_LINK("canbus3", FslImx95State, canbus[3], TYPE_CAN_BUS,
+                     CanBusState *),
+    DEFINE_PROP_LINK("canbus4", FslImx95State, canbus[4], TYPE_CAN_BUS,
+                     CanBusState *),
+};
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = fsl_imx95_realize;
+    device_class_set_props(dc, fsl_imx95_properties);
     /* This is an SoC, not user-creatable. */
     dc->user_creatable = false;
 }
