@@ -42,9 +42,11 @@ QEMU; you never apply them to use this fork.)
     ./qemu-system-aarch64 -M help | grep imx95     # -> imx95-19x19-evk
 
 **2. First boot in seconds — no external artifacts.** The in-tree Cortex-M7
-firmware boots the M7 standalone and writes a fingerprint the test checks. You
-need a bare-metal `arm-none-eabi` toolchain (Ubuntu: `gcc-arm-none-eabi`). Run
-from the repo root (`cd ..` if you're still in `build/`):
+firmware boots the M7 standalone and writes a fingerprint the test checks (no
+SM needed — with no System Manager firmware loaded, the machine force-starts
+the M7 directly; when the SM *is* present it owns the M7 lifecycle instead).
+You need a bare-metal `arm-none-eabi` toolchain (Ubuntu: `gcc-arm-none-eabi`).
+Run from the repo root (`cd ..` if you're still in `build/`):
 
     make -C tests/cm7-hello TOOLCHAIN=arm-none-eabi-
     tests/m7-boot/run.sh        # -> "M7 fingerprint 0xC0FFEE07 detected"
