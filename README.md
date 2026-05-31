@@ -65,12 +65,19 @@ rpmsg, fault recovery), see
 
 ## Scope: what's modelled and what's deferred
 
-The i.MX 95 SoC has a heterogeneous CPU topology of **6× Cortex-A55** (the
-application cluster), **1× Cortex-M33** (the System Manager core), and
-**1× Cortex-M7** (the real-time domain). **This machine models all three CPU
-complements.** The M33 runs the real NXP SM firmware (Linux's sole SCMI
-provider); the SM in turn **boots, manages, and fault-recovers the M7**
-alongside the A-cluster — the full i.MX 95 CPU complement, not a partial SoC.
+This machine models the **full i.MX 95 CPU complement** — all three CPU types,
+not a partial SoC. The headline: it boots **real Linux on the A55 cluster, with
+SCMI served by the real NXP System Manager firmware** — not a software stub.
+
+- **6× Cortex-A55 — application cluster (the headline).** Boots stock NXP BSP
+  Linux 6.12.49 — and mainline aarch64 — all the way to userspace on all six
+  cores.
+- **1× Cortex-M33 — System Manager.** Runs the **real NXP SM firmware**, which
+  is Linux's *sole* SCMI provider: clocks, power, perf/DVFS, reset and sensors
+  are all served by the SM running on the emulated M33 over the MU mailbox
+  cross-connect — there is no software SCMI server inside the machine.
+- **1× Cortex-M7 — real-time domain.** The SM **boots, manages, and
+  fault-recovers** it alongside the A-cluster (the `imx95-v1.x` steps below).
 
 The M7 integration was the `imx95-v1.x` milestone, delivered as a sequence of
 steps — **all done**:
