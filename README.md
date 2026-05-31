@@ -128,8 +128,12 @@ interactive prompt — still work.
   verified under sustained load).
 - 24 h stability run (v1.0 A55 + M33 path): stable memory, data-integrity md5
   unchanged, no panics or SCMI timeouts. (The M7-integrated path has its own
-  36 h soaks — see the Step 2/3 bullets below; a 24 h soak on the Step-5
-  SM-managed-M7 path is the current pre-merge validation gate.)
+  36 h soaks — see the Step 2/3 bullets below.)
+- v1.x Step-5 (SM-managed M7) soak: 21 h continuous, **0 anomalies** (no
+  panics / RCU stalls / SCMI timeouts / BUGs / oopses), host RSS flat (+1.1%,
+  no leak), and the SM M7-release latch (`SRC.SCR` bit 12) held throughout.
+  The run ended at 21 h on an external process disturbance, not a guest fault;
+  a full ≥24 h soak on this path is the remaining pre-merge validation gate.
 - **v1.x Step 2 (Cortex-M7) validated**: M7 instance modelled, runs
   standalone firmware end-to-end (`tests/m7-boot/`), A55 + M33 + M7
   parallel boot test passes (`tests/parallel-boot/`), and a
