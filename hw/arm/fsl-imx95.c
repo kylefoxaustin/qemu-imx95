@@ -872,10 +872,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         memory_region_add_subregion(get_system_memory(), 0x4ca00000,
                                     ecam_alias);
 
-        /* 32-bit MMIO/BAR window (sysbus region 1) @0x4cc00000. */
+        /*
+         * 32-bit MMIO/BAR window (sysbus region 1) @0x4cc00000. Sized to the
+         * dtsi ECAM ranges (ENETC/EMDIO/timer BARs, 0x4cc00000..0x4cd20000)
+         * and kept clear of the netc-blk-ctrl ierb/prb stubs at 0x4cde0000/
+         * 0x4cdf0000 (a wider window would shadow them and wedge the driver's
+         * IERB lock poll).
+         */
         mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 1);
         memory_region_init_alias(mmio_alias, OBJECT(pcie), "netc-pcie-mmio",
-                                 mmio_reg, 0x4cc00000, 0x400000);
+                                 mmio_reg, 0x4cc00000, 0x120000);
         memory_region_add_subregion(get_system_memory(), 0x4cc00000,
                                     mmio_alias);
 
