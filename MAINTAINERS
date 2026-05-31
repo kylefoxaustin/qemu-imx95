@@ -964,6 +964,9 @@ F: hw/timer/imx95_sysctr.c
 F: hw/char/imx_lpuart.c
 F: hw/i2c/imx_lpi2c.c
 F: hw/misc/imx_mu.c
+F: hw/net/can/flexcan.c
+F: include/hw/net/flexcan.h
+F: tests/qtest/flexcan-test.c
 F: include/hw/arm/fsl-imx95.h
 F: include/hw/char/imx_lpuart.h
 F: include/hw/misc/imx_mu.h
