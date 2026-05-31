@@ -252,6 +252,8 @@ struct FslImx95State {
     FlexCanState            flexcan[FSL_IMX95_NUM_FLEXCAN];
     /* Optional per-controller CAN bus links (set via machine canbusN=...). */
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
+    /* NETC integrated-endpoint ECAM PCIe bus (v2.x; ENETC MACs attach here). */
+    PCIBus                 *netc_pcie_bus;
     DeviceState            *wdog2;
     DeviceState            *wdog3;
     /* M33 XCACHE controllers (PC @0x44400000, PS @0x44400800). */

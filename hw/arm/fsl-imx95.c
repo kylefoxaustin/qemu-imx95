@@ -46,6 +46,8 @@
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
+#include "hw/pci-host/gpex.h"
+#include "hw/pci/pci_host.h"
 #include "hw/misc/unimp.h"
 #include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
@@ -402,8 +404,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
             { 0x4c810000, 64 * KiB }, /* syscon */
-            { 0x4ca00000, 0x100000 }, /* netc pcie ecam 0 */
-            { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 */
+            /* netc pcie ecam0 (0x4ca00000) is now a real gpex host (v2.x). */
+            { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 (EMDIO domain) */
             { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl ierb */
             { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
             { 0x4d900000, 0x100000 }, /* gpu */
@@ -842,6 +844,51 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(SYS_BUS_DEVICE(its), 0,
                         fsl_imx95_memmap[FSL_IMX95_GIC_ITS].addr);
+    }
+
+    /*
+     * NETC integrated-endpoint ECAM PCIe host (v2.x). dtsi:
+     * netc-blk-ctrl@4cde0000's child pcie@4ca00000 ("pci-host-ecam-generic").
+     * The ENETC MACs attach as endpoint functions on this bus (stage 4); their
+     * MSIs route through the GICv3 ITS (above). bus/domain 0 only for now (the
+     * minimal path uses the port's internal MDIO, so the bus-1 EMDIO ECAM is
+     * left stubbed). The blk-ctrl model (later) gates Linux's probe of it.
+     */
+    {
+        DeviceState *pcie = qdev_new(TYPE_GPEX_HOST);
+        MemoryRegion *ecam_alias = g_new0(MemoryRegion, 1);
+        MemoryRegion *mmio_alias = g_new0(MemoryRegion, 1);
+        MemoryRegion *ecam_reg, *mmio_reg;
+        int pin;
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(pcie), errp)) {
+            return;
+        }
+
+        /* ECAM config window (sysbus region 0) @0x4ca00000, 1 MiB. */
+        ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 0);
+        memory_region_init_alias(ecam_alias, OBJECT(pcie), "netc-pcie-ecam",
+                                 ecam_reg, 0, 0x100000);
+        memory_region_add_subregion(get_system_memory(), 0x4ca00000,
+                                    ecam_alias);
+
+        /* 32-bit MMIO/BAR window (sysbus region 1) @0x4cc00000. */
+        mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 1);
+        memory_region_init_alias(mmio_alias, OBJECT(pcie), "netc-pcie-mmio",
+                                 mmio_reg, 0x4cc00000, 0x400000);
+        memory_region_add_subregion(get_system_memory(), 0x4cc00000,
+                                    mmio_alias);
+
+        /* INTx -> GIC SPIs 304..307 (MSI-X via the ITS is the real path). */
+        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+            int spi = 304 + pin;
+
+            sysbus_connect_irq(SYS_BUS_DEVICE(pcie), pin,
+                               qdev_get_gpio_in(gicdev, spi));
+            gpex_set_irq_num(GPEX_HOST(pcie), pin, spi);
+        }
+
+        s->netc_pcie_bus = PCI_HOST_BRIDGE(pcie)->bus;
     }
 
     /* On-chip RAM. */

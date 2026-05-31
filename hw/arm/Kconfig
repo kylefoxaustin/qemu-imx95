@@ -637,6 +637,7 @@ config FSL_IMX95
     select IMX_LPI2C
     select FLEXCAN
     select SDHCI
+    select PCI_EXPRESS_GENERIC_BRIDGE
     select UNIMP
 
 config FSL_IMX95_EVK
