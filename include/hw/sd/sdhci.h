@@ -126,6 +126,15 @@ typedef struct SDHCIState SDHCIState;
  */
 #define SDHCI_QUIRK_SDCLK_AUTO_GATE    BIT(16)
 
+/*
+ * The i.MX uSDHC silicon does not implement the SDHCI "Host SDMA Buffer
+ * Boundary" mechanism; it streams all blocks back-to-back regardless of the
+ * buffer-boundary alignment, never pausing at the boundary. With this quirk
+ * the SDMA engine skips the page-aligned boundary-break path so the transfer
+ * runs to completion. QEMU-internal bit, not mirrored from Linux.
+ */
+#define SDHCI_QUIRK_NO_SDMA_BOUNDARY    BIT(17)
+
 #define TYPE_PCI_SDHCI "sdhci-pci"
 DECLARE_INSTANCE_CHECKER(SDHCIState, PCI_SDHCI,
                          TYPE_PCI_SDHCI)
