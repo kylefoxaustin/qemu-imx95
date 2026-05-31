@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Device-tree overlay for the QEMU i.MX 95 NETC ENETC test.
+ *
+ * The fsl-imx95 SoC model places the modelled ENETC0 PF at PCI devfn 02.0
+ * (0x10) on the NETC ECAM bus (gpex parks its own root bridge at 00.0, where
+ * the BSP DT's ethernet@0,0 lives). devfn 0x10 has no DT child in the base
+ * tree, so enetc4_pf bails in enetc_pf_register_hw_mac() ("no fwnode").
+ *
+ * This overlay adds an available ethernet@2,0 node with a fixed MAC (no efuse
+ * nvmem dependency) and a fixed-link (no real PHY/MDIO needed), so the PF
+ * probes to a netdev under emulation.
+ *
+ * Merge onto the base DTB with fdtoverlay (see run.sh).
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Drop the "fsl,enetc-ptp-timer" compatible from the NETC timer function.
+ * enetc4_pf's module_init() calls ntmp_init(), which finds that node, looks
+ * up its (unmodelled) device with of_find_device_by_node() and returns
+ * -EPROBE_DEFER when it is absent. A module_init returning an error fails
+ * permanently, so the PF PCI driver would never register. We do not model
+ * the PTP timer, so make ntmp_init() take its early "no timer" exit.
+ */
+&netc_timer {
+	compatible = "pci1131,ee02";
+};
+
+&pcie_4ca00000 {
+	ethernet@2,0 {
+		compatible = "fsl,imx95-enetc";
+		reg = <0x1000 0x0 0x0 0x0 0x0>;
+		local-mac-address = [00 04 9f 06 11 22];
+		phy-mode = "rgmii-id";
+		status = "okay";
+
+		fixed-link {
+			speed = <1000>;
+			full-duplex;
+		};
+	};
+};

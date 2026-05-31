@@ -71,3 +71,4 @@ stub_ss.add(files('rocker/rocker-stubs.c'))
 system_ss.add(files('rocker/rocker-hmp-cmds.c'))
 
 subdir('can')
+system_ss.add(when: 'CONFIG_FSL_ENETC', if_true: files('fsl_enetc.c'))

@@ -32,6 +32,8 @@
 #include "hw/misc/imx_mu.h"
 #include "hw/sd/sdhci.h"
 #include "hw/net/flexcan.h"
+#include "hw/net/fsl_enetc.h"
+#include "hw/net/fsl_enetc.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
@@ -254,6 +256,7 @@ struct FslImx95State {
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
     /* NETC integrated-endpoint ECAM PCIe bus (v2.x; ENETC MACs attach here). */
     PCIBus                 *netc_pcie_bus;
+    PCIDevice              *enetc;
     DeviceState            *wdog2;
     DeviceState            *wdog3;
     /* M33 XCACHE controllers (PC @0x44400000, PS @0x44400800). */

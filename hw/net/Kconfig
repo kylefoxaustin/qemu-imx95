@@ -161,3 +161,8 @@ config CAN_CTUCANFD_PCI
     default y if PCI_DEVICES
     depends on PCI && CAN_CTUCANFD
     select CAN_BUS
+
+config FSL_ENETC
+    bool
+    default y if PCI_DEVICES
+    depends on PCI_EXPRESS && MSI_NONBROKEN
