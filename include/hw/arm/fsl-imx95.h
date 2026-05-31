@@ -372,7 +372,7 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_WDOG4,
     FSL_IMX95_WDOG5,
 
-    /* GPIO controllers (1..5). SPL gpio_reset()s 2..5; #1 added for symmetry. */
+    /* GPIO controllers (1..5). SPL gpio_reset()s 2..5; #1 added for parity. */
     FSL_IMX95_GPIO1,
     FSL_IMX95_GPIO2,
     FSL_IMX95_GPIO3,

@@ -107,7 +107,7 @@ static void imx95_19x19_evk_machine_init(MachineClass *mc)
     mc->default_cpus          = FSL_IMX95_NUM_A55_CPUS + 2;
     mc->max_cpus              = FSL_IMX95_NUM_A55_CPUS + 2;
     mc->default_ram_id        = "imx95-19x19-evk.ram";
-    mc->default_ram_size      = 8 * GiB;   /* 19x19 EVK ships with 8 GiB LPDDR5 */
+    mc->default_ram_size      = 8 * GiB;   /* 19x19 EVK has 8 GiB LPDDR5 */
     mc->get_default_cpu_type  = imx95_evk_get_default_cpu_type;
 }
 
