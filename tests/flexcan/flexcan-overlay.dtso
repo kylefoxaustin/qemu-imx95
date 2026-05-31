@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Device-tree overlay that enables FlexCAN1 and FlexCAN2 on the stock NXP
+ * i.MX 95 EVK device tree (which ships them disabled). Applied to the base
+ * DTB with fdtoverlay to produce a CAN-enabled DTB for tests/flexcan/run.sh;
+ * the base DTB is never modified.
+ *
+ * flexcan1 = can@443a0000 (-> SoC canbus0), flexcan2 = can@425b0000 (canbus1);
+ * wire both to one emulated can-bus and the guest gets can0 <-> can1.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Add a fixed, always-on regulator and point both FlexCAN transceiver
+ * supplies at it. On the real board xceiver-supply is a GPIO "can-stby"
+ * regulator behind an i2c GPIO expander that does not probe in emulation, so
+ * the FlexCAN nodes would otherwise defer forever ("regulator-canN-stby not
+ * ready"). No CAN transceiver is modelled, so an always-on dummy is correct.
+ */
+&{/} {
+    can_xceiver_reg: regulator-can-xceiver {
+        compatible = "regulator-fixed";
+        regulator-name = "can-xceiver-dummy";
+        regulator-always-on;
+    };
+};
+
+&flexcan1 {
+    status = "okay";
+    xceiver-supply = <&can_xceiver_reg>;
+};
+
+&flexcan2 {
+    status = "okay";
+    xceiver-supply = <&can_xceiver_reg>;
+};

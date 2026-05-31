@@ -49,3 +49,4 @@ tests/busybox-initramfs/*.cpio.gz
 
 # Claude Code local tool state
 /.claude/
+/tests/flexcan/cantest
