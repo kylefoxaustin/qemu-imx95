@@ -549,6 +549,14 @@ confirms the M7 faulted **and** the real SM restarted it (with no SM it
 would fault once and never return). SM log evidence: `Reset LM 1,
 reason=fccu`.
 
+**Step-5 soak.** The SM-managed M7 path (A55 + M33 + M7, the M7 held under
+the SM's logical-machine lifecycle) additionally ran a **21 h** continuous
+soak: **0 anomalies** (no panics / RCU stalls / SCMI timeouts / BUGs / oopses),
+host RSS flat (+1.1 %, no leak), and the SM M7-release latch (`SRC.SCR` bit 12)
+held throughout. The run ended at 21 h on an external process disturbance (a
+rebuild of the running binary mid-soak), not a guest fault; a full ≥24 h soak
+on this path is the remaining pre-merge gate and is in progress.
+
 **Regression.** Across Steps 3–5 the SM-managed M7 path and the
 A55/Linux boot stay independent: `tests/m7-first` reaches Linux
 userspace with the M7 up; `tests/m33-m7-only` and `tests/m7-boot` cover
@@ -558,8 +566,9 @@ LMM path) is untouched.
 
 This closes the v1.x M7 *functional* deliverables. What remains before
 the upstream window is the broader validation campaign in
-[`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility,
-longer soaks against the M7-managed path) and the Phase-5 submission
+[`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility, a
+full ≥24 h soak against the M7-managed path — the 21 h run above is the
+current best, with a ≥24 h run in progress) and the Phase-5 submission
 prep (functional test, `.rst` docs, patch series).
 
 ## Independent third-party workload #1 — ORB-SLAM3 ran in-machine (recorded 2026-05-30)
