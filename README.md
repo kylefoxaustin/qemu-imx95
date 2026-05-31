@@ -77,24 +77,18 @@ SCMI served by the real NXP System Manager firmware** — not a software stub.
   are all served by the SM running on the emulated M33 over the MU mailbox
   cross-connect — there is no software SCMI server inside the machine.
 - **1× Cortex-M7 — real-time domain.** The SM **boots, manages, and
-  fault-recovers** it alongside the A-cluster (the `imx95-v1.x` steps below).
+  fault-recovers** it alongside the A-cluster (the `imx95-v1.x` milestone,
+  below).
 
-The M7 integration was the `imx95-v1.x` milestone, delivered as a sequence of
-steps — **all done**:
-
-- **Step 2 — instance + soak:** the M7 TCG core with its ITCM/DTCM, exercised
-  under the long-duration stability soak.
-- **Step 3 — silicon-faithful release:** the M7 is released through the
-  SM-driven SRC / AONMIX `M7_CFG.WAIT` path, not a faked core start.
-- **Step 4 — boot + rpmsg:** SM-orchestrated M7 boot, Linux `imx_rproc`
-  attaches to the SM-managed core, and the stock `imx_rpmsg_pingpong` module
-  runs a 100-message round-trip over the MU7 cross-connect.
-- **Step 5 — fault recovery:** the SM cold-resets the M7 logical machine on a
-  fault (`SYSRESETREQ` → `lm_reset`), while the A-cluster boot continues.
-- **Step 6 — methodology + validation docs.**
+That M7 work was the `imx95-v1.x` milestone, now **complete**: the M7 runs as a
+TCG core with its own TCMs, released by the SM through the silicon-faithful
+SRC / AONMIX `M7_CFG.WAIT` path; under SM orchestration it boots, Linux's
+`imx_rproc` attaches, and the stock `imx_rpmsg_pingpong` module runs a
+100-message round-trip over the MU7 cross-connect; and the SM cold-resets the
+M7 on a fault (`SYSRESETREQ` → `lm_reset`) while the A-cluster keeps running.
 
 See [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
-the per-step detail, and
+the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
