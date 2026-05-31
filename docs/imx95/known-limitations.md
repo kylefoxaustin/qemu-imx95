@@ -108,9 +108,18 @@ characterized below from a Tier-3.4 live test with a glibc Mesa userspace
   doesn't match the i.MX stub) fails to attach; `kmscube` errors with
   `no connected connector! failed to initialize legacy DRM`.
 - **Amphion VPU / Neutron NPU.** Logging-stub MMIO, no V4L2 stream/inference.
+- **Display interfaces (MIPI DSI `4acf0000`, LVDS/LDB `4b0c0000`) and camera
+  (MIPI CSI0/1 `4ad30000`/`4ad40000`, ISI `4ad50000`, NEO ISP `4ae00000`).**
+  Unimplemented stubs (read-as-0) — present so enabling the DT nodes degrades
+  gracefully instead of faulting, but there is no panel/scanout output and no
+  camera capture. The display-mix CSRs and the DPU command-sequencer stub let
+  the `dpu95`/DRM stack probe, but nothing reaches a connector. A real display
+  path (DPU scanout + a fixed connected output surfaced to a QEMU window) and
+  camera capture (a V4L2 source) are **roadmap items**, after NETC networking.
 
 Userspace requiring hardware acceleration (glmark2, `ffmpeg` hwaccel, NPU
-inference, anything wanting a working Mali ICD) will not work.
+inference, anything wanting a working Mali ICD) will not work; nor will
+on-screen display output or live camera capture.
 
 This is universal across SoC software emulators: no public software emulator of
 any modern SoC's GPU/VPU/NPU exists (Snapdragon, Apple Silicon, Tegra, Exynos,

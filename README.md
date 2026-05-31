@@ -176,6 +176,8 @@ three generic-QEMU prereq patches (`target/arm/ptw.c`,
 | Next | What | Target |
 |---|---|---|
 | **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MACs as PCIe endpoint functions, MSIs routed to the GIC ITS; the first network interface beyond `lo` | **v2.x** (post-upstream) |
+| **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.x** (after NETC) |
+| **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source | after Display |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
 | Real-time peripherals | FlexCAN, TSN, audio DSP for M7 / mixed-criticality workloads | deferred |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
