@@ -895,6 +895,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
 
         s->netc_pcie_bus = PCI_HOST_BRIDGE(pcie)->bus;
+
+        /*
+         * ENETC0 PF (PCI 1131:e101). The BSP DT maps ENETC0 to devfn 00.0,
+         * but gpex parks its own root bridge there; place the PF at devfn
+         * 02.0 (0x10) instead - that RID is covered by the dtsi msi-map (ITS
+         * DevID 0x61) and has no DT child node in the base tree, so the test
+         * overlay (tests/netc) supplies an available node with a fixed MAC.
+         */
+        s->enetc = PCI_DEVICE(pci_new(PCI_DEVFN(2, 0), TYPE_FSL_ENETC));
+        pci_realize_and_unref(s->enetc, s->netc_pcie_bus, &error_fatal);
     }
 
     /* On-chip RAM. */
