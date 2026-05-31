@@ -301,7 +301,7 @@ enum FslImx95MemoryRegions {
     /* GPC (per-domain CPU_CTRL + GLOBAL) - SM power/CPU-mode control. */
     FSL_IMX95_GPC,
 
-    /* LPUART block (8 instances; all currently stubbed) */
+    /* LPUART block (8 instances; all modelled — TYPE_IMX_LPUART) */
     FSL_IMX95_LPUART1,
     FSL_IMX95_LPUART2,
     FSL_IMX95_LPUART3,
