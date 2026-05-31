@@ -115,16 +115,6 @@ Run /init as init process
 **On the A55 / Linux side** (full evidence in
 [`docs/imx95/validation-report.md`](docs/imx95/validation-report.md)):
 
-- **Two independent third-party robotics stacks ran to convergence** in the
-  Linux userspace — cross-built and run by external adopters, not the author:
-  **ORB-SLAM3**
-  ([`orbslam3-imx95`](https://github.com/kylefoxaustin/orbslam3-imx95) —
-  OpenCV + g2o + DBoW2, 139 MB vocabulary) and **VINS-Fusion**
-  ([`vins-fusion-imx95`](https://github.com/kylefoxaustin/vins-fusion-imx95) —
-  stereo-inertial VIO + Ceres). Real SLAM/VIO applications on a full
-  glibc-dynamic userspace, ~21× TCG slowdown (functional portability, not a
-  silicon timing estimate). The ORB-SLAM3 run surfaced the SDHCI shutdown bug;
-  the VINS-Fusion run, on the fixed build, confirmed a clean guest poweroff.
 - Boots **three distinct kernels** — NXP 6.12.49 vendor, mainline 6.12.0,
   NXP 6.18.2 vendor — all reaching `/init`, all binding SCMI to the real SM.
 - Boots **two distinct userspaces** — static BusyBox and a glibc-dynamic
@@ -139,6 +129,16 @@ Run /init as init process
   container as a different user with only the README-documented dependencies.
 - **24 h stability soak** (A55 + M33 path): stable memory, data-integrity md5
   unchanged, no panics or SCMI timeouts.
+- **Two independent third-party robotics stacks ran to convergence** in the
+  Linux userspace — cross-built and run by external adopters, not the author:
+  **ORB-SLAM3**
+  ([`orbslam3-imx95`](https://github.com/kylefoxaustin/orbslam3-imx95) —
+  OpenCV + g2o + DBoW2, 139 MB vocabulary) and **VINS-Fusion**
+  ([`vins-fusion-imx95`](https://github.com/kylefoxaustin/vins-fusion-imx95) —
+  stereo-inertial VIO + Ceres). Real SLAM/VIO applications on a full
+  glibc-dynamic userspace, ~21× TCG slowdown (functional portability, not a
+  silicon timing estimate). The ORB-SLAM3 run surfaced the SDHCI shutdown bug;
+  the VINS-Fusion run, on the fixed build, confirmed a clean guest poweroff.
 
 **On the real-time (Cortex-M7) side** — the SM-managed M7 (the `imx95-v1.x`
 milestone in Scope, above), validated end to end:
