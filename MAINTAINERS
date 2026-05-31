@@ -970,6 +970,7 @@ F: tests/cm7-hello/
 F: tests/m7-boot/
 F: tests/m7-first/
 F: tests/m7-fault-recovery/
+F: tests/m7-rpmsg/
 F: tests/m33-m7-only/
 F: tests/parallel-boot/
 F: tests/functional/aarch64/test_imx95_evk.py

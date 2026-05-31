@@ -204,7 +204,9 @@ carveout (`0x88000000`). This is the standard OpenAMP architecture:
 mailbox notifies, shared memory carries data.
 
 Verified end-to-end with the stock NXP `imx_rpmsg_pingpong` kernel module
-performing a 100-message ping/pong exchange in a full A55+M33+M7 boot.
+performing a 100-message ping/pong exchange in a full A55+M33+M7 boot,
+reproducible via the env-gated `m7_rpmsg_pingpong` functional test
+(`tests/functional/aarch64/test_imx95_evk.py`; recipe in `tests/m7-rpmsg/`).
 
 **Known unknown (deferred to a later milestone):** MU TR/RR
 back-pressure — what real i.MX 95 hardware does when `TR` is written

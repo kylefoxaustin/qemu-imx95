@@ -155,9 +155,11 @@ populated. The M7's console is LPUART3.
 Two SM-managed behaviours are modelled:
 
 * **rpmsg.** Once Linux has attached, the stock NXP ``imx_rpmsg_pingpong``
-  kernel module exchanges messages with an M7 rpmsg-lite client over the MU7
-  cross-connect (doorbell kicks) and shared vrings (payload) in the M7 DRAM
-  carveout.
+  kernel module exchanges 100 messages with an M7 rpmsg-lite client over the
+  MU7 cross-connect (doorbell kicks) and shared vrings (payload) in the M7 DRAM
+  carveout, printing ``goodbye!`` after the final round-trip. The
+  ``Cortex-M7 rpmsg ping/pong`` functional test below exercises this end to
+  end (see also ``tests/m7-rpmsg/``).
 
 * **Fault recovery.** The M7 logical machine is configured ``reaction=lm_reset``,
   so an M7 fault triggers an SM-driven cold reset of the M7. When the M7 asserts
@@ -205,7 +207,7 @@ Caveats
 Functional test
 ---------------
 
-``tests/functional/aarch64/test_imx95_evk.py`` has two env-gated cases; each
+``tests/functional/aarch64/test_imx95_evk.py`` has three env-gated cases; each
 takes its artifacts from environment variables and skips cleanly (naming the
 unset variables) if any are absent, since the NXP-source-built artifacts are
 not redistributable:
@@ -214,6 +216,20 @@ not redistributable:
   ``QEMU_TEST_IMX95_DTB``, ``QEMU_TEST_IMX95_INITRD`` and
   ``QEMU_TEST_IMX95_SM_FW``. Boots Linux and checks for the SCMI handshake
   followed by an init-printed userspace banner (~14 s on a development host).
+
+* **Cortex-M7 rpmsg ping/pong** — needs ``QEMU_TEST_IMX95_KERNEL``,
+  ``QEMU_TEST_IMX95_DTB``, ``QEMU_TEST_IMX95_SM_FW``,
+  ``QEMU_TEST_IMX95_M7_RPMSG_FW`` (the M7 rpmsg-lite pingpong firmware) and
+  ``QEMU_TEST_IMX95_RPMSG_INITRD`` (an initramfs bundling the matching
+  ``imx_rpmsg_pingpong.ko`` and an ``/init`` that loads it). Boots the full
+  A55 + SM + M7 stack and checks for the SCMI handshake followed by the
+  module's ``goodbye!`` line — printed only after the 100-message exchange
+  with the M7 over MU7 completes. The M7 firmware is NXP's
+  ``rpmsg_lite_pingpong_rtos_linux_remote`` multicore example; the NXP BSP
+  ships it prebuilt in the target rootfs at
+  ``/usr/lib/firmware/imx95-19x19-evk_m7_TCM_rpmsg_lite_pingpong_rtos_linux_remote.{elf,bin}``,
+  or it can be built from the MCUXpresso SDK multicore examples. See
+  ``tests/m7-rpmsg/`` for a standalone harness and an initramfs recipe.
 
 * **Cortex-M7 fault recovery** — needs ``QEMU_TEST_IMX95_SM_FW`` and
   ``QEMU_TEST_IMX95_M7_FW`` (an M7 fixture that asserts ``SYSRESETREQ`` on its
