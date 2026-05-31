@@ -92,8 +92,9 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-Customer-specific real-time peripherals (FlexCAN, TSN, audio DSP, etc.)
-remain further out, beyond the v1.x M7 work. See
+The **FlexCAN** controllers are modelled (all five, on QEMU's CAN bus — see
+"What runs today"); other customer-specific real-time peripherals (TSN, audio
+SAI/DSP, etc.) remain further out, beyond the v1.x M7 work. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -157,6 +158,18 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
+**CAN.** All five **FlexCAN** controllers are modelled
+(`hw/net/can/flexcan.c`) on QEMU's CAN bus subsystem — real frame TX/RX, the
+Linux-driver MCR handshake, individual RX mailboxes and CAN-FD geometry,
+validated by `tests/qtest/flexcan-test.c`. Attach a host SocketCAN backend
+(the stock EVK DT leaves the CAN nodes disabled, so enable the node you want):
+
+```
+-object can-bus,id=canbus0 \
+-object can-host-socketcan,id=canhost0,if=vcan0,canbus=canbus0 \
+-machine imx95-19x19-evk,canbus0=canbus0
+```
+
 Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
 stub-only) are characterized with precise failure points — see
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
@@ -177,7 +190,7 @@ three generic-QEMU prereq patches (`target/arm/ptw.c`,
 |---|---|---|
 | **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MACs as PCIe endpoint functions, MSIs routed to the GIC ITS; the first network interface beyond `lo` | **v2.x** (post-upstream) |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
-| Real-time peripherals | FlexCAN, TSN, audio DSP for M7 / mixed-criticality workloads | deferred |
+| Real-time peripherals | ~~FlexCAN~~ (**done** — all 5 modelled on QEMU's CAN bus); TSN, audio SAI/DSP for M7 / mixed-criticality workloads | partly done |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
 The deferred rows are characterized with precise failure points in

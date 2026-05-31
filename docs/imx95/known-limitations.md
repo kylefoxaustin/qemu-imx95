@@ -163,9 +163,11 @@ ahead:
 | 5 | M7 lifecycle: the SM boots, manages and **fault-recovers** the M7 (cold-resets the M7 LM on a fault) | **done** — see "M7 fault recovery — SM cold-resets the M7 LM" below; `tests/m7-fault-recovery` verifies the M7 faults and the real SM restarts it |
 | 6 | Docs polish + v1.x validation report | **done** — methodology cross-layer patterns in [`methodology.md`](methodology.md); v1.x Steps 3–5 validation in [`validation-report.md`](validation-report.md) |
 
-Customer-specific real-time peripheral modelling (FlexCAN, TSN networking,
-audio DSP, etc.) remains future scope beyond initial M7 support — none of
-these are required for the M7 to demonstrate execution.
+The **FlexCAN** controllers are now modelled (all five, on QEMU's CAN bus
+subsystem — `hw/net/can/flexcan.c`, validated by `tests/qtest/flexcan-test.c`).
+Other customer-specific real-time peripherals (TSN networking, audio SAI/DSP,
+etc.) remain future scope beyond initial M7 support — none of these are
+required for the M7 to demonstrate execution.
 
 ### M7 lifecycle — SM-orchestrated, Linux-attached
 
