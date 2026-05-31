@@ -140,14 +140,19 @@ Run /init as init process
 - **24 h stability soak** (A55 + M33 path): stable memory, data-integrity md5
   unchanged, no panics or SCMI timeouts.
 
-On the real-time side, **the SM-managed Cortex-M7** (the `imx95-v1.x` steps in
-the Scope section above) is validated end to end — SM-orchestrated boot, Linux
-`imx_rproc` attach, a 100-message `imx_rpmsg_pingpong` round-trip over MU7, and
-SM cold-reset fault recovery — via the env-gated `m7_rpmsg_pingpong` functional
-test, `tests/m7-rpmsg/` and `tests/m7-fault-recovery/`, and held under 36 h and
-21 h soaks on the M7 path (0 anomalies; full numbers in the validation report).
-The bring-up also surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one
-of three generic-QEMU prereqs split out for upstream.
+**On the real-time (Cortex-M7) side** — the SM-managed M7 (the `imx95-v1.x`
+milestone in Scope, above), validated end to end:
+
+- **SM-orchestrated boot + `imx_rproc` attach** — the SM boots the M7 alongside
+  the A-cluster; Linux attaches to the SM-managed core over MU7.
+- **100-message `imx_rpmsg_pingpong`** round-trip over MU7 — env-gated
+  `m7_rpmsg_pingpong` functional test (harness + recipe in `tests/m7-rpmsg/`).
+- **SM cold-reset fault recovery** (`SYSRESETREQ` → `lm_reset`), exactly as on
+  silicon — `tests/m7-fault-recovery/`.
+- **36 h and 21 h soaks** on the M7 path, 0 anomalies (full numbers in the
+  validation report).
+- Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
+  generic-QEMU prereqs split out for upstream.
 
 Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
 stub-only) are characterized with precise failure points — see
