@@ -1,7 +1,7 @@
 /*
  * NXP i.MX 95 BLK_CTRL_S_AONMIX - minimal model for the M7 CPU-WAIT gate
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

@@ -3,7 +3,7 @@
  *
  * Modeled on hw/arm/fsl-imx8mp.c by Bernhard Beschow
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

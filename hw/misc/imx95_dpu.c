@@ -1,7 +1,7 @@
 /*
  * NXP i.MX 95 DPU (Display Processing Unit) command-sequencer status stub
  *
- * Copyright (c) 2026, Kyle Fox <kylefoxaustin@github>
+ * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
