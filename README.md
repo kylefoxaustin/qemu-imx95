@@ -42,9 +42,9 @@ QEMU; you never apply them to use this fork.)
     ./qemu-system-aarch64 -M help | grep imx95     # -> imx95-19x19-evk
 
 **2. First boot in seconds — no external artifacts.** The in-tree Cortex-M7
-firmware boots the M7 standalone and writes a fingerprint the test checks (no
-SM needed — with no System Manager firmware loaded, the machine force-starts
-the M7 directly; when the SM *is* present it owns the M7 lifecycle instead).
+firmware boots the M7 standalone and writes a fingerprint the test checks.
+(No SM firmware needed: the machine force-starts the M7 directly when no SM is
+present. When the SM is loaded, it owns the M7 lifecycle instead.)
 You need a bare-metal `arm-none-eabi` toolchain (Ubuntu: `gcc-arm-none-eabi`).
 Run from the repo root (`cd ..` if you're still in `build/`):
 
@@ -127,8 +127,9 @@ Run /init as init process
   standalone to its debug-monitor prompt (`tests/sm-banner/`).
 - **Reproducible from a clean clone** — including a clean `ubuntu:24.04`
   container as a different user with only the README-documented dependencies.
-- **24 h stability soak** (A55 + M33 path): stable memory, data-integrity md5
-  unchanged, no panics or SCMI timeouts.
+- **24 h+ stability soak** (A55 + M33 path) — ran past its 24 h target to
+  ~36 h: stable memory, data-integrity md5 unchanged across 4274 heartbeats,
+  no panics or SCMI timeouts.
 - **Two independent third-party robotics stacks ran to convergence** in the
   Linux userspace — cross-built and run by external adopters, not the author:
   **ORB-SLAM3**
@@ -149,8 +150,10 @@ milestone in Scope, above), validated end to end:
   `m7_rpmsg_pingpong` functional test (harness + recipe in `tests/m7-rpmsg/`).
 - **SM cold-reset fault recovery** (`SYSRESETREQ` → `lm_reset`), exactly as on
   silicon — `tests/m7-fault-recovery/`.
-- **36 h and 21 h soaks** on the M7 path, 0 anomalies (full numbers in the
-  validation report).
+- **Three soaks on the M7 path** — 36 h parallel-boot (Step 2), 36 h SM-driven
+  release (Step 3), and 21 h SM-managed (Step 5) — **0 anomalies across all
+  three**; a full ≥24 h Step-5 soak is the remaining gate (in progress). Full
+  numbers in the validation report.
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
