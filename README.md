@@ -166,6 +166,24 @@ external user would have hit them: an LPUART FIFO read-only-bit storm
 (commit `741af2f5e3`) and an undocumented `file` host-package dependency in a
 test script (commit `7def38532a`).
 
+## Roadmap
+
+Near-term focus is **landing this machine upstream** — the series plus its
+three generic-QEMU prereq patches (`target/arm/ptw.c`,
+`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel. The next major
+*feature* after that is networking:
+
+| Next | What | Target |
+|---|---|---|
+| **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MACs as PCIe endpoint functions, MSIs routed to the GIC ITS; the first network interface beyond `lo` | **v2.x** (post-upstream) |
+| GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
+| Real-time peripherals | FlexCAN, TSN, audio DSP for M7 / mixed-criticality workloads | deferred |
+| Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
+
+The deferred rows are characterized with precise failure points in
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md); none is a
+fidelity compromise in the modelled hardware.
+
 ## Required artifacts
 
 > **The System Manager firmware image is required.** The real SM on the M33 is
