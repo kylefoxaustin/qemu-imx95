@@ -244,7 +244,7 @@ static void fsl_imx95_stub_mu_tr_write(void *opaque, unsigned int idx,
 {
 }
 
-static void fsl_imx95_install_unimplemented(FslImx95State *s)
+static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
 {
     static const int unimplemented_regions[] = {
         FSL_IMX95_CCM, FSL_IMX95_IOMUXC,
@@ -428,9 +428,13 @@ static void fsl_imx95_install_unimplemented(FslImx95State *s)
     {
         DeviceState *dpu = qdev_new("imx95.dpu");
 
-        sysbus_realize_and_unref(SYS_BUS_DEVICE(dpu), &error_fatal);
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(dpu), errp)) {
+            return false;
+        }
         sysbus_mmio_map(SYS_BUS_DEVICE(dpu), 0, 0x4b400000);
     }
+
+    return true;
 }
 
 /*
@@ -857,7 +861,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * local-timer-stop idle state. Not in the unimplemented-region list.
      */
     s->sysctr = qdev_new("imx95.sysctr");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->sysctr), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->sysctr), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->sysctr), 0,
                     fsl_imx95_memmap[FSL_IMX95_SYSCNT].addr);
     sysbus_connect_irq(SYS_BUS_DEVICE(s->sysctr), 0,
@@ -1092,7 +1098,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * Stub model is enough to satisfy disable_wdog().
      */
     s->wdog3 = qdev_new("imx95.wdog");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog3), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog3), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog3), 0,
                     fsl_imx95_memmap[FSL_IMX95_WDOG3].addr);
 
@@ -1103,7 +1111,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * never fires - the SM is free to configure and refresh it).
      */
     s->wdog2 = qdev_new("imx95.wdog");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog2), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog2), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->wdog2), 0,
                     fsl_imx95_memmap[FSL_IMX95_WDOG2].addr);
 
@@ -1113,11 +1123,15 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * the command bits so those polls converge.
      */
     s->xcache_pc = qdev_new("imx95.xcache");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_pc), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_pc), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_pc), 0,
                     fsl_imx95_memmap[FSL_IMX95_XCACHE_PC].addr);
     s->xcache_ps = qdev_new("imx95.xcache");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_ps), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->xcache_ps), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_ps), 0,
                     fsl_imx95_memmap[FSL_IMX95_XCACHE_PS].addr);
 
@@ -1130,7 +1144,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * (0x53) needs no model - its PCA2131_Init() is a no-op.
      */
     s->lpi2c_pmic = qdev_new("imx.lpi2c");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c_pmic), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c_pmic), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c_pmic), 0,
                     fsl_imx95_memmap[FSL_IMX95_LPI2C7].addr);
     {
@@ -1148,7 +1164,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * mode" loops converge.
      */
     s->gpc = qdev_new("imx95.gpc");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->gpc), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->gpc), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->gpc), 0,
                     fsl_imx95_memmap[FSL_IMX95_GPC].addr);
 
@@ -1159,7 +1177,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * power-down/up poll loops converge instead of spinning forever.
      */
     s->src = qdev_new("imx95.src");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->src), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->src), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->src), 0,
                     fsl_imx95_memmap[FSL_IMX95_SRC].addr);
     /*
@@ -1183,7 +1203,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * the M7 LM (incl. fault-recovery lm_reset) actually cycles the core.
      */
     s->aonmix = qdev_new("imx95.aonmix");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->aonmix), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->aonmix), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->aonmix), 0,
                     fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_S_AONMIX].addr);
     qdev_connect_gpio_out_named(s->aonmix, "m7-run", 0,
@@ -1197,7 +1219,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * instead of timing out (-9) or hanging.
      */
     s->anatop = qdev_new("imx95.anatop");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->anatop), &error_fatal);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->anatop), errp)) {
+        return;
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->anatop), 0,
                     fsl_imx95_memmap[FSL_IMX95_ANATOP].addr);
 
@@ -1484,7 +1508,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     qemu_add_machine_init_done_notifier(&s->m33_machine_done);
 
     /* All peripherals not yet modeled get logging stubs. */
-    fsl_imx95_install_unimplemented(s);
+    if (!fsl_imx95_install_unimplemented(s, errp)) {
+        return;
+    }
 }
 
 static void fsl_imx95_init(Object *obj)
