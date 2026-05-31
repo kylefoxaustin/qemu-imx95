@@ -627,9 +627,10 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
      * neither should we. Skipping the page-aligned path makes the SDMA
      * transfer run to completion (blkcnt -> 0) and fire transfer-complete,
      * which is what the FSL U-Boot SPL driver expects (it doesn't ack
-     * SDMA-boundary IRQs by re-writing SYSAD).
+     * SDMA-boundary IRQs by re-writing SYSAD). Controllers with this
+     * behaviour set SDHCI_QUIRK_NO_SDMA_BOUNDARY.
      */
-    if (s->io_ops != &usdhc_mmio_ops) {
+    if (!(s->quirks & SDHCI_QUIRK_NO_SDMA_BOUNDARY)) {
         /*
          * XXX: Some sd/mmc drivers (for example, u-boot-slp) do not
          * account for possible stop at page boundary if initial address
@@ -1968,7 +1969,8 @@ static void imx_usdhc_init(Object *obj)
     DeviceState *dev = DEVICE(obj);
 
     s->io_ops = &usdhc_mmio_ops;
-    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ | SDHCI_QUIRK_SDCLK_AUTO_GATE;
+    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ | SDHCI_QUIRK_SDCLK_AUTO_GATE |
+                SDHCI_QUIRK_NO_SDMA_BOUNDARY;
     qdev_prop_set_uint8(dev, "sd-spec-version", 3);
 }
 
