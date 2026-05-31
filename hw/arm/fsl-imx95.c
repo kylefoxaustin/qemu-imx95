@@ -406,6 +406,25 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
             { 0x4d900000, 0x100000 }, /* gpu */
             { 0x4ab00000, 0x100000 }, /* neutron npu */
+            /*
+             * Audio (SAI/XCVR/MICFIL) and FlexCAN: not yet modelled. Stub
+             * them so that a board/use case enabling these nodes degrades
+             * gracefully (reads-as-0) instead of taking an unmapped-access
+             * fault on the first MMIO. The default NXP EVK boot does not
+             * probe them; FlexCAN modelling is on the roadmap.
+             */
+            { 0x42650000, 64 * KiB }, /* sai3 */
+            { 0x42660000, 64 * KiB }, /* sai4 */
+            { 0x42670000, 64 * KiB }, /* sai5 */
+            { 0x42680000, 64 * KiB }, /* xcvr (spdif) */
+            { 0x443b0000, 64 * KiB }, /* sai1 */
+            { 0x4c880000, 64 * KiB }, /* sai2 */
+            { 0x44520000, 64 * KiB }, /* micfil (pdm mic) */
+            { 0x425b0000, 64 * KiB }, /* flexcan2 */
+            { 0x42600000, 64 * KiB }, /* flexcan3 */
+            { 0x427c0000, 64 * KiB }, /* flexcan4 */
+            { 0x427d0000, 64 * KiB }, /* flexcan5 */
+            { 0x443a0000, 64 * KiB }, /* flexcan1 */
         };
         for (size_t i = 0; i < ARRAY_SIZE(linux_periph_regions); i++) {
             g_autofree char *name =
