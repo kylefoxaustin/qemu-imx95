@@ -616,7 +616,10 @@ author didn't script" evidence for the upstream cover letter.
 A **second independent session (not the author)** cross-built and ran
 **VINS-Fusion** — a stereo-inertial visual-inertial-odometry stack with a
 Ceres-based sliding-window optimizer — end-to-end inside the
-`imx95-19x19-evk` machine on the EuRoC `MH_01` dataset.
+`imx95-19x19-evk` machine on the EuRoC `MH_01` dataset. Full reproducible
+recipe (patches, aarch64 toolchain, initramfs builder, boot wrapper, run logs)
+at <https://github.com/kylefoxaustin/vins-fusion-imx95> (sibling to the
+ORB-SLAM3 repo).
 
 **Result:** converged (240 Ceres optimizations, bounded), ~324 ms/frame under
 TCG, `exit=0`; the ~21× slowdown vs the x86 host matches the ORB-SLAM3 run
