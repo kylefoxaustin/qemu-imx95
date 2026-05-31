@@ -118,76 +118,61 @@ arm-scmi: NXP SM BBM / CPU (9 cpus) / MISC / LMM (3 logical machines)
 Run /init as init process
 ```
 
-The SM also **boots and manages the Cortex-M7** (running real FreeRTOS
-firmware), alongside the A-cluster. Linux's `imx_rproc` driver **attaches** to
-the SM-managed M7 over the modelled MU7 cross-connect (it cannot start it — the
-SM owns the M7 lifecycle on this board), and the stock NXP `imx_rpmsg_pingpong`
-kernel module runs a **100-message** bidirectional exchange with an M7
-rpmsg-lite client (reproducible via the env-gated `m7_rpmsg_pingpong`
-functional test; recipe in `tests/m7-rpmsg/`). The SM **cold-recovers the M7 on
-a fault** (`SYSRESETREQ` →
-`lm_reset`) while the A-cluster boot continues unaffected.
-
 The **interactive Linux serial console works** (via a BusyBox initramfs):
 typed commands reach the shell over ttyLP0 and output reaches the host
 terminal. The SM also boots standalone to its debug-monitor prompt
-(`tests/sm-banner/run.sh`). Earlier bring-up milestones — U-Boot SPL banner,
-SPL → U-Boot proper handoff over an emulated SD boot chain, and the U-Boot
-interactive prompt — still work.
+(`tests/sm-banner/run.sh`), and the earlier bring-up milestones — U-Boot SPL
+banner, SPL → U-Boot proper handoff over an emulated SD boot chain, and the
+U-Boot interactive prompt — still work.
 
-**Validated** (full evidence in
+**On the A55 / Linux side** (full evidence in
 [`docs/imx95/validation-report.md`](docs/imx95/validation-report.md)):
 
-- Reproducible from a clean clone — including a clean `ubuntu:24.04`
-  container as a different user with only the README-documented dependencies.
+- **Two independent third-party robotics stacks ran to convergence** in the
+  Linux userspace — cross-built and run by external adopters, not the author:
+  **ORB-SLAM3**
+  ([`orbslam3-imx95`](https://github.com/kylefoxaustin/orbslam3-imx95) —
+  OpenCV + g2o + DBoW2, 139 MB vocabulary) and **VINS-Fusion**
+  ([`vins-fusion-imx95`](https://github.com/kylefoxaustin/vins-fusion-imx95) —
+  stereo-inertial VIO + Ceres). Real SLAM/VIO applications on a full
+  glibc-dynamic userspace, ~21× TCG slowdown (functional portability, not a
+  silicon timing estimate). The ORB-SLAM3 run surfaced the SDHCI shutdown bug;
+  the VINS-Fusion run, on the fixed build, confirmed a clean guest poweroff.
 - Boots **three distinct kernels** — NXP 6.12.49 vendor, mainline 6.12.0,
   NXP 6.18.2 vendor — all reaching `/init`, all binding SCMI to the real SM.
 - Boots **two distinct userspaces** — static BusyBox and a glibc-dynamic
   Yocto trim (real `bash` 5.2.37, dynamic coreutils, file-I/O integrity
   verified under sustained load).
-- 24 h stability run (v1.0 A55 + M33 path): stable memory, data-integrity md5
-  unchanged, no panics or SCMI timeouts. (The M7-integrated path has its own
-  36 h soaks — see the Step 2/3 bullets below.)
-- v1.x Step-5 (SM-managed M7) soak: 21 h continuous, **0 anomalies** (no
-  panics / RCU stalls / SCMI timeouts / BUGs / oopses), host RSS flat (+1.1%,
-  no leak), and the SM M7-release latch (`SRC.SCR` bit 12) held throughout.
-  The run ended at 21 h on an external process disturbance, not a guest fault;
-  a full ≥24 h soak on this path is the remaining pre-merge validation gate.
-- **v1.x Step 2 (Cortex-M7) validated**: M7 instance modelled, runs
-  standalone firmware end-to-end (`tests/m7-boot/`), A55 + M33 + M7
-  parallel boot test passes (`tests/parallel-boot/`), and a
-  **36 h+ parallel-CPU stability soak completed with 0 panics, 0 SCMI
-  timeouts, 0 RCU stalls, 0 BUGs, and no memory leak**.
-- **v1.x Step 3 (SM-driven M7 release) done**: `SRC_GEN.SCR`
-  M7MIX-release latch + machine wiring + `tests/m7-first/` integration
-  test. The Step-3 36 h stability soak passed 2026-05-28 (4154
-  heartbeats, 0 panics/SCMI-timeouts/RCU-stalls/BUGs, RSS stable
-  299→329 MB, SRC.SCR bit12 sticky throughout).
-- **v1.x Step 4 (SM-orchestrated M7 + rpmsg) done**: the SM boots the
-  M7 running real FreeRTOS firmware before the A-cluster, and Linux's
-  `imx_rproc` driver attaches to the SM-managed core (it does not start
-  it — the SM owns the M7 lifecycle on this board). The stock NXP
-  `imx_rpmsg_pingpong` kernel module performs a full **100-message
-  ping/pong exchange** with the M7 over the modelled MU7 cross-connect
-  (kicks) and shared vrings (payload) in a full A55 + M33 + M7 boot.
-  This is reproducible via the env-gated `m7_rpmsg_pingpong` functional
-  test (`tests/functional/aarch64/test_imx95_evk.py`); see `tests/m7-rpmsg/`
-  for a standalone harness and the firmware/initramfs recipe.
-  It also surfaced a generic ARMv7-M PMSAv7 MPU fix in
-  `target/arm/ptw.c` (misaligned region base now aligned down to match
-  Cortex-M silicon, rather than dropped).
-- **v1.x Step 5 (SM-driven M7 fault recovery) done**: the real System
-  Manager boots, manages and **fault-recovers** the M7. When the M7
-  faults (asserts `SYSRESETREQ`), the SM takes `CM7_SYSRESETREQ_IRQn`
-  and cold-resets the M7 logical machine (`reaction=lm_reset`) —
-  stopping then restarting the core — exactly as on silicon. This
-  required modelling the M7 CPU-WAIT gate (AONMIX `M7_CFG`) and
-  fabricating the boot-ROM image handover the SM reads to learn it owns
-  the M7. `tests/m7-fault-recovery` proves the M7 faults and the SM
-  restarts it. Step 6 (docs polish / validation report) remains ahead.
-- Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
-  stub-only) characterized with precise failure points — see
-  [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
+- **Reproducible from a clean clone** — including a clean `ubuntu:24.04`
+  container as a different user with only the README-documented dependencies.
+- **24 h stability soak** (A55 + M33 path): stable memory, data-integrity md5
+  unchanged, no panics or SCMI timeouts.
+
+**The SM-managed Cortex-M7** — the `imx95-v1.x` milestone steps from the Scope
+section above, validated end to end:
+
+- **Boot + attach + rpmsg (Steps 2–4):** the SM boots the M7 (real FreeRTOS
+  firmware) alongside the A-cluster, Linux's `imx_rproc` attaches to it, and
+  the stock `imx_rpmsg_pingpong` module runs a 100-message round-trip over
+  MU7 — reproducible via the env-gated `m7_rpmsg_pingpong` functional test
+  (`tests/functional/aarch64/test_imx95_evk.py`; standalone harness + recipe
+  in `tests/m7-rpmsg/`).
+- **Fault recovery (Step 5):** the M7 faults (`SYSRESETREQ`) and the SM
+  cold-resets the M7 logical machine (`reaction=lm_reset`), exactly as on
+  silicon — proven by `tests/m7-fault-recovery/`.
+- **Stability:** a 36 h SM-managed-M7 soak (2026-05-28: 4154 heartbeats, 0
+  panics / SCMI-timeouts / RCU-stalls / BUGs, RSS 299→329 MB, `SRC.SCR` bit 12
+  sticky throughout) and a 21 h Step-5 soak (0 anomalies, RSS flat +1.1%); a
+  full ≥24 h Step-5 soak is the remaining pre-merge gate.
+
+The M7 bring-up also surfaced a **generic ARMv7-M fix** in `target/arm/ptw.c`
+(misaligned PMSAv7 MPU region base aligned down to match Cortex-M silicon
+rather than dropped) — one of three generic-QEMU prereqs split out for
+upstream.
+
+Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
+stub-only) are characterized with precise failure points — see
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
 The campaign found and fixed two real bugs in the artifact before any
 external user would have hit them: an LPUART FIFO read-only-bit storm
