@@ -32,6 +32,9 @@ docs/reviews/
 /tests/cm7-hello/cm7_image.elf
 /tests/cm7-hello/cm7_image.bin
 /tests/cm7-hello/cm7_image.map
+/tests/cm7-hello/cm7_fault.elf
+/tests/cm7-hello/cm7_fault.bin
+/tests/cm7-hello/cm7_fault.map
 /tests/cm7-hello/*.o
 /tests/spl-banner/uboot-build/
 
