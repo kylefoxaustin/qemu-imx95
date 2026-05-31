@@ -45,6 +45,7 @@
 #include "hw/i2c/i2c.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
+#include "hw/intc/arm_gicv3_its_common.h"
 #include "hw/misc/unimp.h"
 #include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
@@ -790,6 +791,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 
         object_property_set_link(OBJECT(&s->gic), "sysmem",
                                  OBJECT(get_system_memory()), &error_fatal);
+        /* Enable LPIs so the GICv3 ITS (below) can deliver MSIs (v2.x/NETC). */
+        qdev_prop_set_bit(gicdev, "has-lpi", true);
         if (!sysbus_realize(gicsbd, errp)) {
             return;
         }
@@ -822,6 +825,23 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             sysbus_connect_irq(gicsbd, i + 3 * n_a55,
                 qdev_get_gpio_in(cpudev, ARM_CPU_VFIQ));
         }
+    }
+
+    /*
+     * GICv3 ITS (dtsi: msi-controller@48040000). Provides MSI translation
+     * for the NETC PCIe endpoints (v2.x). Mirrors hw/arm/virt.c create_its:
+     * link to the GICv3 (which has has-lpi set above) and map its frame.
+     */
+    {
+        DeviceState *its = qdev_new(its_class_name());
+
+        object_property_set_link(OBJECT(its), "parent-gicv3",
+                                 OBJECT(&s->gic), &error_abort);
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(its), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(its), 0,
+                        fsl_imx95_memmap[FSL_IMX95_GIC_ITS].addr);
     }
 
     /* On-chip RAM. */
