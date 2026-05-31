@@ -72,14 +72,22 @@ complements.** The M33 runs the real NXP SM firmware (Linux's sole SCMI
 provider); the SM in turn **boots, manages, and fault-recovers the M7**
 alongside the A-cluster — the full i.MX 95 CPU complement, not a partial SoC.
 
-The M7 integration was the `imx95-v1.x` milestone, delivered in six steps —
-**all done**: the M7 TCG instance + TCMs + soak (Step 2); the silicon-faithful
-SM-driven release (Step 3); SM-orchestrated boot + Linux `imx_rproc` attach +
-stock `imx_rpmsg_pingpong` round-trip (Step 4); SM fault recovery, i.e. the SM
-cold-resetting the M7 logical machine on a fault (Step 5); and the methodology
-+ validation docs (Step 6). See
-[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for the
-per-step detail, and
+The M7 integration was the `imx95-v1.x` milestone, delivered as a sequence of
+steps — **all done**:
+
+- **Step 2 — instance + soak:** the M7 TCG core with its ITCM/DTCM, exercised
+  under the long-duration stability soak.
+- **Step 3 — silicon-faithful release:** the M7 is released through the
+  SM-driven SRC / AONMIX `M7_CFG.WAIT` path, not a faked core start.
+- **Step 4 — boot + rpmsg:** SM-orchestrated M7 boot, Linux `imx_rproc`
+  attaches to the SM-managed core, and the stock `imx_rpmsg_pingpong` module
+  runs a 100-message round-trip over the MU7 cross-connect.
+- **Step 5 — fault recovery:** the SM cold-resets the M7 logical machine on a
+  fault (`SYSRESETREQ` → `lm_reset`), while the A-cluster boot continues.
+- **Step 6 — methodology + validation docs.**
+
+See [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
+the per-step detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
