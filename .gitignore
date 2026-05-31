@@ -46,3 +46,6 @@ tests/busybox-initramfs/*.cpio.gz
 
 # NXP Linux Factory BSP image bundles (large binaries, not part of the fork)
 /LF_*_images_IMX95.zip
+
+# Claude Code local tool state
+/.claude/
