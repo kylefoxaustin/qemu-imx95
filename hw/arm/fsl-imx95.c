@@ -420,6 +420,21 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x443b0000, 64 * KiB }, /* sai1 */
             { 0x4c880000, 64 * KiB }, /* sai2 */
             { 0x44520000, 64 * KiB }, /* micfil (pdm mic) */
+            /*
+             * Display (MIPI DSI) and camera (MIPI CSI / ISI / ISP) interface
+             * controllers: not modelled. Stub them so enabling these DT nodes
+             * degrades gracefully (reads-as-0) instead of faulting on the
+             * first MMIO. The display-mix CSRs / LVDS-LDB CSR / DPU are stubbed
+             * elsewhere; real display scanout + camera capture are roadmap
+             * items (see the README).
+             */
+            { 0x4acf0000, 64 * KiB }, /* mipi dsi host + intf syscon */
+            { 0x4ad20000, 64 * KiB }, /* mipi tx phy csr */
+            { 0x4ad30000, 64 * KiB }, /* mipi csi0 */
+            { 0x4ad40000, 64 * KiB }, /* mipi csi1 */
+            { 0x4ad50000, 0x80000 },  /* isi (image sensing interface) */
+            { 0x4ae00000, 64 * KiB }, /* neo isp registers */
+            { 0x4afe0000, 64 * KiB }, /* neo isp stats */
         };
         for (size_t i = 0; i < ARRAY_SIZE(linux_periph_regions); i++) {
             g_autofree char *name =
