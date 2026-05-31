@@ -562,7 +562,7 @@ the upstream window is the broader validation campaign in
 longer soaks against the M7-managed path) and the Phase-5 submission
 prep (functional test, `.rst` docs, patch series).
 
-## Independent third-party workload — ORB-SLAM3 ran in-machine (recorded 2026-05-30)
+## Independent third-party workload #1 — ORB-SLAM3 ran in-machine (recorded 2026-05-30)
 
 The strongest adoption signal to date: an **independent session (not the
 author)** cross-built and ran **ORB-SLAM3** — a real classical visual-SLAM
@@ -610,3 +610,30 @@ enough to build a real SLAM application against it, succeeded end-to-end, and
 in doing so re-validated three core machine claims and found a real bug. It is
 the canonical "works for someone other than the author, doing something the
 author didn't script" evidence for the upstream cover letter.
+
+## Independent third-party workload #2 — VINS-Fusion + clean-shutdown confirmation (recorded 2026-05-30)
+
+A **second independent session (not the author)** cross-built and ran
+**VINS-Fusion** — a stereo-inertial visual-inertial-odometry stack with a
+Ceres-based sliding-window optimizer — end-to-end inside the
+`imx95-19x19-evk` machine on the EuRoC `MH_01` dataset.
+
+**Result:** converged (240 Ceres optimizations, bounded), ~324 ms/frame under
+TCG, `exit=0`; the ~21× slowdown vs the x86 host matches the ORB-SLAM3 run
+(TCG overhead — *functional portability*, not a silicon timing estimate). Two
+independent SLAM/VIO stacks now run to convergence on the machine.
+
+**Real-workload confirmation of the SDHCI shutdown fix.** Rebuilt out-of-tree
+at the fixed HEAD (`hw/sd/sdhci: let i.MX (u)SDHC issue commands without
+SDCLK_EN`) and re-run, the workload finished and the guest powered off
+cleanly: `[93.7] reboot: Power down` → QEMU `exit 0`, **zero MMC debug-status
+spew, no SIGKILL**, on a CPU-heavy VIO + Ceres load. This independently
+confirms the fix on a real workload, not just the busybox repro.
+
+**Guest-image caveat (worth noting for users).** The fix only fires if the
+guest actually issues a power-off. The trim Yocto rootfs's `/sbin/poweroff`
+is systemd-flavored and silently no-ops without an init manager (it falls
+through to the shell); switching the init to `busybox poweroff -f` (a direct
+`reboot()` syscall) exercises the kernel power-off path and the clean exit.
+A guest image whose `poweroff` defers to a missing init manager won't
+terminate QEMU — standard QEMU behaviour, not an i.MX 95 issue.
