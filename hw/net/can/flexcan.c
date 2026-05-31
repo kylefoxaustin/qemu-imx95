@@ -395,8 +395,14 @@ static const MemoryRegionOps flexcan_ops = {
     .read = flexcan_read,
     .write = flexcan_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
+    /*
+     * Registers are 32-bit (impl = 4), but the Linux driver's
+     * flexcan_ram_init() clears the mailbox RAM with memset_io(), which on
+     * arm64 issues 8-byte writeq stores; allow 1..8-byte accesses and let
+     * QEMU split them into 4-byte device ops.
+     */
     .impl = { .min_access_size = 4, .max_access_size = 4 },
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void flexcan_reset_hold(Object *obj, ResetType type)
