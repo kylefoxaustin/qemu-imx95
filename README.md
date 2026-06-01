@@ -329,6 +329,7 @@ addresses and IRQ numbers.
 | `tests/cm7-hello/`, `tests/m7-boot/` | in-tree M7 firmware + standalone M7 boot test |
 | `tests/m7-fault-recovery/`  | SM-driven M7 fault recovery test (v1.x Step 5) |
 | `tests/flexcan/`, `tests/qtest/flexcan-test.c` | FlexCAN Linux end-to-end harness + model qtest |
+| `tests/docker-repro/`       | clean-room reproducibility: build + boot in a pristine `ubuntu:22.04` container |
 | `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
 | `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
@@ -341,11 +342,35 @@ addresses and IRQ numbers.
     ../configure --target-list=aarch64-softmmu
     ninja qemu-system-aarch64
 
-Host packages (verified on Ubuntu 22.04): `meson ninja-build` for the QEMU
-build; `binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu` for the bare-metal
-test + a static initramfs init; `bison flex libssl-dev libgnutls28-dev
-efitools` for the U-Boot SPL test. The standard build chain (gcc, libc-dev,
-pkg-config, python3, libglib2.0-dev, libpixman-1-dev) is assumed present.
+**Host packages (Ubuntu 22.04, verified from a clean container).** This exact
+set builds QEMU + runs every test from a pristine Ubuntu with nothing
+pre-installed:
+
+    sudo apt install -y \
+        meson ninja-build python3 python3-venv python3-tomli \
+        gcc libc6-dev pkg-config libglib2.0-dev libpixman-1-dev \
+        binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+        gcc-arm-none-eabi \
+        netcat-openbsd \
+        bison flex libssl-dev libgnutls28-dev efitools
+
+What each group is for:
+
+- `meson ninja-build python3 python3-venv python3-tomli gcc libc6-dev
+  pkg-config libglib2.0-dev libpixman-1-dev` — the QEMU build itself.
+  (`python3-venv` provides `ensurepip` and `python3-tomli` the TOML parser that
+  QEMU's `configure`/meson need; both are stdlib on newer distros but separate
+  packages on 22.04.)
+- `binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu` — the aarch64 bare-metal
+  hello test + a static initramfs init.
+- `gcc-arm-none-eabi` — the Cortex-M7 firmware tests (`tests/cm7-hello`,
+  `tests/m7-boot`).
+- `netcat-openbsd` — the M7 boot/fault tests drive QEMU's HMP monitor over a
+  Unix socket with `nc -U`; the openbsd variant is the one with `-U`.
+- `bison flex libssl-dev libgnutls28-dev efitools` — the U-Boot SPL test.
+
+This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
+`ubuntu:22.04` container: build + smoke tests + a Linux boot to userspace).
 
 ## Smoke tests
 
