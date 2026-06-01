@@ -150,10 +150,11 @@ milestone in Scope, above), validated end to end:
   `m7_rpmsg_pingpong` functional test (harness + recipe in `tests/m7-rpmsg/`).
 - **SM cold-reset fault recovery** (`SYSRESETREQ` → `lm_reset`), exactly as on
   silicon — `tests/m7-fault-recovery/`.
-- **Three soaks on the M7 path** — 36 h parallel-boot (Step 2), 36 h SM-driven
-  release (Step 3), and 21 h SM-managed (Step 5) — **0 anomalies across all
-  three**; a full ≥24 h Step-5 soak is the remaining gate (in progress). Full
-  numbers in the validation report.
+- **Four soaks on the M7 path** — 36 h parallel-boot (Step 2), 36 h SM-driven
+  release (Step 3), 21 h SM-managed (Step 5), and a full **24 h** clean run on
+  the SDHCI-shutdown-fix build (2769 heartbeats, +1.3 % RSS, `SRC.SCR` bit 12
+  held, 0 MMC command spew) — **0 anomalies across all four**; the full-24 h
+  gate is now met. Full numbers in the validation report.
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
