@@ -967,6 +967,9 @@ F: hw/misc/imx_mu.c
 F: hw/net/can/flexcan.c
 F: include/hw/net/flexcan.h
 F: tests/qtest/flexcan-test.c
+F: hw/net/fsl_enetc.c
+F: include/hw/net/fsl_enetc.h
+F: tests/qtest/fsl-enetc-test.c
 F: include/hw/arm/fsl-imx95.h
 F: include/hw/char/imx_lpuart.h
 F: include/hw/misc/imx_mu.h
@@ -981,6 +984,7 @@ F: tests/m7-first/
 F: tests/m7-fault-recovery/
 F: tests/m7-rpmsg/
 F: tests/flexcan/
+F: tests/netc/
 F: tests/m33-m7-only/
 F: tests/parallel-boot/
 F: tests/docker-repro/
