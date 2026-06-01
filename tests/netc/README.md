@@ -45,12 +45,18 @@ With the model + this DTB the ENETC PF probes end to end **and passes traffic**:
   3 packets transmitted, 3 packets received, 0% packet loss
   ```
 
-The multi-buffer RX *scatter* path (a frame larger than one posted buffer,
-spread across several BDs) is covered deterministically by
-`tests/qtest/fsl-enetc-test.c` rather than this boot test: a 1500-MTU slirp
-backend never returns a frame bigger than one buffer, so the qtest injects a
-700-byte frame over a socket backend and checks the model split it across the
-expected BDs with only the final BD flagged.
+Two datapath behaviours a slirp boot test cannot reach are covered
+deterministically by `tests/qtest/fsl-enetc-test.c` instead:
+
+- **multi-buffer RX scatter** (`rx-scatter`) — a 1500-MTU slirp backend never
+  returns a frame bigger than one buffer, so the qtest injects a 700-byte frame
+  and checks the model split it across the expected BDs with only the final BD
+  flagged;
+- **RX ring wraparound under sustained RX** (`rx-wraparound`) — a slow,
+  RTT-bound ping never wraps the 2048-entry ring, so the qtest drives 261
+  frames through a 64-BD ring (4+ full laps), re-posting each consumed BD as the
+  driver does, and verifies every frame lands in the correct wrapping BD with
+  intact content and the producer index ends at the right modular position.
 
 ### Bring-up notes
 
