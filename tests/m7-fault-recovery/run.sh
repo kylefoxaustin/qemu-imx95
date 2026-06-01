@@ -29,7 +29,7 @@ set -u
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 QEMU=${QEMU:-$REPO/build/qemu-system-aarch64}
-SM_ELF=${SM_ELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}
+SM_ELF=${SM_ELF:-${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}/m33_image.elf}
 CM7_ELF=${CM7_ELF:-$REPO/tests/cm7-hello/cm7_fault.elf}
 
 need() {

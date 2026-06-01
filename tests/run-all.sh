@@ -38,12 +38,13 @@ MESON=${MESON:-build/pyvenv/bin/meson}
 # Map the env vars used by parallel-boot/m7-boot to the QEMU_TEST_*
 # names the meson functional test reads, so a single set of overrides
 # drives the whole wrapper.
-_KBUILD=$HOME/Documents/linux-imx95-build/arch/arm64/boot
+_ARTIFACTS=${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}
+_KBUILD=$_ARTIFACTS/linux-build/arch/arm64/boot
 _DTS=$_KBUILD/dts/freescale
 : "${KERNEL:=$_KBUILD/Image}"
 : "${DTB:=$_DTS/imx95-19x19-evk.dtb}"
 : "${INITRD:=$REPO/tests/busybox-initramfs/busybox-initramfs.cpio.gz}"
-: "${SM_ELF:=$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}"
+: "${SM_ELF:=$_ARTIFACTS/m33_image.elf}"
 export QEMU_TEST_IMX95_KERNEL=$KERNEL
 export QEMU_TEST_IMX95_DTB=$DTB
 export QEMU_TEST_IMX95_INITRD=$INITRD

@@ -222,6 +222,23 @@ To boot Linux to userspace you need four artifacts, all built from the NXP BSP:
 | initramfs (`*.cpio.gz`)     | any aarch64 rootfs with `/init` |
 | SM firmware `m33_image.elf` | `references/imx-sm`, `make config=mx95evk` |
 
+**Where the test scripts look for them.** Every artifact path is overridable by
+an env var (`SM_ELF`, `KERNEL`, `DTB`, `INITRD`), so you can point the scripts
+anywhere. If you don't set them, the scripts fall back to a convention
+directory `$IMX95_ARTIFACTS` (default `~/imx95-artifacts`) laid out as:
+
+```
+$IMX95_ARTIFACTS/
+├── m33_image.elf                          # SM firmware
+└── linux-build/arch/arm64/boot/
+    ├── Image                              # kernel
+    └── dts/freescale/imx95-19x19-evk.dtb  # DTB
+```
+
+Either drop your artifacts there, set `IMX95_ARTIFACTS=/your/dir`, or set the
+individual `SM_ELF`/`KERNEL`/`DTB` vars per run. The scripts print exactly which
+var to set if an artifact is missing.
+
 ## Quick start
 
 Build (see [Building](#building)), then boot Linux to userspace on the real SM.
