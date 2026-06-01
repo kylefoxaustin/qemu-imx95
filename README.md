@@ -176,13 +176,13 @@ the node you want):
 -machine imx95-19x19-evk,canbus0=canbus0
 ```
 
-**Networking — supported (v2.0.0, branch `imx95-netc`).** The i.MX 95 NETC
-block is modelled end to end: a functional GICv3 ITS, an integrated-ECAM PCIe
-host, and a from-scratch **ENETC v4 Ethernet PF** (`hw/net/fsl_enetc.c`, PCI
-`1131:e101`) with a BD-ring DMA engine and MSI-X routed through the ITS. The
-stock Linux `nxp_enetc4` driver binds it, brings up **`eth0` at 1Gbps**, and
-**ping works** over a slirp backend (`3 packets transmitted, 3 received, 0%
-loss`). RX multi-buffer scatter has a deterministic, kernel-free qtest
+**Networking — supported (v2.0.0).** The i.MX 95 NETC block is modelled end to
+end: a functional GICv3 ITS, an integrated-ECAM PCIe host, and a from-scratch
+**ENETC v4 Ethernet PF** (`hw/net/fsl_enetc.c`, PCI `1131:e101`) with a BD-ring
+DMA engine and MSI-X routed through the ITS. The stock Linux `nxp_enetc4`
+driver binds it, brings up **`eth0` at 1Gbps**, and **ping works** over a slirp
+backend (`3 packets transmitted, 3 received, 0% loss`). RX multi-buffer scatter
+and ring wraparound have deterministic, kernel-free qtests
 (`tests/qtest/fsl-enetc-test.c`). One ENETC port is wired and validated; a
 second port and throughput testing are follow-ons. See
 [`tests/netc/`](tests/netc/) for the bring-up recipe and
@@ -203,13 +203,17 @@ Near-term focus is **landing this machine upstream** — the series plus its
 three generic-QEMU prereq patches (`target/arm/ptw.c`,
 `target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-| Feature | What | Status |
+**NETC networking** (`eth0` over a modelled ENETC PF) and **FlexCAN** (all five
+controllers) are **done** and described under "What runs today" above. What
+remains is forward-looking:
+
+| Feature | What | Target |
 |---|---|---|
-| **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MAC as a PCIe endpoint function, MSI-X routed to the GIC ITS; the first network interface beyond `lo`. **Done & ping-validated**: `nxp_enetc4` brings up `eth0` at 1Gbps and pings over `-nic user`; RX BD-ring scatter has a deterministic qtest. (One port wired; second port + throughput are follow-ons.) | **v2.0.0** ✅ (branch `imx95-netc`) |
-| **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.x** (after NETC) |
+| **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.0** |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source | after Display |
+| Second ENETC port + throughput | A second ENETC MAC and a sustained-throughput/iperf datapath validation (one port is wired and ping-validated today) | follow-on to v2.0.0 |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
-| Real-time peripherals | ~~FlexCAN~~ (**done & Linux-validated** — all 5, `tests/flexcan/`); TSN, audio SAI/DSP for M7 / mixed-criticality workloads | partly done |
+| Real-time peripherals | TSN, audio SAI/DSP for M7 / mixed-criticality workloads (FlexCAN is already done) | deferred |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
 The deferred rows are characterized with precise failure points in
