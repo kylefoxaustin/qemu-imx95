@@ -1,33 +1,44 @@
 # NETC / ENETC test (i.MX 95)
 
-Boots the emulated i.MX 95 EVK and verifies that Linux's `enetc4_pf`
-(`nxp_enetc4`) driver binds to the modelled ENETC0 PF on the NETC integrated
-ECAM bus (PCI `1131:e101`).
+Boots the emulated i.MX 95 EVK and shows how far Linux's `enetc4_pf`
+(`nxp_enetc4`) driver gets binding to the modelled ENETC PF on the NETC
+integrated ECAM bus (PCI `1131:e101`).
 
 ## Files
 
-- `enetc-overlay.dtso` — device-tree overlay merged onto the base BSP DTB. It
-  places an available `ethernet@2,0` node (PCI devfn 02.0, fixed MAC,
-  `fixed-link`) and removes the `fsl,enetc-ptp-timer` compatible from the
-  (unmodelled) NETC timer node. See the comments in the file for why.
-- `run.sh` — compiles + merges the overlay (kernel `scripts/dtc/{dtc,fdtoverlay}`)
-  and boots QEMU, printing the ENETC probe lines.
+- `patch-dtb.py` — rewrites the decompiled base DTS so `ethernet@8,0` (ENETC1)
+  is enabled with a fixed MAC + `fixed-link`, with the efuse-nvmem MAC cell
+  removed. See the header comment for why a text splice instead of `fdtoverlay`.
+- `run.sh` — decompiles the base DTB, applies `patch-dtb.py`, recompiles with
+  the kernel `scripts/dtc/dtc`, and boots QEMU, printing the ENETC probe lines.
 
-## Why devfn 02.0 (not 00.0)
+## Why devfn 08.0 (ENETC1)
 
-The BSP DT maps ENETC0 to PCI devfn 00.0, but QEMU's `gpex` host parks its own
-root bridge there, and the BSP ethernet nodes pull in efuse-nvmem MAC cells
-that never resolve under emulation. devfn 02.0 is in the dtsi `msi-map`
-(ITS DevID 0x61) and has no base-tree child, so the overlay can describe it
-cleanly.
+The modelled PF is placed at PCI devfn 08.0. The BSP DT maps that to ENETC1.
+Two constraints drive the choice:
 
-## Status
+- gpex parks its own root bridge at devfn 00.0 (where the BSP puts ENETC0), so
+  the PF cannot live there.
+- `netc-blk-ctrl`'s `imx95_netcmix_init()` walks the enetc child nodes and its
+  link-MII `switch` only accepts ENETC0 (devfn 0x0) and ENETC1 (devfn 0x40);
+  any other devfn returns `-EINVAL` and the whole block-control probe fails
+  ("Initializing NETCMIX failed"), so `of_platform_populate` never runs. devfn
+  0x40 is the only free, accepted slot.
 
-Stage 4a/4b: the PF enumerates, `nxp_enetc4` binds, and the MAC is adopted from
-the DT. Bringing up `eth0` further currently stops at MSI-X vector allocation
-(`pci_alloc_irq_vectors` → `-EBUSY`); the GICv3 ITS itself initialises and is
-detected. Wiring MSI-X → ITS to completion (then BD-ring DMA + a `-netdev`
-backend for ping) is the remaining NETC work.
+## Status (stage 4b)
+
+With the model + this DTB:
+
+- `netc-blk-ctrl` NETCMIX init succeeds, the ECAM bus enumerates, and the PF
+  appears at `0002:00:08.0 [1131:e101]` with BAR0/BAR2 assigned.
+- `nxp_enetc4` binds and logs `enabling device (0000 -> 0002)`.
+- The probe then stops silently inside `enetc4_pf_init` (it runs in the
+  `deferred_probe` workqueue, so there is no panic). This is the expected next
+  blocker: a synchronous register poll - most likely the SI command BD ring
+  (CBDR) - that the model must auto-complete. That register-level work is
+  stage 4c.
+
+No `eth0` yet; that arrives once the CBDR/BD-ring path and MSI-X are completed.
 
 ## Run
 
