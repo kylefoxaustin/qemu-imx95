@@ -553,9 +553,35 @@ reason=fccu`.
 the SM's logical-machine lifecycle) additionally ran a **21 h** continuous
 soak: **0 anomalies** (no panics / RCU stalls / SCMI timeouts / BUGs / oopses),
 host RSS flat (+1.1 %, no leak), and the SM M7-release latch (`SRC.SCR` bit 12)
-held throughout. The run ended at 21 h on an external process disturbance (a
-rebuild of the running binary mid-soak), not a guest fault; a full ≥24 h soak
-on this path is the remaining pre-merge gate and is in progress.
+held throughout. That run ended at 21 h on an external process disturbance (a
+rebuild of the running binary mid-soak), not a guest fault.
+
+**Full 24 h soak — PASSED (recorded 2026-05-31).** The follow-up ran to the
+full 24 h target on a build that includes the SDHCI shutdown fix (`hw/sd/sdhci:
+let i.MX (u)SDHC issue commands without SDCLK_EN`, commit `71a559175e`; the soak
+binary was built at branch HEAD `7fb803d6db`, two doc/gitignore commits later).
+It was launched off a *frozen* copy of the binary (`build/qemu-soak-frozen`) so
+a host-side rebuild could not perturb the running process as it did at 21 h. The
+run completed cleanly and stopped itself at the target ("soak target reached"):
+
+- **Duration / heartbeats:** full 24 h, **2769** heartbeats (one every ~31 s),
+  2026-05-30 22:19:37 → 2026-05-31 22:19:25.
+- **Anomalies:** **0** — no panics, RCU stalls, BUG()s, oopses, segfaults,
+  SCMI timeouts, or unhandled aborts across the entire run.
+- **SDHCI fix held:** **0** `DEBUG STATUS DUMP` and **0** "Timeout waiting for
+  hardware cmd" lines — the uSDHC no-SDCLK_EN command spew the fix removes never
+  reappeared over 24 h. (The only `mmc` lines are the benign boot-time
+  `deferred probe timeout, ignoring dependency` for the two card-less slots.)
+- **Host RSS:** min 293412 kB / max 297256 kB / last 297256 kB — **+1.31 %**,
+  flat at the plateau by end of run; no leak.
+- **`SRC.SCR` bit 12:** held `1` for the whole run, never read `0` after the
+  first sample (the SM M7-release latch stayed latched).
+- **Process integrity:** the soak ran off `build/qemu-soak-frozen` (a distinct
+  file from `build/qemu-system-aarch64`); later rebuilds of the live binary did
+  not touch the running soak.
+
+This is the full 24 h soak that had been the remaining pre-merge gate; the
+SDHCI shutdown fix is now banked by a clean 24 h run.
 
 **Regression.** Across Steps 3–5 the SM-managed M7 path and the
 A55/Linux boot stay independent: `tests/m7-first` reaches Linux
@@ -566,10 +592,9 @@ LMM path) is untouched.
 
 This closes the v1.x M7 *functional* deliverables. What remains before
 the upstream window is the broader validation campaign in
-[`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility, a
-full ≥24 h soak against the M7-managed path — the 21 h run above is the
-current best, with a ≥24 h run in progress) and the Phase-5 submission
-prep (functional test, `.rst` docs, patch series).
+[`validation-todo.md`](validation-todo.md) (fresh-clone reproducibility;
+the full 24 h soak gate is now met by the clean 2026-05-31 run above) and
+the Phase-5 submission prep (functional test, `.rst` docs, patch series).
 
 ## Independent third-party workload #1 — ORB-SLAM3 ran in-machine (recorded 2026-05-30)
 
