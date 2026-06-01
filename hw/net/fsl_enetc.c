@@ -100,18 +100,23 @@
 /*
  * Buffer descriptors are 16 bytes. The TX BD the driver posts is
  *   addr[8] buf_len[2] frm_len[2] lstatus[4]   (flags in lstatus[31:24]).
- * The RX BD is posted as { addr[8], resv[8] } and written back by HW as
- *   { ..., buf_len@offset 12 (__le16), lstatus@offset 12 (__le32) }; the
- * driver polls lstatus != 0 and reads buf_len from the same word region.
+ * The RX BD is posted as { addr[8], resv[8] }; HW writes it back in the
+ * union enetc_rx_bd.r layout, where buf_len is a __le16 at offset 8 and
+ * lstatus a __le32 at offset 12. The driver treats lstatus != 0 as "BD
+ * ready" and chains buffers until the BD with LSTATUS_F (final).
  */
 #define ENETC_BD_SIZE        16
 #define ENETC_TXBD_FLAGS_F   (1u << 7)   /* final BD of a frame */
 #define ENETC_TXBD_FLAGS_OFF 24          /* flags live in lstatus[31:24] */
-#define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final */
-#define ENETC_RXBD_LSTATUS_R (1u << 30)  /* RX writeback: ready/ring-full */
+#define ENETC_RXBD_BUFLEN_OFF 8          /* RX writeback: buf_len __le16 */
+#define ENETC_RXBD_LSTATUS_OFF 12        /* RX writeback: lstatus __le32 */
+#define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final BD */
 
-/* Max Ethernet frame we gather/scatter (with VLAN + FCS headroom). */
-#define ENETC_FRAME_MAX      2048
+/*
+ * Largest frame we gather (TX) or scatter (RX). Generous enough for jumbo
+ * frames; RX splits into RBBSR-sized chunks across successive posted BDs.
+ */
+#define ENETC_FRAME_MAX      16384
 
 /* Reset / fixed values */
 #define ENETC_REV_4_1       0x0401
@@ -289,20 +294,27 @@ static const MemoryRegionOps fsl_enetc_bar0_ops = {
 };
 
 /* --- NIC backend --- */
-static bool fsl_enetc_can_receive(NetClientState *nc)
+
+/* Number of posted (driver-owned, empty) RX BDs available to fill. */
+static uint32_t fsl_enetc_rx_free_bds(FslEnetcState *s)
 {
-    FslEnetcState *s = qemu_get_nic_opaque(nc);
     hwaddr rbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0);
     uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
     uint32_t ci;
 
-    /* The RX ring must be enabled and have at least one posted (empty) BD. */
     if (!len || !(enetc_reg(s, rbase + ENETC_RBMR) & ENETC_MR_EN)) {
-        return false;
+        return 0;
     }
     /* RBCIR (driver's next_to_use) is one past the last posted buffer. */
     ci = enetc_reg(s, rbase + ENETC_RBCIR) & ENETC_RBCIR_IDX_MASK;
-    return s->rx_pi != ci;
+    return ci >= s->rx_pi ? ci - s->rx_pi : len - s->rx_pi + ci;
+}
+
+static bool fsl_enetc_can_receive(NetClientState *nc)
+{
+    FslEnetcState *s = qemu_get_nic_opaque(nc);
+
+    return fsl_enetc_rx_free_bds(s) != 0;
 }
 
 static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
@@ -313,40 +325,65 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     hwaddr rbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0);
     uint64_t ring = enetc_ring_base(s, rbase + ENETC_RBBAR0);
     uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
-    uint64_t bd_addr;
-    uint8_t bd[ENETC_BD_SIZE];
-    uint64_t buf_addr;
+    uint32_t bufsz = enetc_reg(s, rbase + ENETC_RBBSR);
+    uint32_t need, off;
 
-    if (!fsl_enetc_can_receive(nc)) {
-        s->rx_pending = true;
-        return 0; /* back-pressure: retried on the next RBCIR post */
-    }
     if (size > ENETC_FRAME_MAX) {
         return size; /* drop oversized; reported as received */
     }
-
-    /* Read the posted BD at the producer index, DMA the frame to its buffer. */
-    bd_addr = ring + (uint64_t)s->rx_pi * ENETC_BD_SIZE;
-    pci_dma_read(pci, bd_addr, bd, sizeof(bd));
-    buf_addr = ldq_le_p(bd);
-    pci_dma_write(pci, buf_addr, buf, size);
+    if (!bufsz) {
+        bufsz = size ? size : 1; /* ring not set up with a buffer size yet */
+    }
 
     /*
-     * Write back the RX BD in the HW (union enetc_rx_bd.r) layout the driver
-     * reads: buf_len is a __le16 at offset 8, and lstatus is a __le32 at
-     * offset 12 (overlapping flags[15:0]/error[31:16]). The driver takes the
-     * frame length from buf_len and treats lstatus != 0 as "BD ready", with
-     * LSTATUS_F (bit 31) marking the final BD. Clear the rest of the BD so
-     * stale csum/hash fields do not confuse offload parsing.
+     * A frame may not fit in one RX buffer (RBBSR), so scatter it across
+     * successive posted BDs: each holds up to bufsz bytes, only the final BD
+     * carries LSTATUS_F. Require enough free BDs up front; otherwise
+     * back-pressure and retry when the driver posts more (RBCIR write).
      */
-    memset(bd, 0, sizeof(bd));
-    stw_le_p(bd + 8, (uint16_t)size);                 /* r.buf_len */
-    stl_le_p(bd + 12, ENETC_RXBD_LSTATUS_F);          /* final BD, no error */
-    pci_dma_write(pci, bd_addr, bd, sizeof(bd));
-
-    if (++s->rx_pi == len) {
-        s->rx_pi = 0;
+    need = (size + bufsz - 1) / bufsz;
+    if (need == 0) {
+        need = 1; /* zero-length frame still consumes one BD */
     }
+    if (fsl_enetc_rx_free_bds(s) < need) {
+        s->rx_pending = true;
+        return 0;
+    }
+
+    for (off = 0; off < size || off == 0; ) {
+        uint64_t bd_addr = ring + (uint64_t)s->rx_pi * ENETC_BD_SIZE;
+        uint8_t bd[ENETC_BD_SIZE];
+        uint64_t buf_addr;
+        uint32_t chunk = MIN(bufsz, size - off);
+        bool final = (off + chunk >= size);
+
+        pci_dma_read(pci, bd_addr, bd, sizeof(bd));
+        buf_addr = ldq_le_p(bd);
+        if (chunk) {
+            pci_dma_write(pci, buf_addr, buf + off, chunk);
+        }
+
+        /*
+         * Write back the BD in the union enetc_rx_bd.r layout: buf_len
+         * (__le16) at offset 8 and lstatus (__le32) at offset 12. Only the
+         * final BD sets LSTATUS_F; non-final BDs are full (bufsz) and the
+         * driver takes their size from RBBSR, so just mark them ready.
+         */
+        memset(bd, 0, sizeof(bd));
+        stw_le_p(bd + ENETC_RXBD_BUFLEN_OFF, (uint16_t)chunk);
+        stl_le_p(bd + ENETC_RXBD_LSTATUS_OFF,
+                 final ? ENETC_RXBD_LSTATUS_F : ENETC_RXBD_LSTATUS_F >> 1);
+        pci_dma_write(pci, bd_addr, bd, sizeof(bd));
+
+        if (++s->rx_pi == len) {
+            s->rx_pi = 0;
+        }
+        off += chunk;
+        if (final) {
+            break;
+        }
+    }
+
     enetc_set(s, rbase + ENETC_RBPIR, s->rx_pi);
     s->rx_pending = false;
     enetc_ring_irq(s, ENETC_SIMSIRRV(0));
