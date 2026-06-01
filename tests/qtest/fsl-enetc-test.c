@@ -206,7 +206,15 @@ static void test_rx_wraparound(void)
 {
     int *sv = g_new(int, 2);
     QTestState *qts;
-    const uint32_t NFRAMES = RING_LEN * 4 + 5;   /* 4+ full laps of the ring */
+    /*
+     * Default is 4+ laps of the ring (CI-fast). Set ENETC_STRESS_LAPS=N to
+     * drive N full laps instead - a high-volume ring stress that runs in
+     * seconds (no guest stack / no slirp RTT cap), e.g. ENETC_STRESS_LAPS=800
+     * pushes ~51000 frames through the 64-BD ring.
+     */
+    const char *laps_env = getenv("ENETC_STRESS_LAPS");
+    uint32_t laps = laps_env ? (uint32_t)strtoul(laps_env, NULL, 10) : 4;
+    const uint32_t NFRAMES = RING_LEN * laps + 5;
     uint32_t flen = 64;                          /* single-buffer frames */
     uint8_t frame[64];
     uint8_t got[64];
