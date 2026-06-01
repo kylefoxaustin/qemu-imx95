@@ -401,3 +401,11 @@ artifacts).
   in `target/arm/ptw.c` (Step 4); SM-driven M7 fault recovery via
   `CM7_SYSRESETREQ_IRQn` → `lm_reset` (Step 5); methodology + validation docs
   (Step 6). Tagged `imx95-v1.x` at commit `42d3e4ef7b`.
+- **v1.1** — accumulated v1-line work on top of v1.x: a from-scratch **FlexCAN**
+  controller (`hw/net/can/flexcan.c`, all 5 instances) validated end-to-end with
+  the real Linux `flexcan` driver (`tests/flexcan/` + a model qtest); the
+  **SDHCI shutdown fix** so guest `poweroff` exits cleanly
+  (`SDHCI_QUIRK_SDCLK_AUTO_GATE`), banked by a clean 24 h stability soak;
+  graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
+  test. Tagged `imx95-v1.1` at commit `442cbcf3a0`. Writeup in
+  `docs/reviews/v1.1-final.md`.
