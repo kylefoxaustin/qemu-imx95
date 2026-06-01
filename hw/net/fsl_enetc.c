@@ -76,6 +76,8 @@
 
 /* --- Port block --- */
 #define ENETC_PMR           0x0010
+#define ENETC_PSIPMAR0(a)   ((a) * 0x80 + 0x2000)  /* per-SI primary MAC lo */
+#define ENETC_PSIPMAR1(a)   ((a) * 0x80 + 0x2004)  /* per-SI primary MAC hi */
 #define ENETC_PCR           0x4010
 #define ENETC_POR           0x4100
 #define ENETC_IMDIO_BASE    0x5030      /* internal MDIO */
@@ -167,7 +169,13 @@ static const MemoryRegionOps fsl_enetc_bar0_ops = {
     .read = fsl_enetc_bar0_read,
     .write = fsl_enetc_bar0_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 4,
+    /*
+     * The driver uses sub-word MMIO (e.g. __raw_readw of PSIPMAR1 for the
+     * MAC high half); reject nothing 1..4 bytes or QEMU raises an external
+     * abort. impl stays word-wide so the handlers only ever see 32-bit
+     * accesses (QEMU extracts/merges the narrow ones).
+     */
+    .valid.min_access_size = 1,
     .valid.max_access_size = 4,
     .impl.min_access_size = 4,
     .impl.max_access_size = 4,
@@ -246,6 +254,19 @@ static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
                           object_get_typename(OBJECT(s)), pci_dev->qdev.id,
                           &pci_dev->qdev.mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+
+    /*
+     * Seed the SI primary MAC the driver reads back at probe
+     * (enetc4_pf_get_si_primary_mac reads PORT PSIPMAR0/1 for SI 0).
+     * PSIPMAR0 = MAC[0..3] little-endian, PSIPMAR1 = MAC[4..5].
+     */
+    {
+        const uint8_t *m = s->conf.macaddr.a;
+
+        enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR0(0),
+                  m[0] | m[1] << 8 | m[2] << 16 | (uint32_t)m[3] << 24);
+        enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR1(0), m[4] | m[5] << 8);
+    }
 }
 
 static void fsl_enetc_exit(PCIDevice *pci_dev)
