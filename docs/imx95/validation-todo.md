@@ -45,6 +45,17 @@ Building + Required-artifacts + Quick-start sections verbatim and boot to
 `/init`. **Pass:** `USERSPACE OK` within ~30 s, no fatal aborts.
 Catches missing build deps and undocumented environment assumptions. ~2-3 h.
 
+**PASSED (2026-06-01).** Done two independent ways:
+(a) an independent non-author validator (different machine, Ubuntu 22.04.5,
+fresh clone) built and booted to userspace in ~13 s with zero workarounds; and
+(b) `tests/docker-repro/run.sh` — a **pristine `ubuntu:22.04` container** with
+nothing pre-installed: fresh clone → `configure`/`ninja` (build 76–84 s) →
+both smoke tests → Linux to `/init` at ~13.5 s. The container run **found
+three undocumented build/runtime deps** that every prior on-machine test
+missed because they were already present — `python3-venv` (ensurepip),
+`python3-tomli` (meson TOML), `netcat-openbsd` (`nc -U` for the M7 HMP checks).
+All three are now in the README Building section; the container passes 4/4.
+
 ### 1.2 Fresh-clone reproducibility (different machine)
 Same as 1.1 on a different Ubuntu 22.04/24.04 machine. **The silent killer:**
 no tracked file may hardcode a personal path —
@@ -57,7 +68,12 @@ personal home-directory tree. They now fall back to a neutral convention
 directory `$IMX95_ARTIFACTS` (default `~/imx95-artifacts`), still overridable
 per-var (`SM_ELF`/`KERNEL`/`DTB`/`INITRD`); layout documented in the README's
 "Required artifacts" section. The gate grep over tracked `*.sh *.py` is now
-clean. The *different-machine boot run itself* (VM/second box) is still to do.
+clean.
+
+**Boot run: PASSED (2026-06-01).** The different-machine half is also done: an
+independent non-author validator reproduced the full build + boot to userspace
+on a separate Ubuntu 22.04.5 box, and `tests/docker-repro/run.sh` does it from
+a pristine container (see Tier 1.1 above). Both Tier 1.1 and 1.2 are met.
 
 ### 1.3 BusyBox initramfs interactive shell
 Boot with a static aarch64 BusyBox initramfs; verify an interactive shell, and
