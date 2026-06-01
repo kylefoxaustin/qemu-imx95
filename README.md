@@ -176,8 +176,20 @@ the node you want):
 -machine imx95-19x19-evk,canbus0=canbus0
 ```
 
-Tier-3 limitations (no networking, no Linux block storage, GPU/VPU/NPU
-stub-only) are characterized with precise failure points — see
+**Networking — supported (v2.0.0, branch `imx95-netc`).** The i.MX 95 NETC
+block is modelled end to end: a functional GICv3 ITS, an integrated-ECAM PCIe
+host, and a from-scratch **ENETC v4 Ethernet PF** (`hw/net/fsl_enetc.c`, PCI
+`1131:e101`) with a BD-ring DMA engine and MSI-X routed through the ITS. The
+stock Linux `nxp_enetc4` driver binds it, brings up **`eth0` at 1Gbps**, and
+**ping works** over a slirp backend (`3 packets transmitted, 3 received, 0%
+loss`). RX multi-buffer scatter has a deterministic, kernel-free qtest
+(`tests/qtest/fsl-enetc-test.c`). One ENETC port is wired and validated; a
+second port and throughput testing are follow-ons. See
+[`tests/netc/`](tests/netc/) for the bring-up recipe and
+[`docs/reviews/v2.0.0.md`](docs/reviews/v2.0.0.md) for the milestone writeup.
+
+Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
+characterized with precise failure points — see
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
 The campaign found and fixed two real bugs in the artifact before any
@@ -189,12 +201,11 @@ test script (commit `7def38532a`).
 
 Near-term focus is **landing this machine upstream** — the series plus its
 three generic-QEMU prereq patches (`target/arm/ptw.c`,
-`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel. The next major
-*feature* after that is networking:
+`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-| Next | What | Target |
+| Feature | What | Status |
 |---|---|---|
-| **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MACs as PCIe endpoint functions, MSIs routed to the GIC ITS; the first network interface beyond `lo` | **v2.x** (post-upstream) |
+| **NETC networking** | The i.MX 95 NETC block — ENETC Ethernet MAC as a PCIe endpoint function, MSI-X routed to the GIC ITS; the first network interface beyond `lo`. **Done & ping-validated**: `nxp_enetc4` brings up `eth0` at 1Gbps and pings over `-nic user`; RX BD-ring scatter has a deterministic qtest. (One port wired; second port + throughput are follow-ons.) | **v2.0.0** ✅ (branch `imx95-netc`) |
 | **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.x** (after NETC) |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source | after Display |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
@@ -321,6 +332,7 @@ addresses and IRQ numbers.
 | `hw/misc/imx_mu.c`          | NXP MU (V2) model — doorbell + peer cross-connect |
 | `hw/i2c/imx_lpi2c.c`        | LPI2C master (interrupt-driven) |
 | `hw/net/can/flexcan.c`      | FlexCAN controller (all 5; QEMU CAN bus, CAN-FD) |
+| `hw/net/fsl_enetc.c`        | NETC ENETC v4 Ethernet PF (PCIe endpoint; BD-ring DMA, MSI-X via ITS) |
 | `hw/timer/imx95_sysctr.c`   | system-counter clockevent timer |
 | `hw/misc/imx95_{src,anatop,gpc,pmic,dpu,ele_server,wdog}.c` | SM/Linux bring-up device models |
 | `hw/misc/imx95_aonmix.c`    | AONMIX M7 CPU-WAIT gate (v1.x Step 5 — the SM's M7 run/hold control) |
@@ -330,6 +342,7 @@ addresses and IRQ numbers.
 | `tests/m7-fault-recovery/`  | SM-driven M7 fault recovery test (v1.x Step 5) |
 | `tests/flexcan/`, `tests/qtest/flexcan-test.c` | FlexCAN Linux end-to-end harness + model qtest |
 | `tests/docker-repro/`       | clean-room reproducibility: build + boot in a pristine `ubuntu:22.04` container |
+| `tests/netc/`, `tests/qtest/fsl-enetc-test.c` | NETC ping harness (DT patch + boot) + RX-scatter qtest |
 | `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
 | `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
@@ -451,3 +464,11 @@ artifacts).
   graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
   test. Tagged `imx95-v1.1` at commit `442cbcf3a0`. Writeup in
   `docs/reviews/v1.1-final.md`.
+- **v2.0.0** — NETC networking, the current upstream candidate (NETC was
+  developed on the `imx95-netc` branch, then rebased onto the v1 line so the
+  series is one linear history). A functional GICv3 ITS + an integrated-ECAM
+  PCIe host + a from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI
+  `1131:e101`) with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
+  `nxp_enetc4` driver brings up `eth0` at 1Gbps and **ping works** over a slirp
+  backend; RX BD-ring scatter + ring wraparound have deterministic qtests
+  (`tests/qtest/fsl-enetc-test.c`). Writeup in `docs/reviews/v2.0.0.md`.

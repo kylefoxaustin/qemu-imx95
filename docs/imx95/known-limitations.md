@@ -299,18 +299,31 @@ Step 4 wires this end-to-end; Step 5 adds SM-driven M7 fault recovery
 
 ---
 
-## 6. Networking — no functional interfaces
+## 6. Networking — one ENETC port (v2.0.0, branch `imx95-netc`)
 
-Only the loopback interface `lo` appears in the guest. The NETC / enetc
-blocks are logging stubs at probe time, so no ethernet interface comes
-up; `ping` reports `Network is unreachable`. The integrated-PCIe ECAM
-probes but enumerates no devices (empty slots by design), so PCIe NICs
-aren't an option either.
+As of v2.0.0 the NETC block is modelled end to end and a working `eth0`
+comes up: a functional GICv3 ITS + an integrated-ECAM PCIe host + a
+from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI `1131:e101`)
+with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
+`nxp_enetc4` driver binds it, `eth0` links up at 1Gbps, and ping works
+over a slirp backend (`-nic user,model=fsl-enetc`). RX BD-ring scatter
+has a deterministic qtest (`tests/qtest/fsl-enetc-test.c`).
 
-**Downstream consequence — `apt install` does not work from inside the
-guest.** NXP's BSP rootfs (`imx-image-full-imx95evk`) ships `/usr/bin/apt`
-configured with a populated `/etc/apt/sources.list.d/`, but with no
-functional network, package downloads can't reach a mirror. Three
+Remaining gaps on the NETC path: **one ENETC port** is wired and tested
+(the DT also describes ENETC0 — which collides with the gpex root bridge
+— and ENETC2's 10gbase-r serdes); the test DTB needs three small edits
+(`tests/netc/patch-dtb.py`: enable ENETC1, drop the absent efuse MAC,
+rewrite the `msi-map` to identity because QEMU's ITS uses the PCI
+requester-ID as the DeviceID); the PF attaches to a `-nic` (not a bare
+`-netdev`); and a second port / throughput / iperf are follow-ons. On the
+**v1 upstream branch (`imx95-scaffold`)** networking is not present — NETC
+is the additive v2 work.
+
+**Downstream note — the BSP rootfs `apt` setup.** Even with outbound
+networking via `-nic user` (slirp), NXP's BSP rootfs
+(`imx-image-full-imx95evk`) ships `/usr/bin/apt`
+configured with a populated `/etc/apt/sources.list.d/`; without a
+reachable mirror, package downloads can still fail. Three
 working paths for downstream users who need to add packages to the
 rootfs:
 
@@ -328,10 +341,10 @@ rootfs:
    `environment-setup-armv8a-poky-linux` script, cross-build, bind-mount
    the result into the rootfs.
 
-This is a downstream-visible consequence of the networking gap, not a
-separate model bug. Surfaced during the first non-author install-target
-evaluation (see `validation-report.md`'s "First-customer ecosystem
-readiness check" section).
+This is a rootfs/mirror-reachability matter, not a separate model bug.
+Surfaced during the first non-author install-target evaluation (see
+`validation-report.md`'s "First-customer ecosystem readiness check"
+section).
 
 ---
 
