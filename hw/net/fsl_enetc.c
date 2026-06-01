@@ -20,7 +20,6 @@
 #include "qemu/module.h"
 #include "hw/net/fsl_enetc.h"
 #include "hw/pci/pci.h"
-#include "hw/pci/pcie.h"
 #include "migration/vmstate.h"
 #include "net/eth.h"
 
@@ -235,13 +234,12 @@ static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
         return;
     }
 
-    /* PCIe endpoint with FLR (enetc4_pf does pcie_flr at probe start). */
-    ret = pcie_endpoint_cap_init(pci_dev, 0);
-    if (ret < 0) {
-        error_setg(errp, "enetc: failed to init PCIe cap");
-        return;
-    }
-    pcie_cap_flr_init(pci_dev);
+    /*
+     * Modelled as a conventional PCI endpoint (the real ENETC PF is an RCiEP,
+     * but enetc4_pf treats pcie_flr() at probe as best-effort, so the PCIe
+     * capability is not required). A PCIe-cap init here would assert unless
+     * the device is plugged into an express slot.
+     */
 
     qemu_macaddr_default_if_unset(&s->conf.macaddr);
     s->nic = qemu_new_nic(&net_fsl_enetc_info, &s->conf,
@@ -296,7 +294,6 @@ static const TypeInfo fsl_enetc_info = {
     .instance_size = sizeof(FslEnetcState),
     .class_init = fsl_enetc_class_init,
     .interfaces = (const InterfaceInfo[]) {
-        { INTERFACE_PCIE_DEVICE },
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },
