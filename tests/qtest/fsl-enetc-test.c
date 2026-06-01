@@ -15,6 +15,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/bswap.h"
+#include "qemu/cutils.h"
 #include "qemu/sockets.h"
 #include "qemu/iov.h"
 #include "libqtest-single.h"
@@ -213,8 +214,13 @@ static void test_rx_wraparound(void)
      * pushes ~51000 frames through the 64-BD ring.
      */
     const char *laps_env = getenv("ENETC_STRESS_LAPS");
-    uint32_t laps = laps_env ? (uint32_t)strtoul(laps_env, NULL, 10) : 4;
-    const uint32_t NFRAMES = RING_LEN * laps + 5;
+    unsigned long laps = 4;
+    uint32_t NFRAMES;
+
+    if (laps_env) {
+        qemu_strtoul(laps_env, NULL, 10, &laps);
+    }
+    NFRAMES = RING_LEN * (uint32_t)laps + 5;
     uint32_t flen = 64;                          /* single-buffer frames */
     uint8_t frame[64];
     uint8_t got[64];
