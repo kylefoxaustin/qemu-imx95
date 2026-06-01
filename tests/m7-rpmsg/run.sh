@@ -30,9 +30,9 @@ set -u
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 QEMU=${QEMU:-$REPO/build/qemu-system-aarch64}
-SM_ELF=${SM_ELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}
-KERNEL=${KERNEL:-$HOME/Documents/linux-imx95-build/arch/arm64/boot/Image}
-DTB=${DTB:-$HOME/Documents/linux-imx95-build/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
+SM_ELF=${SM_ELF:-${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}/m33_image.elf}
+KERNEL=${KERNEL:-${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}/linux-build/arch/arm64/boot/Image}
+DTB=${DTB:-${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}/linux-build/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
 M7_FW=${M7_FW:-}
 INITRD=${INITRD:-}
 TMO=${TMO:-90}

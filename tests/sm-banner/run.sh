@@ -12,7 +12,7 @@
 set -u
 
 QEMU=${QEMU:-./build/qemu-system-aarch64}
-SM_ELF=${SM_ELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}
+SM_ELF=${SM_ELF:-${IMX95_ARTIFACTS:-$HOME/imx95-artifacts}/m33_image.elf}
 
 if [ ! -x "$QEMU" ]; then
     echo "qemu not found at $QEMU (build it, or set QEMU=)" >&2

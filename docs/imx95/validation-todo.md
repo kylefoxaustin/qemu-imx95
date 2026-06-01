@@ -51,6 +51,14 @@ no tracked file may hardcode a personal path —
 `git grep -nE '/home/[a-z]+|Documents/'` over `*.sh *.py *.md` should be clean
 of developer-specific layout. ~3-4 h (incl. VM setup).
 
+**Path check: PASSED (2026-06-01).** The hardcoded-layout half of this gate is
+fixed: the test scripts' artifact defaults no longer encode the author's
+personal home-directory tree. They now fall back to a neutral convention
+directory `$IMX95_ARTIFACTS` (default `~/imx95-artifacts`), still overridable
+per-var (`SM_ELF`/`KERNEL`/`DTB`/`INITRD`); layout documented in the README's
+"Required artifacts" section. The gate grep over tracked `*.sh *.py` is now
+clean. The *different-machine boot run itself* (VM/second box) is still to do.
+
 ### 1.3 BusyBox initramfs interactive shell
 Boot with a static aarch64 BusyBox initramfs; verify an interactive shell, and
 `ls /`, `cat /proc/cpuinfo` (6 A55s), `ps`, `uname -a`, `dmesg`. Proves
