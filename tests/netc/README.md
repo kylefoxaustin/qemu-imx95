@@ -25,20 +25,28 @@ Two constraints drive the choice:
   ("Initializing NETCMIX failed"), so `of_platform_populate` never runs. devfn
   0x40 is the only free, accepted slot.
 
-## Status (stage 4b)
+## Status (stage 4c)
 
-With the model + this DTB:
+With the model + this DTB the ENETC PF probes end to end:
 
 - `netc-blk-ctrl` NETCMIX init succeeds, the ECAM bus enumerates, and the PF
   appears at `0002:00:08.0 [1131:e101]` with BAR0/BAR2 assigned.
-- `nxp_enetc4` binds and logs `enabling device (0000 -> 0002)`.
-- The probe then stops silently inside `enetc4_pf_init` (it runs in the
-  `deferred_probe` workqueue, so there is no panic). This is the expected next
-  blocker: a synchronous register poll - most likely the SI command BD ring
-  (CBDR) - that the model must auto-complete. That register-level work is
-  stage 4c.
+- `nxp_enetc4` binds (`enabling device (0000 -> 0002)`), the CBDR command ring
+  drains, and the SI/port registers configure.
+- `enetc_alloc_msix` succeeds: 7 MSI-X vectors are allocated and mapped to LPIs
+  through the GICv3 ITS (`MAPD`/`MAPTI` for DeviceID 0x63).
+- `register_netdev` creates **`eth0`**, and the `fixed-link` brings it up:
 
-No `eth0` yet; that arrives once the CBDR/BD-ring path and MSI-X are completed.
+  ```
+  fsl_enetc4 0002:00:08.0 eth0: configuring for fixed/rgmii-id link mode
+  fsl_enetc4 0002:00:08.0 eth0: Link is Up - 1Gbps/Full - flow control off
+  ```
+
+  `ip link set eth0 up` reports `operstate up`.
+
+What remains for actual traffic is the BD-ring DMA path (TX/RX descriptor
+rings) bound to a QEMU `-netdev` backend; until then the NIC model accepts no
+frames (`can_receive` returns false). That is the next step.
 
 ## Run
 
