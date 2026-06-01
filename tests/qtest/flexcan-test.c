@@ -12,6 +12,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/cutils.h"
 #include "libqtest-single.h"
 
 /* i.MX 95 FlexCAN1/FlexCAN2 register bases. */
@@ -102,10 +103,78 @@ static void test_tx_rx(void)
     qtest_quit(qts);
 }
 
+/*
+ * High-volume TX->RX: blast many frames FC1 -> FC2 through the shared CAN bus,
+ * each with a distinct ID and payload, re-arming the RX mailbox (W1C clear)
+ * between frames. Verify every frame arrives intact, in order, with no loss or
+ * corruption across the run. This stresses the mailbox handoff + W1C re-arm
+ * path at volume - the FlexCAN analog of a sustained-traffic test (FlexCAN is
+ * mailbox-based with no DMA ring, so there is no index to wrap; the risk this
+ * guards is a stuck flag or a stale mailbox after many back-to-back frames).
+ *
+ * Count is configurable via FLEXCAN_STRESS_FRAMES (default 1000, CI-fast).
+ */
+static void test_tx_rx_volume(void)
+{
+    QTestState *qts = qtest_init("-machine imx95-19x19-evk -accel qtest "
+                                 "-object can-bus,id=cb "
+                                 "-machine canbus0=cb,canbus1=cb");
+    const char *env = getenv("FLEXCAN_STRESS_FRAMES");
+    unsigned long n = 1000;
+    unsigned long f;
+
+    if (env) {
+        qemu_strtoul(env, NULL, 10, &n);
+    }
+
+    /* Arm RX mailbox 1 as EMPTY once; we re-arm it via W1C after each frame. */
+    qtest_writel(qts, FC2 + MB_CS(1), CODE_RX_EMPTY);
+
+    for (f = 0; f < n; f++) {
+        uint32_t can_id = 0x100 + (f & 0x6ff);  /* 11-bit standard ID */
+        uint32_t payload = 0xc0000000u ^ (uint32_t)(f * 2654435761u);
+        uint32_t cs, id, d0;
+
+        /* Sender: distinct ID + payload; CS write fires the TX. */
+        qtest_writel(qts, FC1 + TX_MB + 8, payload);
+        qtest_writel(qts, FC1 + TX_MB + 4, can_id << 18);
+        qtest_writel(qts, FC1 + TX_MB + 0, CODE_TX_DATA | (4u << 16));
+
+        /* Sender TX-complete flag set. */
+        g_assert_true(qtest_readl(qts, FC1 + IFLAG2) & (1u << 31));
+        /* clear it for the next iteration (W1C) */
+        qtest_writel(qts, FC1 + IFLAG2, 1u << 31);
+
+        /* Receiver got exactly this frame. */
+        if (!(qtest_readl(qts, FC2 + IFLAG1) & (1u << 1))) {
+            g_test_message("frame %lu: RX flag not set (frame lost)", f);
+            g_assert_not_reached();
+        }
+        cs = qtest_readl(qts, FC2 + MB_CS(1));
+        g_assert_cmphex(cs & CODE_MASK, ==, CODE_RX_FULL);
+        id = qtest_readl(qts, FC2 + MB_ID(1));
+        d0 = qtest_readl(qts, FC2 + MB_D0(1));
+        if (((id >> 18) & 0x7ff) != can_id || d0 != payload) {
+            g_test_message("frame %lu: id/payload mismatch "
+                           "(got id 0x%x data 0x%x, want id 0x%x data 0x%x)",
+                           f, (id >> 18) & 0x7ff, d0, can_id, payload);
+            g_assert_not_reached();
+        }
+
+        /* Re-arm: W1C the RX flag, mailbox returns to EMPTY for the next. */
+        qtest_writel(qts, FC2 + IFLAG1, 1u << 1);
+        g_assert_cmphex(qtest_readl(qts, FC2 + MB_CS(1)) & CODE_MASK, ==,
+                        CODE_RX_EMPTY);
+    }
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/flexcan/mcr-handshake", test_mcr_handshake);
     qtest_add_func("/flexcan/tx-rx", test_tx_rx);
+    qtest_add_func("/flexcan/tx-rx-volume", test_tx_rx_volume);
     return g_test_run();
 }

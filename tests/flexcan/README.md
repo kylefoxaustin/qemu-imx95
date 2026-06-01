@@ -16,7 +16,10 @@ self-test sends frames each way and verifies they arrive intact.
 This complements `tests/qtest/flexcan-test.c` (which pokes the model's
 registers directly, no kernel): here the *real Linux driver* drives the model
 through its full `chip_start` (MCR handshake, RAM init, bit-timing, mailbox
-setup, interrupts) and does live TX/RX.
+setup, interrupts) and does live TX/RX. The qtest covers the MCR handshake, a
+single TX->RX frame, and a high-volume round-trip (`tx-rx-volume`: 1000 frames
+by default, `FLEXCAN_STRESS_FRAMES=N` for more - verified clean at 100000),
+each frame checked for an intact ID + payload with no loss across the run.
 
 ## Run
 
