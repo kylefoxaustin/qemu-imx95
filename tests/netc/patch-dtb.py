@@ -10,9 +10,14 @@
 # that never resolves under emulation. This rewrites it to an enabled node with
 # a fixed MAC and a fixed-link (no real PHY/MDIO), so enetc4_pf can bind.
 #
+# It also rewrites the NETC pcie@4ca00000 msi-map to identity (RID -> DeviceID
+# 1:1). The BSP remaps RIDs to DeviceID 0x6x, but QEMU's GICv3 ITS uses the PCI
+# requester-ID directly as the DeviceID, so the BSP remap leaves the ITS with no
+# matching device entry and every ENETC MSI is silently dropped.
+#
 # Why a Python splice and not fdtoverlay: fdtoverlay cannot delete properties
-# (the nvmem-cells), and the host may not ship fdtoverlay at all. We edit the
-# decompiled DTS text and recompile with the kernel's dtc.
+# (the nvmem-cells) or rewrite the msi-map, and the host may not ship fdtoverlay
+# at all. We edit the decompiled DTS text and recompile with the kernel's dtc.
 #
 # Usage:
 #   dtc -I dtb -O dts base.dtb > base.dts
@@ -40,6 +45,14 @@ NEW_NODE = (
     '\t\t\t};'
 )
 
+# The NETC pcie@4ca00000 msi-map (8 entries, RID -> 0x85/DeviceID 0x6x). The
+# msi phandle (0x85) is fixed by the base tree; if dtc renumbers it this lookup
+# must be updated. Replaced with a single identity entry over all RIDs.
+OLD_MSI_MAP = ('msi-map = <0x0 0x85 0x60 0x1 0x10 0x85 0x61 0x1 0x20 0x85 0x62 '
+               '0x1 0x40 0x85 0x63 0x1 0x80 0x85 0x64 0x1 0x90 0x85 0x65 0x1 '
+               '0xa0 0x85 0x66 0x1 0xc0 0x85 0x67 0x1>;')
+NEW_MSI_MAP = 'msi-map = <0x0 0x85 0x0 0x10000>;'
+
 
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdin'
@@ -48,7 +61,13 @@ def main():
     j = s.index('};', i) + 2          # ethernet@8,0 has no children: first }; closes it
     if s[i:j].count('{') != 1:
         sys.exit('error: unexpected nesting in ethernet@8,0 block')
-    sys.stdout.write(s[:i] + NEW_NODE + s[j:])
+    s = s[:i] + NEW_NODE + s[j:]
+
+    if OLD_MSI_MAP not in s:
+        sys.exit('error: NETC msi-map not found verbatim (phandle renumbered?)')
+    s = s.replace(OLD_MSI_MAP, NEW_MSI_MAP)
+
+    sys.stdout.write(s)
 
 
 if __name__ == '__main__':

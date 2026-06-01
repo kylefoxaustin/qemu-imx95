@@ -25,28 +25,37 @@ Two constraints drive the choice:
   ("Initializing NETCMIX failed"), so `of_platform_populate` never runs. devfn
   0x40 is the only free, accepted slot.
 
-## Status (stage 4c)
+## Status (stage 4d - working datapath)
 
-With the model + this DTB the ENETC PF probes end to end:
+With the model + this DTB the ENETC PF probes end to end **and passes traffic**:
 
 - `netc-blk-ctrl` NETCMIX init succeeds, the ECAM bus enumerates, and the PF
   appears at `0002:00:08.0 [1131:e101]` with BAR0/BAR2 assigned.
 - `nxp_enetc4` binds (`enabling device (0000 -> 0002)`), the CBDR command ring
   drains, and the SI/port registers configure.
-- `enetc_alloc_msix` succeeds: 7 MSI-X vectors are allocated and mapped to LPIs
-  through the GICv3 ITS (`MAPD`/`MAPTI` for DeviceID 0x63).
-- `register_netdev` creates **`eth0`**, and the `fixed-link` brings it up:
+- `enetc_alloc_msix` succeeds: MSI-X vectors are allocated and mapped to LPIs
+  through the GICv3 ITS, and the ring interrupts are delivered to the CPU.
+- `register_netdev` creates **`eth0`**, and the `fixed-link` brings it up
+  (`Link is Up - 1Gbps/Full`).
+- TX/RX BD-ring DMA works against a `-nic user` (slirp) backend - ping the
+  slirp gateway succeeds:
 
   ```
-  fsl_enetc4 0002:00:08.0 eth0: configuring for fixed/rgmii-id link mode
-  fsl_enetc4 0002:00:08.0 eth0: Link is Up - 1Gbps/Full - flow control off
+  64 bytes from 10.0.2.2: seq=0 ttl=255 time=...
+  3 packets transmitted, 3 packets received, 0% packet loss
   ```
 
-  `ip link set eth0 up` reports `operstate up`.
+### Bring-up notes
 
-What remains for actual traffic is the BD-ring DMA path (TX/RX descriptor
-rings) bound to a QEMU `-netdev` backend; until then the NIC model accepts no
-frames (`can_receive` returns false). That is the next step.
+- The PF is wired with `qemu_configure_nic_device(..., match_default=true)`, so
+  attach a backend with `-nic user,model=fsl-enetc` (a bare `-netdev` is not
+  matched; use `-nic`).
+- `patch-dtb.py` also rewrites the NETC `pcie@4ca00000` `msi-map` to identity
+  (RID -> DeviceID 1:1). The BSP remaps RIDs to DeviceID 0x6x, but QEMU's ITS
+  uses the PCI requester-ID directly as the DeviceID, so the BSP remap would
+  leave the ITS without a matching device entry and drop every MSI.
+- The guest must program a non-zero MAC (`ip link set eth0 address ...`); the
+  BSP normally pulls it from an efuse nvmem that is absent under emulation.
 
 ## Run
 

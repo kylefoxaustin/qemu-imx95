@@ -86,8 +86,32 @@
 #define ENETC_MDIO_DATA     0x08
 #define ENETC_MDIO_ADDR     0x0c
 
+/* SI per-ring MSI-X vector tables (which MSI-X entry a ring fires). */
+#define ENETC_SIMSITRV(n)   (0x0b00 + (n) * 4)  /* TX ring n -> vector */
+#define ENETC_SIMSIRRV(n)   (0x0b80 + (n) * 4)  /* RX ring n -> vector */
+
+/* TX/RX BD ring index-register masks (indices, not byte offsets). */
+#define ENETC_TBCIR_IDX_MASK 0xffff
+#define ENETC_RBCIR_IDX_MASK 0xffff
+
 /* --- Global block --- */
 #define ENETC_G_EIPBRR0     0x0bf8      /* IP block rev: low16 = 0x0401 */
+
+/*
+ * Buffer descriptors are 16 bytes. The TX BD the driver posts is
+ *   addr[8] buf_len[2] frm_len[2] lstatus[4]   (flags in lstatus[31:24]).
+ * The RX BD is posted as { addr[8], resv[8] } and written back by HW as
+ *   { ..., buf_len@offset 12 (__le16), lstatus@offset 12 (__le32) }; the
+ * driver polls lstatus != 0 and reads buf_len from the same word region.
+ */
+#define ENETC_BD_SIZE        16
+#define ENETC_TXBD_FLAGS_F   (1u << 7)   /* final BD of a frame */
+#define ENETC_TXBD_FLAGS_OFF 24          /* flags live in lstatus[31:24] */
+#define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final */
+#define ENETC_RXBD_LSTATUS_R (1u << 30)  /* RX writeback: ready/ring-full */
+
+/* Max Ethernet frame we gather/scatter (with VLAN + FCS headroom). */
+#define ENETC_FRAME_MAX      2048
 
 /* Reset / fixed values */
 #define ENETC_REV_4_1       0x0401
@@ -116,6 +140,78 @@ static void enetc_cbdr_kick(FslEnetcState *s)
 {
     enetc_set(s, ENETC_SI_BASE + ENETC_SICBDRCIR,
               enetc_reg(s, ENETC_SI_BASE + ENETC_SICBDRPIR));
+}
+
+/* Raise the MSI-X vector a ring is routed to (SIMSITRV/SIMSIRRV entry). */
+static void enetc_ring_irq(FslEnetcState *s, hwaddr msivec_reg)
+{
+    PCIDevice *pci = PCI_DEVICE(s);
+    uint32_t vec = enetc_reg(s, ENETC_SI_BASE + msivec_reg);
+
+    if (msix_enabled(pci)) {
+        msix_notify(pci, vec);
+    }
+}
+
+/* Base GPA of a BD ring from its BDxBAR0/BDxBAR1 register pair. */
+static uint64_t enetc_ring_base(FslEnetcState *s, hwaddr bar0_off)
+{
+    return enetc_reg(s, bar0_off) |
+           ((uint64_t)enetc_reg(s, bar0_off + 4) << 32);
+}
+
+/*
+ * TX kick. The driver writes its producer index to TBPIR; walk the BD ring
+ * from the consumer index (TBCIR) up to it, transmit each frame, then snap
+ * TBCIR to TBPIR and raise the ring's TX interrupt. BDs are 16 bytes and the
+ * ring length (in BDs) is TBLENR. Multi-BD frames are gathered until the F
+ * (final) flag.
+ */
+static void enetc_tx_kick(FslEnetcState *s)
+{
+    hwaddr tbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_TX, 0);
+    uint64_t ring = enetc_ring_base(s, tbase + ENETC_TBBAR0);
+    uint32_t len = enetc_reg(s, tbase + ENETC_TBLENR) & ENETC_TBCIR_IDX_MASK;
+    uint32_t pi = enetc_reg(s, tbase + ENETC_TBPIR) & ENETC_TBCIR_IDX_MASK;
+    uint32_t ci = enetc_reg(s, tbase + ENETC_TBCIR) & ENETC_TBCIR_IDX_MASK;
+    PCIDevice *pci = PCI_DEVICE(s);
+    uint8_t frame[ENETC_FRAME_MAX];
+    uint32_t frame_len = 0;
+
+    if (!len) {
+        return;
+    }
+
+    while (ci != pi) {
+        uint8_t bd[ENETC_BD_SIZE];
+        uint64_t addr;
+        uint16_t buf_len;
+        uint32_t lstatus;
+
+        pci_dma_read(pci, ring + (uint64_t)ci * ENETC_BD_SIZE, bd, sizeof(bd));
+        addr = ldq_le_p(bd);
+        buf_len = lduw_le_p(bd + 8);
+        lstatus = ldl_le_p(bd + 12);
+
+        if (frame_len + buf_len <= sizeof(frame)) {
+            pci_dma_read(pci, addr, frame + frame_len, buf_len);
+            frame_len += buf_len;
+        }
+
+        if (lstatus & (ENETC_TXBD_FLAGS_F << ENETC_TXBD_FLAGS_OFF)) {
+            if (frame_len) {
+                qemu_send_packet(qemu_get_queue(s->nic), frame, frame_len);
+            }
+            frame_len = 0;
+        }
+
+        if (++ci == len) {
+            ci = 0;
+        }
+    }
+
+    enetc_set(s, tbase + ENETC_TBCIR, ci);
+    enetc_ring_irq(s, ENETC_SIMSITRV(0));
 }
 
 static uint64_t fsl_enetc_bar0_read(void *opaque, hwaddr off, unsigned size)
@@ -159,6 +255,17 @@ static void fsl_enetc_bar0_write(void *opaque, hwaddr off, uint64_t val,
         /* W1C IRQ status: clear written bits. */
         enetc_set(s, off, enetc_reg(s, off) & ~(uint32_t)val);
         return;
+    case ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_TX, 0) + ENETC_TBPIR:
+        enetc_set(s, off, val);
+        enetc_tx_kick(s);
+        return;
+    case ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0) + ENETC_RBCIR:
+        /* Driver posted more empty RX buffers; try to flush pending RX. */
+        enetc_set(s, off, val);
+        if (s->nic && s->rx_pending) {
+            qemu_flush_queued_packets(qemu_get_queue(s->nic));
+        }
+        return;
     default:
         enetc_set(s, off, val);
         return;
@@ -181,16 +288,70 @@ static const MemoryRegionOps fsl_enetc_bar0_ops = {
     .impl.max_access_size = 4,
 };
 
-/* --- NIC backend (RX path lands in stage 4c) --- */
+/* --- NIC backend --- */
 static bool fsl_enetc_can_receive(NetClientState *nc)
 {
-    return false; /* RX BD-ring DMA not wired yet (stage 4c) */
+    FslEnetcState *s = qemu_get_nic_opaque(nc);
+    hwaddr rbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0);
+    uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
+    uint32_t ci;
+
+    /* The RX ring must be enabled and have at least one posted (empty) BD. */
+    if (!len || !(enetc_reg(s, rbase + ENETC_RBMR) & ENETC_MR_EN)) {
+        return false;
+    }
+    /* RBCIR (driver's next_to_use) is one past the last posted buffer. */
+    ci = enetc_reg(s, rbase + ENETC_RBCIR) & ENETC_RBCIR_IDX_MASK;
+    return s->rx_pi != ci;
 }
 
 static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
                                  size_t size)
 {
-    return size; /* drop until stage 4c */
+    FslEnetcState *s = qemu_get_nic_opaque(nc);
+    PCIDevice *pci = PCI_DEVICE(s);
+    hwaddr rbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0);
+    uint64_t ring = enetc_ring_base(s, rbase + ENETC_RBBAR0);
+    uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
+    uint64_t bd_addr;
+    uint8_t bd[ENETC_BD_SIZE];
+    uint64_t buf_addr;
+
+    if (!fsl_enetc_can_receive(nc)) {
+        s->rx_pending = true;
+        return 0; /* back-pressure: retried on the next RBCIR post */
+    }
+    if (size > ENETC_FRAME_MAX) {
+        return size; /* drop oversized; reported as received */
+    }
+
+    /* Read the posted BD at the producer index, DMA the frame to its buffer. */
+    bd_addr = ring + (uint64_t)s->rx_pi * ENETC_BD_SIZE;
+    pci_dma_read(pci, bd_addr, bd, sizeof(bd));
+    buf_addr = ldq_le_p(bd);
+    pci_dma_write(pci, buf_addr, buf, size);
+
+    /*
+     * Write back the RX BD in the HW (union enetc_rx_bd.r) layout the driver
+     * reads: buf_len is a __le16 at offset 8, and lstatus is a __le32 at
+     * offset 12 (overlapping flags[15:0]/error[31:16]). The driver takes the
+     * frame length from buf_len and treats lstatus != 0 as "BD ready", with
+     * LSTATUS_F (bit 31) marking the final BD. Clear the rest of the BD so
+     * stale csum/hash fields do not confuse offload parsing.
+     */
+    memset(bd, 0, sizeof(bd));
+    stw_le_p(bd + 8, (uint16_t)size);                 /* r.buf_len */
+    stl_le_p(bd + 12, ENETC_RXBD_LSTATUS_F);          /* final BD, no error */
+    pci_dma_write(pci, bd_addr, bd, sizeof(bd));
+
+    if (++s->rx_pi == len) {
+        s->rx_pi = 0;
+    }
+    enetc_set(s, rbase + ENETC_RBPIR, s->rx_pi);
+    s->rx_pending = false;
+    enetc_ring_irq(s, ENETC_SIMSIRRV(0));
+
+    return size;
 }
 
 static NetClientInfo net_fsl_enetc_info = {
@@ -211,7 +372,7 @@ static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
 {
     FslEnetcState *s = FSL_ENETC(pci_dev);
     uint8_t *cfg = pci_dev->config;
-    int ret;
+    int ret, i;
 
     pci_set_word(cfg + PCI_VENDOR_ID, FSL_ENETC_VENDOR_ID);
     pci_set_word(cfg + PCI_DEVICE_ID, FSL_ENETC_PF_DEVICE_ID);
@@ -240,6 +401,16 @@ static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
                     FSL_ENETC_MSIX_PBA_OFF, 0, errp);
     if (ret) {
         return;
+    }
+
+    /*
+     * Mark every MSI-X vector as in-use so msix_notify() delivers it. Like
+     * other fully-emulated MSI-X NICs (e1000e, igb, vmxnet3) we do not use
+     * vector-use notifiers; without this, msix_notify() early-returns on
+     * !msix_entry_used and the ring interrupts never reach the guest.
+     */
+    for (i = 0; i < FSL_ENETC_MSIX_VECTORS; i++) {
+        msix_vector_use(pci_dev, i);
     }
 
     /*
@@ -283,8 +454,8 @@ static void fsl_enetc_reset(DeviceState *dev)
     FslEnetcState *s = FSL_ENETC(dev);
 
     fsl_enetc_reset_regs(s);
-    memset(s->tx, 0, sizeof(s->tx));
-    memset(s->rx, 0, sizeof(s->rx));
+    s->rx_pi = 0;
+    s->rx_pending = false;
 }
 
 static const Property fsl_enetc_props[] = {

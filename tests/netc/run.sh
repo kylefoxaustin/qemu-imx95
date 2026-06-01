@@ -43,12 +43,20 @@ trap 'rm -rf "$WORK"' EXIT
 python3 "$HERE/patch-dtb.py" "$WORK/base.dts" >"$WORK/netc.dts"
 "$DTC" -I dts -O dtb -o "$WORK/netc.dtb" "$WORK/netc.dts" 2>/dev/null
 
-echo "Booting (look for 'fsl_enetc4 0002:00:08.0')..."
+# A backend is attached with "-nic user,model=fsl-enetc"; the SoC wires the PF
+# with qemu_configure_nic_device(match_default=true), which matches a -nic (not
+# a bare -netdev). slirp gives the guest 10.0.2.15 and a gateway at 10.0.2.2.
+echo "Booting (look for 'fsl_enetc4 0002:00:08.0' + ping)..."
 timeout --signal=KILL 110 "$QEMU" -M imx95-19x19-evk -m 2G -display none \
 	-kernel "$IMAGE" -dtb "$WORK/netc.dtb" -initrd "$INITRD" \
 	-append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
 	-device loader,file="$SMELF",cpu-num=6 \
+	-nic user,model=fsl-enetc \
 	-serial file:"$WORK/serial.log" -serial null -monitor none >/dev/null 2>&1 || true
 
-echo "--- ENETC PF probe lines ---"
-grep -aE "fsl_enetc4|0002:00:08|enetc|NETCMIX" "$WORK/serial.log" | grep -avi "clk:" || true
+echo "--- ENETC PF probe + link ---"
+grep -aE "fsl_enetc4|0002:00:08|NETCMIX|Link is Up" "$WORK/serial.log" | grep -avi "clk:" || true
+echo "--- ping (if the initramfs runs the ping test) ---"
+grep -aE "packets transmitted|bytes from 10.0.2" "$WORK/serial.log" || \
+	echo "(no ping output - the default busybox initramfs only opens a shell;" \
+	     "bring eth0 up with a non-zero MAC and ping 10.0.2.2 to test traffic)"

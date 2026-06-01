@@ -41,18 +41,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(FslEnetcState, FSL_ENETC)
 #define FSL_ENETC_NUM_TX_RINGS  1
 #define FSL_ENETC_NUM_RX_RINGS  1
 
-typedef struct FslEnetcRing {
-    uint64_t base;       /* ring base GPA (BAR0 BDxBAR0/1) */
-    uint32_t len;        /* ring length in BDs (BDxLENR & ~7) */
-    uint32_t pir;        /* producer index */
-    uint32_t cir;        /* consumer index */
-    uint32_t mr;         /* mode register (enable etc.) */
-    uint32_t ier;        /* interrupt enable */
-    uint32_t idr;        /* interrupt status (W1C) */
-    uint32_t msix_vec;   /* SIMSITRV/SIMSIRRV routed vector */
-    uint32_t bsr;        /* RX buffer size (RBBSR), RX only */
-} FslEnetcRing;
-
 struct FslEnetcState {
     /*< private >*/
     PCIDevice parent_obj;
@@ -71,9 +59,14 @@ struct FslEnetcState {
      */
     uint32_t *regs;
 
-    /* TX/RX BD-ring bookkeeping (indices/base mirror BAR0 ring regs). */
-    FslEnetcRing tx[FSL_ENETC_NUM_TX_RINGS];
-    FslEnetcRing rx[FSL_ENETC_NUM_RX_RINGS];
+    /*
+     * RX producer index (which posted BD the next frame lands in). The driver
+     * does not read RBPIR; it polls each BD's writeback lstatus. rx_pending is
+     * set when an incoming frame had no free buffer, so a later RBCIR write
+     * (the driver posting buffers) reflushes the queued packet.
+     */
+    uint32_t rx_pi;
+    bool rx_pending;
 };
 
 #endif /* HW_NET_FSL_ENETC_H */

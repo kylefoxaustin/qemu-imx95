@@ -48,6 +48,7 @@
 #include "hw/intc/arm_gicv3_its_common.h"
 #include "hw/pci-host/gpex.h"
 #include "hw/pci/pci_host.h"
+#include "hw/pci/pci_bus.h"
 #include "hw/misc/unimp.h"
 #include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
@@ -834,17 +835,15 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * for the NETC PCIe endpoints (v2.x). Mirrors hw/arm/virt.c create_its:
      * link to the GICv3 (which has has-lpi set above) and map its frame.
      */
-    {
-        DeviceState *its = qdev_new(its_class_name());
+    DeviceState *its = qdev_new(its_class_name());
 
-        object_property_set_link(OBJECT(its), "parent-gicv3",
-                                 OBJECT(&s->gic), &error_abort);
-        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(its), errp)) {
-            return;
-        }
-        sysbus_mmio_map(SYS_BUS_DEVICE(its), 0,
-                        fsl_imx95_memmap[FSL_IMX95_GIC_ITS].addr);
+    object_property_set_link(OBJECT(its), "parent-gicv3",
+                             OBJECT(&s->gic), &error_abort);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(its), errp)) {
+        return;
     }
+    sysbus_mmio_map(SYS_BUS_DEVICE(its), 0,
+                    fsl_imx95_memmap[FSL_IMX95_GIC_ITS].addr);
 
     /*
      * NETC integrated-endpoint ECAM PCIe host (v2.x). dtsi:
@@ -905,6 +904,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
          * (tests/netc) enables ethernet@8,0 with a phy-mode + fixed-link.
          */
         s->enetc = PCI_DEVICE(pci_new(PCI_DEVFN(8, 0), TYPE_FSL_ENETC));
+        qemu_configure_nic_device(DEVICE(s->enetc), true, NULL);
         pci_realize_and_unref(s->enetc, s->netc_pcie_bus, &error_fatal);
     }
 
