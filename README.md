@@ -4,10 +4,14 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 (LPDDR5) variant.
 
 > **This is a fork of QEMU mainline.** The i.MX 95 work lives on the
-> `imx95-scaffold` branch, from its tip back to the upstream branch point
-> `edcc429e9e`; the vast majority of the ~129k-commit history is inherited
-> from upstream QEMU. The upstream QEMU README is preserved at
-> [`README.rst`](README.rst) — this file describes the i.MX 95-specific work.
+> `imx95-netc` branch (the repository default and the upstream candidate),
+> from its tip back to the upstream branch point `edcc429e9e`; the vast
+> majority of the ~129k-commit history is inherited from upstream QEMU.
+> `imx95-netc` is the full series — v1 (the A55/M33/M7 complement) plus the
+> v2.0.0 NETC networking work — in one linear history. The older
+> `imx95-scaffold` branch is the pure-v1 line, kept for reference and without
+> NETC. The upstream QEMU README is preserved at [`README.rst`](README.rst) —
+> this file describes the i.MX 95-specific work.
 
 qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
 Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
@@ -27,9 +31,9 @@ upstream-mergeable into QEMU mainline.
 ## Quickstart for newcomers
 
 This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
-machine is already on the `imx95-scaffold` branch. Nothing needs patching.
-(The `docs/reviews/` patch artifacts are for *contributing back* to upstream
-QEMU; you never apply them to use this fork.)
+machine is on the default `imx95-netc` branch (a plain clone lands there).
+Nothing needs patching. (The `docs/reviews/` patch artifacts are for
+*contributing back* to upstream QEMU; you never apply them to use this fork.)
 
 **1. Clone and build** — a standard QEMU build (verified on Ubuntu 22.04+; see
 [Building](#building) for host packages):
@@ -183,9 +187,12 @@ DMA engine and MSI-X routed through the ITS. The stock Linux `nxp_enetc4`
 driver binds it, brings up **`eth0` at 1Gbps**, and **ping works** over a slirp
 backend (`3 packets transmitted, 3 received, 0% loss`). RX multi-buffer scatter
 and ring wraparound have deterministic, kernel-free qtests
-(`tests/qtest/fsl-enetc-test.c`). One ENETC port is wired and validated; a
-second port and throughput testing are follow-ons. See
-[`tests/netc/`](tests/netc/) for the bring-up recipe and
+(`tests/qtest/fsl-enetc-test.c`). For sustained traffic, a reproducible iperf
+load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally for
+extended runs — hundreds of Mbit/s with zero rx/tx errors or drops and flat
+memory (a functional datapath rate under TCG, not a silicon estimate). One
+ENETC port is wired and validated; a second port is a follow-on. See
+[`tests/netc/`](tests/netc/) for the bring-up + soak recipes and
 [`docs/reviews/v2.0.0.md`](docs/reviews/v2.0.0.md) for the milestone writeup.
 
 Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
@@ -211,7 +218,7 @@ remains is forward-looking:
 |---|---|---|
 | **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.0** |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source | after Display |
-| Second ENETC port + throughput | A second ENETC MAC and a sustained-throughput/iperf datapath validation (one port is wired and ping-validated today) | follow-on to v2.0.0 |
+| Second ENETC port | A second ENETC MAC (one port is wired, ping-validated, and exercised by the in-tree iperf load-soak today) | follow-on to v2.0.0 |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
 | Real-time peripherals | TSN, audio SAI/DSP for M7 / mixed-criticality workloads (FlexCAN is already done) | deferred |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
@@ -346,7 +353,7 @@ addresses and IRQ numbers.
 | `tests/m7-fault-recovery/`  | SM-driven M7 fault recovery test (v1.x Step 5) |
 | `tests/flexcan/`, `tests/qtest/flexcan-test.c` | FlexCAN Linux end-to-end harness + model qtest |
 | `tests/docker-repro/`       | clean-room reproducibility: build + boot in a pristine `ubuntu:22.04` container |
-| `tests/netc/`, `tests/qtest/fsl-enetc-test.c` | NETC ping harness (DT patch + boot) + RX-scatter qtest |
+| `tests/netc/`, `tests/qtest/fsl-enetc-test.c` | NETC bring-up (DT patch + boot), iperf throughput load-soak, + RX-scatter/wraparound qtests |
 | `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
 | `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
@@ -468,9 +475,11 @@ artifacts).
   graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
   test. Tagged `imx95-v1.1` at commit `442cbcf3a0`. Writeup in
   `docs/reviews/v1.1-final.md`.
-- **v2.0.0** — NETC networking, the current upstream candidate (NETC was
-  developed on the `imx95-netc` branch, then rebased onto the v1 line so the
-  series is one linear history). A functional GICv3 ITS + an integrated-ECAM
+- **v2.0.0** — NETC networking, the current upstream candidate. NETC was
+  developed on the `imx95-netc` branch on top of the v1 line, so the series is
+  one linear history; `imx95-netc` is the repository default. (The
+  `imx95-scaffold` branch remains the pure-v1 line, without NETC.) A functional
+  GICv3 ITS + an integrated-ECAM
   PCIe host + a from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI
   `1131:e101`) with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
   `nxp_enetc4` driver brings up `eth0` at 1Gbps and **ping works** over a slirp
