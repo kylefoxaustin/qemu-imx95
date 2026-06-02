@@ -25,6 +25,7 @@
 #   dtc -I dts -O dtb -o netc.dtb netc.dts
 #
 # (tests/netc/run.sh does all three.)
+import re
 import sys
 
 NEW_NODE = (
@@ -45,12 +46,15 @@ NEW_NODE = (
     '\t\t\t};'
 )
 
-# The NETC pcie@4ca00000 msi-map (8 entries, RID -> 0x85/DeviceID 0x6x). The
-# msi phandle (0x85) is fixed by the base tree; if dtc renumbers it this lookup
-# must be updated. Replaced with a single identity entry over all RIDs.
-OLD_MSI_MAP = ('msi-map = <0x0 0x85 0x60 0x1 0x10 0x85 0x61 0x1 0x20 0x85 0x62 '
-               '0x1 0x40 0x85 0x63 0x1 0x80 0x85 0x64 0x1 0x90 0x85 0x65 0x1 '
-               '0xa0 0x85 0x66 0x1 0xc0 0x85 0x67 0x1>;')
+# The NETC pcie@4ca00000 msi-map (8 entries, RID -> 0x85/DeviceID 0x6x).
+# Matched by structure rather than a verbatim string: dtc versions differ in
+# hex formatting (e.g. "0x0"/"0x1" vs zero-padded "0x00"/"0x01"), so we anchor
+# on the unique 8-entry NETC signature - phandle 0x85 mapping to DeviceIDs
+# 0x60..0x67 - and span the middle entries with [^>]*. The msi phandle (0x85)
+# is fixed by the base tree; if dtc renumbers it this regex must be updated.
+# Replaced with a single identity entry over all RIDs.
+OLD_MSI_MAP = re.compile(
+    r'msi-map = <0x0+ 0x85 0x60 0x0*1 [^>]*0x85 0x67 0x0*1>;')
 NEW_MSI_MAP = 'msi-map = <0x0 0x85 0x0 0x10000>;'
 
 
@@ -63,9 +67,10 @@ def main():
         sys.exit('error: unexpected nesting in ethernet@8,0 block')
     s = s[:i] + NEW_NODE + s[j:]
 
-    if OLD_MSI_MAP not in s:
-        sys.exit('error: NETC msi-map not found verbatim (phandle renumbered?)')
-    s = s.replace(OLD_MSI_MAP, NEW_MSI_MAP)
+    s, n = OLD_MSI_MAP.subn(NEW_MSI_MAP, s)
+    if n != 1:
+        sys.exit('error: NETC msi-map not matched once (got %d; phandle '
+                 'renumbered or layout changed?)' % n)
 
     sys.stdout.write(s)
 
