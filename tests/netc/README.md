@@ -77,3 +77,29 @@ deterministically by `tests/qtest/fsl-enetc-test.c` instead:
 # or override paths:
 KBUILD=/path/to/linux-build QEMU=/path/to/qemu-system-aarch64 ./run.sh
 ```
+
+## Throughput / stability load soak
+
+`load-soak.sh` runs the datapath hard for ~24h: it boots a second,
+iperf-carrying initramfs whose `/init` brings `eth0` up and loops
+`iperf -c 10.0.2.2 -t 300 -d` against a host-side `iperf -s` sink, printing a
+`ZSNAP` line every 60s with eth0's rx/tx counters + `MemFree`. Prior runs held
+**~660 Mbps** with `rxerr=rxdrop=txerr=txdrop=0` and flat memory.
+
+```sh
+./load-soak.sh                 # detaches; ~24.2h outer timeout backstop
+QEMU=$PWD/../../build/qemu-netc-soak-frozen ./load-soak.sh   # soak a pinned binary
+TIMEOUT_S=600 ./load-soak.sh   # short run
+```
+
+It prints a run dir under `build/netc-load-soak-<ts>/`; watch progress with
+`grep ZSNAP <run>/serial.log | tail` and confirm health with
+`grep -aoE '(rx|tx)(err|drop)=[0-9]+' <run>/serial.log | sort -u` (want all 0).
+Note `load-soak.sh` does `pkill -x iperf` on start, so run only one soak at a
+time.
+
+- `build-load-initramfs.sh` regenerates `netc-load-initramfs.cpio.gz` from
+  scratch: busybox (reused offline from `tests/busybox-initramfs`) plus a
+  dynamically-linked aarch64 `iperf` and its glibc/libstdc++ runtime fetched
+  from Ubuntu 22.04 (jammy) arm64 `.deb`s. The prebuilt cpio is committed so
+  the soak runs without network; rebuild only to bump iperf/libc versions.
