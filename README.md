@@ -188,10 +188,12 @@ driver binds it, brings up **`eth0` at 1Gbps**, and **ping works** over a slirp
 backend (`3 packets transmitted, 3 received, 0% loss`). RX multi-buffer scatter
 and ring wraparound have deterministic, kernel-free qtests
 (`tests/qtest/fsl-enetc-test.c`). For sustained traffic, a reproducible iperf
-load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally for
-extended runs — hundreds of Mbit/s with zero rx/tx errors or drops and flat
-memory (a functional datapath rate under TCG, not a silicon estimate). One
-ENETC port is wired and validated; a second port is a follow-on. See
+load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally: a
+**24-hour run moved 4.76 billion frames / 7.19 TB at ~661 Mbps average
+(740 Mbps peak), with zero rx/tx errors or drops, zero kernel anomalies, and
+flat guest memory**, ending in a clean self-poweroff (a functional datapath
+rate under TCG, not a silicon estimate). One ENETC port is wired and validated;
+a second port is a follow-on. See
 [`tests/netc/`](tests/netc/) for the bring-up + soak recipes and
 [`docs/reviews/v2.0.0.md`](docs/reviews/v2.0.0.md) for the milestone writeup.
 
