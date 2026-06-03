@@ -114,7 +114,10 @@ nsenter -t $NSPID -n ping -c 5 -I eth1 10.0.0.1; R2=$?
 # eth0's counters plus the bidirectional ping above prove both ports' TX and
 # RX datapaths (eth1, in the netns, both sent replies and received pings).
 echo "ZSTATS eth0 tx=$(cat /sys/class/net/eth0/statistics/tx_packets) rx=$(cat /sys/class/net/eth0/statistics/rx_packets)"
-if [ "$R1" = 0 ] && [ "$R2" = 0 ]; then echo "ZRESULT PASS"; else echo "ZRESULT FAIL r1=$R1 r2=$R2"; fi
+# Per-direction verdicts so a failure pins the broken path without a re-run.
+[ "$R1" = 0 ] && echo "ZDIR eth0->eth1: OK" || echo "ZDIR eth0->eth1: FAIL (TX on eth0 / RX on eth1)"
+[ "$R2" = 0 ] && echo "ZDIR eth1->eth0: OK" || echo "ZDIR eth1->eth0: FAIL (TX on eth1 / RX on eth0)"
+if [ "$R1" = 0 ] && [ "$R2" = 0 ]; then echo "ZRESULT PASS"; else echo "ZRESULT FAIL (eth0->eth1=$R1 eth1->eth0=$R2)"; fi
 poweroff -f
 INIT
 chmod +x "$root/init"
@@ -132,7 +135,7 @@ timeout --signal=KILL 150 "$QEMU" -M imx95-19x19-evk -m 2G -display none \
 echo "--- ENETC ports enumerated ---"
 grep -aE "0002:00:00.0: \[1131|0002:00:08.0: \[1131" "$WORK/serial.log" || echo "(ports not enumerated!)"
 echo "--- two-port back-to-back result ---"
-grep -aE "ZIF|ZNS|ZLINK|ZADDR|ZSTATS|packets transmitted|ZRESULT" "$WORK/serial.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
+grep -aE "ZIF|ZNS|ZLINK|ZADDR|ZSTATS|ZDIR|packets transmitted|ZRESULT" "$WORK/serial.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
 
 if grep -aq "ZRESULT PASS" "$WORK/serial.log"; then
     echo "RESULT: PASS ($DTB_NAME, both ports, back-to-back)"

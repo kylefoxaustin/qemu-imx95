@@ -299,25 +299,42 @@ Step 4 wires this end-to-end; Step 5 adds SM-driven M7 fault recovery
 
 ---
 
-## 6. Networking — one ENETC port (v2.0.0)
+## 6. Networking — two 1G ENETC ports (v2.0.0 + second port)
 
-As of v2.0.0 the NETC block is modelled end to end and a working `eth0`
-comes up: a functional GICv3 ITS + an integrated-ECAM PCIe host + a
-from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI `1131:e101`)
-with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
-`nxp_enetc4` driver binds it, `eth0` links up at 1Gbps, and ping works
-over a slirp backend (`-nic user,model=fsl-enetc`). RX BD-ring scatter and ring
-wraparound have deterministic qtests (`tests/qtest/fsl-enetc-test.c`), and a
-24-hour iperf load-soak over this datapath passed (4.76 B frames / 7.19 TB,
-~661 Mbps avg, zero rx/tx errors or drops, flat memory).
+The NETC block is modelled end to end: a functional GICv3 ITS + an
+integrated-ECAM PCIe host + a from-scratch ENETC v4 Ethernet PF
+(`hw/net/fsl_enetc.c`, PCI `1131:e101`) with a BD-ring DMA engine and MSI-X
+via the ITS. The stock Linux `nxp_enetc4` driver binds it, the port links up
+at 1Gbps, and traffic flows. RX BD-ring scatter and ring wraparound have
+deterministic qtests (`tests/qtest/fsl-enetc-test.c`), and a 24-hour
+single-port iperf load-soak over this datapath passed (4.76 B frames /
+7.19 TB, ~661 Mbps avg, zero rx/tx errors or drops, flat memory).
 
-Remaining gaps on the NETC path: **one ENETC port** is wired and tested
-(the DT also describes ENETC0 — which collides with the gpex root bridge
-— and ENETC2's 10gbase-r serdes); the test DTB needs three small edits
-(`tests/netc/patch-dtb.py`: enable ENETC1, drop the absent efuse MAC,
-rewrite the `msi-map` to identity because QEMU's ITS uses the PCI
-requester-ID as the DeviceID); the PF attaches to a `-nic` (not a bare
-`-netdev`); and a second port is a follow-on. On the older
+**Two 1G ports** are now wired and tested — ENETC0 (`ethernet@0,0`, devfn
+`0x0`) and ENETC1 (`ethernet@8,0`, devfn `0x40`), the 1G pair the boards pin
+out. ENETC0 sits at devfn `0x0` because the real NETC ECAM is an
+integrated-endpoint host with no bridge there; gpex's own root device is
+relocated to the unused slot `31.0` to free it. Both ports are validated with
+a **back-to-back traffic test** (`tests/netc/run-2port.sh`), which joins the
+two PFs on one QEMU L2 hub and pings `eth0`↔`eth1` (with `eth1` moved into its
+own netns so frames must cross the modelled wire, not loop back in the host
+stack). This runs on **both** the 19×19 EVK and 15×15 FRDM device trees — the
+same QEMU machine, only `-dtb` differs — exercising SoC-model generality that
+single-board validation can't. The test DTB is patched
+(`tests/netc/patch-dtb.py`) to enable both ports as `fixed-link`, drop the
+absent efuse MAC, and rewrite the `msi-map` to identity (QEMU's ITS uses the
+PCI requester-ID as the DeviceID). The PFs attach to `-nic` backends (not bare
+`-netdev`).
+
+**Third port (ENETC2 / 10G) is a roadmap item, not a trivial extension.** The
+EVK's second physical port is ENETC2 (`ethernet@10,0`, devfn `0x80`), a **10G
+`10gbase-r`** interface. It is *not* "just another 1G PF instance": it uses
+in-band-status link semantics (no MDIO PHY) rather than a fixed/RGMII link, and
+the `netc-blk-ctrl` NETCMIX programming for devfn `0x80` differs from the
+ENETC0/ENETC1 (0x0/0x40) link-MII paths the model currently drives. Until that
+is modelled it stays inert — the DT node and the bus-1 EMDIO ECAM describe PCI
+functions with no backing device, so Linux enumerates an empty bus and those
+nodes produce no probe errors or log noise (verified). On the older
 **`imx95-scaffold`** reference branch (pure v1) networking is not present — NETC
 is the additive v2.0.0 work, now part of the default `imx95-netc` branch.
 
