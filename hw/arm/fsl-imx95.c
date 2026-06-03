@@ -378,6 +378,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x42490000, 64 * KiB }, /* watchdog */
             { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
             { 0x42530000, 64 * KiB }, { 0x42540000, 64 * KiB }, /* i2c */
+            { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
             { 0x42590000, 64 * KiB }, /* serial */
             { 0x425e0000, 64 * KiB }, /* spi */
             { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB },
