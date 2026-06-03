@@ -19,8 +19,9 @@
 # Required artifacts (override via env):
 #   QEMU   - qemu-system-aarch64               (default: ../../build/...)
 #   KBUILD - kernel build dir (Image + dtb + scripts/dtc/dtc)
-#   SMELF  - System Manager m33_image.elf
+#   SM_ELF - System Manager m33_image.elf  (legacy SMELF also accepted)
 #   INITRD - load initramfs (auto-built via build-load-initramfs.sh if absent)
+# Also requires host `iperf` (the script starts the sink).
 #
 # Duration: TIMEOUT_S outer backstop (default ~24.2h). The guest /init also
 # self-stops after its ZSNAP budget; the host timeout is the real stop.
@@ -31,18 +32,22 @@ ROOT=$(cd "$HERE/../.." && pwd)
 
 QEMU=${QEMU:-$ROOT/build/qemu-system-aarch64}
 KBUILD=${KBUILD:-$HOME/Documents/linux-imx95-build}
-SMELF=${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}
+# SM_ELF is the repo-wide name; accept legacy SMELF too.
+SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}}
 INITRD=${INITRD:-$HERE/netc-load-initramfs.cpio.gz}
-GW=${GW:-10.0.2.2}
-IPERF_PORT=${IPERF_PORT:-5001}
 TIMEOUT_S=${TIMEOUT_S:-87000}     # ~24.2h backstop
+
+# The iperf target (gateway 10.0.2.2, TCP 5001) is baked into the load
+# initramfs by build-load-initramfs.sh, so it is NOT a runtime knob here: the
+# host sink must match that. To change it, rebuild the initramfs (GW=/IPERF_*).
 
 IMAGE=$KBUILD/arch/arm64/boot/Image
 DTB=$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb
 DTC=$KBUILD/scripts/dtc/dtc
 
 need() { [ -e "$2" ] || { echo "missing $1: $2" >&2; exit 1; }; }
-need QEMU "$QEMU"; need IMAGE "$IMAGE"; need DTB "$DTB"; need DTC "$DTC"; need SMELF "$SMELF"
+need QEMU "$QEMU"; need IMAGE "$IMAGE"; need DTB "$DTB"; need DTC "$DTC"; need SM_ELF "$SM_ELF"
+command -v iperf >/dev/null || { echo "missing host dependency: iperf" >&2; exit 1; }
 
 if [ ! -e "$INITRD" ]; then
     echo "load initramfs missing; building it..."
@@ -61,10 +66,11 @@ python3 "$HERE/patch-dtb.py" "$RUN/base.dts" >"$RUN/netc.dts"
 need "patched DTB" "$RUN/netc.dtb"
 cp "$INITRD" "$RUN/initramfs.cpio.gz"
 
-# 1) Host iperf sink (the load target at GW:IPERF_PORT from slirp).
-echo "starting host iperf -s on :$IPERF_PORT ..."
+# 1) Host iperf sink (the load target slirp maps to 10.0.2.2:5001 — the
+# default port the baked-in guest iperf client connects to).
+echo "starting host iperf -s (TCP 5001) ..."
 pkill -x iperf 2>/dev/null || true
-nohup iperf -s -p "$IPERF_PORT" >"$RUN/iperf-server.log" 2>&1 &
+nohup iperf -s >"$RUN/iperf-server.log" 2>&1 &
 echo $! >"$RUN/iperf-server.pid"
 sleep 1
 
@@ -74,7 +80,7 @@ nohup timeout --signal=KILL "$TIMEOUT_S" \
     "$QEMU" -M imx95-19x19-evk -m 2G -display none \
         -kernel "$IMAGE" -dtb "$RUN/netc.dtb" -initrd "$RUN/initramfs.cpio.gz" \
         -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
-        -device loader,file="$SMELF",cpu-num=6 \
+        -device loader,file="$SM_ELF",cpu-num=6 \
         -nic user,model=fsl-enetc \
         -serial file:"$RUN/serial.log" -serial null -monitor none \
         >"$RUN/qemu.out" 2>&1 &

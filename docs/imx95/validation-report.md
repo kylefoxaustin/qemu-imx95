@@ -150,10 +150,12 @@ monitor.
 **3.1 Networking — no usable interfaces on the v1 line.** Only `lo` appears.
 The NETC/enetc blocks are logging stubs; `ping` reports `Network is
 unreachable`. The integrated-PCIe ECAM probes but enumerates no devices (empty
-slots by design). Matches the project's stated v1 scope. (NETC networking — a
-working `eth0` over a modelled ENETC PF — is the separate **v2.0.0** milestone
-on the `imx95-netc` branch; it is not part of the v1 upstream line this report
-covers.)
+slots by design). This is the v1.0-era baseline this report was captured on.
+NETC networking — a working `eth0` over a modelled ENETC PF — landed as the
+**v2.0.0** work that is now folded into this branch (`imx95-netc`, the
+repository default and upstream candidate), so a current build of this branch
+*does* bring up `eth0` (see [known-limitations](known-limitations.md) §6); this
+Tier-3 result predates it.
 
 **3.2 Persistent storage (Linux view) — no block device.** With
 `-drive ...,id=sd0 -device sd-card,drive=sd0` attached, Linux shows no
@@ -391,11 +393,12 @@ header-only, Pangolin is a CMake project.)
 ### Apt is present, but `apt install` doesn't work in v1.0
 
 `/usr/bin/apt` is in the rootfs and `/etc/apt/sources.list.d/` is
-populated. **But the v1 line has no functional networking** (NETC is a
-logging stub on v1 — see [known-limitations](known-limitations.md) §6;
-NETC is modelled on the separate v2.0.0 `imx95-netc` branch), so
-`apt update` / `apt install` can't reach any mirror inline from inside
-the guest on v1. Three workarounds, all without machine-model changes:
+populated. **But this validation run had no functional networking** (it was
+captured on the v1.0-era line, where NETC is still a logging stub — see
+[known-limitations](known-limitations.md) §6; NETC landed in v2.0.0, now part
+of this `imx95-netc` branch), so `apt update` / `apt install` can't reach any
+mirror inline from inside the guest in that configuration. Three workarounds,
+all without machine-model changes:
 
 1. Pre-bake the needed packages into the rootfs via the Yocto image
    recipe (`IMAGE_INSTALL:append`), as above. The cleanest long-term

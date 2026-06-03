@@ -194,8 +194,7 @@ load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally: a
 flat guest memory**, ending in a clean self-poweroff (a functional datapath
 rate under TCG, not a silicon estimate). One ENETC port is wired and validated;
 a second port is a follow-on. See
-[`tests/netc/`](tests/netc/) for the bring-up + soak recipes and
-[`docs/reviews/v2.0.0.md`](docs/reviews/v2.0.0.md) for the milestone writeup.
+[`tests/netc/`](tests/netc/) for the bring-up + soak recipes.
 
 Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
 characterized with precise failure points — see
@@ -430,8 +429,9 @@ wall is a hypothesis"), and the working mode itself are written up in
 [`docs/imx95/methodology.md`](docs/imx95/methodology.md); a fresh-eyes review
 discipline (the GitHub render-cache pitfall) is in
 [`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
-Per-milestone design and review notes live in `docs/reviews/` (local working
-artifacts).
+Per-milestone design and review notes are kept in `docs/reviews/` as local
+working artifacts — they are not committed to the repo (the directory is
+`.gitignore`d), so they won't appear in a clone.
 
 ## Milestone history
 
@@ -475,8 +475,7 @@ artifacts).
   **SDHCI shutdown fix** so guest `poweroff` exits cleanly
   (`SDHCI_QUIRK_SDCLK_AUTO_GATE`), banked by a clean 24 h stability soak;
   graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
-  test. Tagged `imx95-v1.1` at commit `442cbcf3a0`. Writeup in
-  `docs/reviews/v1.1-final.md`.
+  test. Tagged `imx95-v1.1` at commit `442cbcf3a0`.
 - **v2.0.0** — NETC networking, the current upstream candidate. NETC was
   developed on the `imx95-netc` branch on top of the v1 line, so the series is
   one linear history; `imx95-netc` is the repository default. (The
@@ -486,4 +485,5 @@ artifacts).
   `1131:e101`) with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
   `nxp_enetc4` driver brings up `eth0` at 1Gbps and **ping works** over a slirp
   backend; RX BD-ring scatter + ring wraparound have deterministic qtests
-  (`tests/qtest/fsl-enetc-test.c`). Writeup in `docs/reviews/v2.0.0.md`.
+  (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
+  errors, flat memory).

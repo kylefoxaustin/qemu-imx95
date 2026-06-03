@@ -16,7 +16,7 @@
 #   QEMU   - path to qemu-system-aarch64               (default: ../../build/...)
 #   KBUILD - kernel build dir with Image + dtb + scripts/dtc/dtc
 #   INITRD - busybox initramfs cpio.gz
-#   SMELF  - System Manager m33_image.elf
+#   SM_ELF - System Manager m33_image.elf  (legacy SMELF also accepted)
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,7 +25,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 QEMU=${QEMU:-$ROOT/build/qemu-system-aarch64}
 KBUILD=${KBUILD:-$HOME/Documents/linux-imx95-build}
 INITRD=${INITRD:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
-SMELF=${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}
+SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}}
 
 IMAGE=$KBUILD/arch/arm64/boot/Image
 DTB=$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb
@@ -50,7 +50,7 @@ echo "Booting (look for 'fsl_enetc4 0002:00:08.0' + ping)..."
 timeout --signal=KILL 110 "$QEMU" -M imx95-19x19-evk -m 2G -display none \
 	-kernel "$IMAGE" -dtb "$WORK/netc.dtb" -initrd "$INITRD" \
 	-append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
-	-device loader,file="$SMELF",cpu-num=6 \
+	-device loader,file="$SM_ELF",cpu-num=6 \
 	-nic user,model=fsl-enetc \
 	-serial file:"$WORK/serial.log" -serial null -monitor none >/dev/null 2>&1 || true
 

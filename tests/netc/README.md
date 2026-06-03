@@ -11,6 +11,16 @@ integrated ECAM bus (PCI `1131:e101`).
   removed. See the header comment for why a text splice instead of `fdtoverlay`.
 - `run.sh` — decompiles the base DTB, applies `patch-dtb.py`, recompiles with
   the kernel `scripts/dtc/dtc`, and boots QEMU, printing the ENETC probe lines.
+- `load-soak.sh` — the long throughput/stability soak launcher (see "Throughput
+  / stability load soak" below). Requires host `iperf`.
+- `build-load-initramfs.sh` — (re)builds the iperf load initramfs the soak boots.
+- `netc-load-initramfs.cpio.gz` — the committed, prebuilt load initramfs so the
+  soak runs without network access.
+
+> **Artifact-path convention:** these scripts use `KBUILD` (default
+> `~/Documents/linux-imx95-build`) for the kernel build and `SM_ELF` for the SM
+> firmware — they do **not** use the repo-wide `IMX95_ARTIFACTS` convention the
+> top-level README documents. Override `KBUILD`/`QEMU`/`SM_ELF`/`INITRD` per run.
 
 ## Why devfn 08.0 (ENETC1)
 
@@ -25,7 +35,7 @@ Two constraints drive the choice:
   ("Initializing NETCMIX failed"), so `of_platform_populate` never runs. devfn
   0x40 is the only free, accepted slot.
 
-## Status (stage 4d - working datapath)
+## Status (v2.0.0 — eth0 + ping working, 24 h soak passed)
 
 With the model + this DTB the ENETC PF probes end to end **and passes traffic**:
 
@@ -83,8 +93,10 @@ KBUILD=/path/to/linux-build QEMU=/path/to/qemu-system-aarch64 ./run.sh
 `load-soak.sh` runs the datapath hard for ~24h: it boots a second,
 iperf-carrying initramfs whose `/init` brings `eth0` up and loops
 `iperf -c 10.0.2.2 -t 300 -d` against a host-side `iperf -s` sink, printing a
-`ZSNAP` line every 60s with eth0's rx/tx counters + `MemFree`. Prior runs held
-**~660 Mbps** with `rxerr=rxdrop=txerr=txdrop=0` and flat memory.
+`ZSNAP` line every 60s with eth0's rx/tx counters + `MemFree`. **Requires host
+`iperf`** (the script starts the sink). A full 24 h run moved 4.76 B frames /
+7.19 TB at ~661 Mbps avg (740 Mbps peak) with `rxerr=rxdrop=txerr=txdrop=0`,
+zero kernel anomalies, and flat memory.
 
 ```sh
 ./load-soak.sh                 # detaches; ~24.2h outer timeout backstop

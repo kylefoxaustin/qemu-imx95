@@ -299,15 +299,17 @@ Step 4 wires this end-to-end; Step 5 adds SM-driven M7 fault recovery
 
 ---
 
-## 6. Networking — one ENETC port (v2.0.0, branch `imx95-netc`)
+## 6. Networking — one ENETC port (v2.0.0)
 
 As of v2.0.0 the NETC block is modelled end to end and a working `eth0`
 comes up: a functional GICv3 ITS + an integrated-ECAM PCIe host + a
 from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI `1131:e101`)
 with a BD-ring DMA engine and MSI-X via the ITS. The stock Linux
 `nxp_enetc4` driver binds it, `eth0` links up at 1Gbps, and ping works
-over a slirp backend (`-nic user,model=fsl-enetc`). RX BD-ring scatter
-has a deterministic qtest (`tests/qtest/fsl-enetc-test.c`).
+over a slirp backend (`-nic user,model=fsl-enetc`). RX BD-ring scatter and ring
+wraparound have deterministic qtests (`tests/qtest/fsl-enetc-test.c`), and a
+24-hour iperf load-soak over this datapath passed (4.76 B frames / 7.19 TB,
+~661 Mbps avg, zero rx/tx errors or drops, flat memory).
 
 Remaining gaps on the NETC path: **one ENETC port** is wired and tested
 (the DT also describes ENETC0 — which collides with the gpex root bridge
@@ -315,9 +317,9 @@ Remaining gaps on the NETC path: **one ENETC port** is wired and tested
 (`tests/netc/patch-dtb.py`: enable ENETC1, drop the absent efuse MAC,
 rewrite the `msi-map` to identity because QEMU's ITS uses the PCI
 requester-ID as the DeviceID); the PF attaches to a `-nic` (not a bare
-`-netdev`); and a second port / throughput / iperf are follow-ons. On the
-**v1 upstream branch (`imx95-scaffold`)** networking is not present — NETC
-is the additive v2 work.
+`-netdev`); and a second port is a follow-on. On the older
+**`imx95-scaffold`** reference branch (pure v1) networking is not present — NETC
+is the additive v2.0.0 work, now part of the default `imx95-netc` branch.
 
 **Downstream note — the BSP rootfs `apt` setup.** Even with outbound
 networking via `-nic user` (slirp), NXP's BSP rootfs
