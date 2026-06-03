@@ -860,6 +860,22 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         MemoryRegion *ecam_reg, *mmio_reg;
         int pin;
 
+        /*
+         * Relocate gpex's own root device off PCI devfn 00.0. The real NETC
+         * ECAM is an integrated-endpoint "pci-host-ecam-generic" with no host
+         * bridge: ENETC0 itself sits at 00.0 (ethernet@0,0). gpex always plants
+         * a PCI_CLASS_BRIDGE_HOST device at devfn 0 (hw/pci-host/gpex.c), which
+         * would collide with ENETC0. Move it to the unused slot 31.0 (no dtsi
+         * node maps there) so ENETC0 can occupy 00.0 like the boards expect.
+         */
+        {
+            Object *root = object_resolve_path_component(OBJECT(pcie),
+                                                         "gpex_root");
+
+            object_property_set_int(root, "addr", PCI_DEVFN(31, 0),
+                                    &error_abort);
+        }
+
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(pcie), errp)) {
             return;
         }
@@ -896,16 +912,31 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         s->netc_pcie_bus = PCI_HOST_BRIDGE(pcie)->bus;
 
         /*
-         * ENETC PF (PCI 1131:e101). Placed at PCI devfn 08.0, which the BSP
-         * DT maps to ENETC1 (ethernet@8,0). That slot avoids gpex's own root
-         * bridge at 00.0, and - unlike devfn 0x10 - is one the netc-blk-ctrl
-         * NETCMIX init accepts (its link-MII switch only handles ENETC0=0x0
-         * and ENETC1=0x40; anything else returns -EINVAL). The test DTB
-         * (tests/netc) enables ethernet@8,0 with a phy-mode + fixed-link.
+         * ENETC PFs (PCI 1131:e101). Two 1G station interfaces, placed at the
+         * devfns the BSP DT maps to ENETC0 (ethernet@0,0 = 00.0) and ENETC1
+         * (ethernet@8,0 = 08.0/devfn 0x40) - the 1G pair the 15x15 FRDM and
+         * 19x19 EVK boards pin out. Both are devfns the netc-blk-ctrl NETCMIX
+         * init accepts (its link-MII switch handles ENETC0=0x0 / ENETC1=0x40;
+         * ENETC2's 10G port is a roadmap item). Each PF binds the next -nic
+         * backend in order (qemu_configure_nic_device consumes nd_table
+         * sequentially), so the two ports map to the two -nic devices on the
+         * command line; the test DTB (tests/netc) enables both nodes with a
+         * fixed MAC + fixed-link.
          */
-        s->enetc = PCI_DEVICE(pci_new(PCI_DEVFN(8, 0), TYPE_FSL_ENETC));
-        qemu_configure_nic_device(DEVICE(s->enetc), true, NULL);
-        pci_realize_and_unref(s->enetc, s->netc_pcie_bus, &error_fatal);
+        {
+            static const int enetc_devfn[FSL_IMX95_NUM_ENETC] = {
+                PCI_DEVFN(0, 0), PCI_DEVFN(8, 0),
+            };
+            int p;
+
+            for (p = 0; p < FSL_IMX95_NUM_ENETC; p++) {
+                s->enetc[p] = PCI_DEVICE(pci_new(enetc_devfn[p],
+                                                 TYPE_FSL_ENETC));
+                qemu_configure_nic_device(DEVICE(s->enetc[p]), true, NULL);
+                pci_realize_and_unref(s->enetc[p], s->netc_pcie_bus,
+                                      &error_fatal);
+            }
+        }
     }
 
     /* On-chip RAM. */

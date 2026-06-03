@@ -1,16 +1,27 @@
 # NETC / ENETC test (i.MX 95)
 
-Boots the emulated i.MX 95 EVK and shows how far Linux's `enetc4_pf`
-(`nxp_enetc4`) driver gets binding to the modelled ENETC PF on the NETC
-integrated ECAM bus (PCI `1131:e101`).
+Boots the emulated i.MX 95 and shows how far Linux's `enetc4_pf` (`nxp_enetc4`)
+driver gets binding to the modelled ENETC PFs on the NETC integrated ECAM bus
+(PCI `1131:e101`). The machine models **two 1G station interfaces** — ENETC0
+(`ethernet@0,0`, devfn `0x0`) and ENETC1 (`ethernet@8,0`, devfn `0x40`) — the 1G
+port pair the 15x15 FRDM and 19x19 EVK boards pin out. (The EVK's second port is
+a 10G `10gbase-r` port — ENETC2 — which is a roadmap item, not modelled here.)
 
 ## Files
 
-- `patch-dtb.py` — rewrites the decompiled base DTS so `ethernet@8,0` (ENETC1)
-  is enabled with a fixed MAC + `fixed-link`, with the efuse-nvmem MAC cell
-  removed. See the header comment for why a text splice instead of `fdtoverlay`.
-- `run.sh` — decompiles the base DTB, applies `patch-dtb.py`, recompiles with
-  the kernel `scripts/dtc/dtc`, and boots QEMU, printing the ENETC probe lines.
+- `patch-dtb.py` — rewrites the decompiled base DTS so **both** `ethernet@0,0`
+  and `ethernet@8,0` are enabled with a fixed MAC + `fixed-link`, with the
+  efuse-nvmem MAC cells removed; preserves each node's real `reg`/`clocks`/
+  `phandle` so it works on either board's DTS. Also rewrites the NETC `msi-map`
+  to ITS identity. See the header comment for why a text splice (not
+  `fdtoverlay`) and the phandle-agnostic `msi-map` match.
+- `run.sh` — single-port probe demo: decompiles the base DTB, applies
+  `patch-dtb.py`, recompiles with the kernel `scripts/dtc/dtc`, and boots QEMU
+  with one `-nic`, printing the ENETC probe lines.
+- `run-2port.sh [evk|frdm]` — **two-port back-to-back traffic test** on either
+  board's device tree (see "Two-port back-to-back" below). Joins both PFs on one
+  QEMU L2 hub and pings eth0 <-> eth1; PASS means frames really crossed the
+  modelled wire. Self-contained (assembles its initramfs from busybox).
 - `load-soak.sh` — the long throughput/stability soak launcher (see "Throughput
   / stability load soak" below). Requires host `iperf`.
 - `build-load-initramfs.sh` — (re)builds the iperf load initramfs the soak boots.
@@ -22,18 +33,22 @@ integrated ECAM bus (PCI `1131:e101`).
 > firmware — they do **not** use the repo-wide `IMX95_ARTIFACTS` convention the
 > top-level README documents. Override `KBUILD`/`QEMU`/`SM_ELF`/`INITRD` per run.
 
-## Why devfn 08.0 (ENETC1)
+## Port placement (devfn 0x0 + 0x40) and the gpex root relocation
 
-The modelled PF is placed at PCI devfn 08.0. The BSP DT maps that to ENETC1.
-Two constraints drive the choice:
+The two PFs sit at the devfns the BSP DT maps to ENETC0 (`ethernet@0,0` = devfn
+`0x0`) and ENETC1 (`ethernet@8,0` = devfn `0x40`). Two things make this work:
 
-- gpex parks its own root bridge at devfn 00.0 (where the BSP puts ENETC0), so
-  the PF cannot live there.
-- `netc-blk-ctrl`'s `imx95_netcmix_init()` walks the enetc child nodes and its
-  link-MII `switch` only accepts ENETC0 (devfn 0x0) and ENETC1 (devfn 0x40);
-  any other devfn returns `-EINVAL` and the whole block-control probe fails
-  ("Initializing NETCMIX failed"), so `of_platform_populate` never runs. devfn
-  0x40 is the only free, accepted slot.
+- **devfn 0 is freed.** gpex normally parks its own root bridge at devfn 00.0
+  (`hw/pci-host/gpex.c` hardcodes `PCI_DEVFN(0,0)`), which is exactly where the
+  BSP puts ENETC0. The real NETC ECAM is an integrated-endpoint
+  `pci-host-ecam-generic` with no host bridge, so the machine relocates gpex's
+  root device to the unused slot 31.0 (no dtsi node maps there), letting ENETC0
+  occupy 00.0 like the boards expect.
+- **both slots are NETCMIX-accepted.** `netc-blk-ctrl`'s `imx95_netcmix_init()`
+  walks the enetc child nodes and its link-MII `switch` only accepts ENETC0
+  (devfn 0x0) and ENETC1 (devfn 0x40); any other devfn returns `-EINVAL` and the
+  whole block-control probe fails ("Initializing NETCMIX failed"), so
+  `of_platform_populate` never runs. devfn 0x0 and 0x40 are the two it accepts.
 
 ## Status (v2.0.0 — eth0 + ping working, 24 h soak passed)
 
@@ -80,7 +95,41 @@ deterministically by `tests/qtest/fsl-enetc-test.c` instead:
 - The guest must program a non-zero MAC (`ip link set eth0 address ...`); the
   BSP normally pulls it from an efuse nvmem that is absent under emulation.
 
-## Run
+## Two-port back-to-back (both boards)
+
+`run-2port.sh` brings up **both** ENETC PFs and pumps real traffic between them,
+on either board's device tree:
+
+```sh
+./run-2port.sh          # 19x19 EVK dtb (default)
+./run-2port.sh frdm     # 15x15 FRDM dtb (its native 1G+1G config)
+```
+
+The two PFs are joined on one QEMU L2 hub (`-nic hubport,hubid=0` x2), so a frame
+leaving eth0 arrives at eth1. To prove the frame actually crosses the modelled
+hardware (and isn't short-circuited by the kernel's same-host local delivery),
+the guest `/init` moves eth1 into its own network namespace — eth0 stays in the
+root netns at `10.0.0.1`, eth1 lives in netns `p1` at `10.0.0.2` — and pings
+both ways. A `ZRESULT PASS` means frames really went eth0 -> hub -> eth1 and back
+through both device models' TX and RX BD-ring DMA paths. Both boards pass:
+
+```
+RESULT: PASS (imx95-19x19-evk, both ports, back-to-back)
+RESULT: PASS (imx95-15x15-frdm, both ports, back-to-back)
+```
+
+The same machine (`-M imx95-19x19-evk`) runs both DTBs; only `-dtb` differs.
+Booting the **15x15 FRDM** dtb additionally needs LPSPI3 (`spi@42550000`) backed
+— the FRDM enables it and an unmapped access there aborts in `fsl_lpspi_probe`
+before NETC probes — so the machine stubs that bank (it already stubs the other
+LPSPIs and the FRDM display bridge). The FRDM dtb may not ship in `KBUILD`; build
+it once:
+
+```sh
+make -C <linux-src> O=$KBUILD ARCH=arm64 freescale/imx95-15x15-frdm.dtb
+```
+
+## Run (single port)
 
 ```sh
 ./run.sh
