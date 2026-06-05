@@ -451,13 +451,17 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
     }
 
     /*
-     * DPU (display-controller @0x4b400000). Not modelled, but unlike the bulk
-     * stubs above it cannot be a plain logging stub: Linux's dpu95 blit-engine
-     * probe busy-waits with no timeout on the command-sequencer status
-     * register, so a zero-returning stub hangs the probe kthread forever and
-     * wedges wait_for_device_probe() in kernel_init (userspace never starts).
-     * The imx95.dpu stub reports the sequencer idle with FIFO space so the
-     * polls pass and the probe completes; see hw/misc/imx95_dpu.c.
+     * DPU (display-controller @0x4b400000). The imx95.dpu model does two
+     * things: it reports the blit-engine command-sequencer idle with FIFO
+     * space (the dpu95 probe busy-waits that status with no timeout, so a
+     * zero-returning stub would wedge wait_for_device_probe() forever), and
+     * it scans the primary plane's FetchLayer framebuffer out of guest DRAM
+     * to a QEMU console — enough for the dpu95 driver to bind and put the
+     * boot logo / fbcon on screen. The downstream pixel-link/LDB/DSI bridge
+     * blocks carry no pixels in emulation. The FrameGen vblank/shadow-load
+     * IRQ is not yet wired, so atomic commits fall through dpu95's flip_done
+     * timeout (~10s/modeset) rather than completing on interrupt; see
+     * hw/misc/imx95_dpu.c.
      */
     {
         DeviceState *dpu = qdev_new("imx95.dpu");

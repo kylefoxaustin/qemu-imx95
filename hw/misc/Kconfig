@@ -129,6 +129,7 @@ config IMX95_ANATOP
 
 config IMX95_DPU
     bool
+    select FRAMEBUFFER
 
 config IMX95_ELE_SERVER
     bool
