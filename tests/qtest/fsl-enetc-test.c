@@ -20,9 +20,15 @@
 #include "qemu/iov.h"
 #include "libqtest-single.h"
 
-/* NETC ECAM + the modelled PF (devfn 08.0) BAR window. */
+/*
+ * NETC ECAM + the modelled PF (devfn 00.0) BAR window. The single `-nic
+ * socket,model=fsl-enetc' binds to the first ENETC PF the machine creates,
+ * which is ENETC0 at devfn 00.0 (ethernet@0,0); ENETC1 (08.0) and ENETC2
+ * (10.0) are created after it and have no peer. Target ENETC0 so the injected
+ * frame and the ring we poke belong to the same PF.
+ */
 #define NETC_ECAM_BASE   0x4ca00000
-#define ENETC_DEVFN      0x40            /* PCI_DEVFN(8, 0) */
+#define ENETC_DEVFN      0x00            /* PCI_DEVFN(0, 0) - ENETC0, nic 0 */
 #define ENETC_CFG_BASE   (NETC_ECAM_BASE + (ENETC_DEVFN << 12))
 #define ENETC_BAR0       0x4cc00000      /* where we map BAR0 (in the window) */
 
@@ -69,7 +75,7 @@ static void enetc_setup_bar(QTestState *qts)
 {
     uint32_t id = enetc_cfg_readl(qts, 0x00);
 
-    /* PCI 1131:e101 must be present at devfn 08.0. */
+    /* PCI 1131:e101 must be present at devfn 00.0. */
     g_assert_cmphex(id, ==, 0xe1011131);
 
     /* BAR0 is a 64-bit memory BAR; program low/high and enable. */
