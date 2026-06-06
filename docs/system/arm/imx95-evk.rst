@@ -34,19 +34,41 @@ The ``imx95-19x19-evk`` machine implements the following devices:
  * System Counter (24 MHz live up-counter with compare-match IRQ; the
    Linux broadcast clockevent on this machine)
  * uSDHC storage controller (SDMA, used by U-Boot SD boot)
- * LPI2C master (interrupt-driven; used by the SM for PMIC / IO
-   expander bring-up)
+ * LPI2C masters (interrupt-driven; used by the SM for PMIC / IO
+   expander bring-up, and by Linux for the wm8962 audio codec and the
+   USB-VBUS / audio-power IO expanders)
+ * NETC Ethernet: a functional GICv3 ITS, an integrated-ECAM PCIe host,
+   and two from-scratch ENETC v4 Ethernet PFs (``hw/net/fsl_enetc.c``,
+   PCI ``1131:e101``) with BD-ring DMA and MSI-X via the ITS; the stock
+   ``nxp_enetc4`` driver brings up ``eth0`` / ``eth1``
+ * FlexCAN: all five controllers on QEMU's CAN bus subsystem (real
+   frame TX/RX, validated with the Linux ``flexcan`` driver)
+ * usb2 ChipIdea USB host (``-device usb-kbd`` enumerates as a USB HID
+   keyboard; the VBUS PCAL6524 expander on LPI2C is modelled)
+ * DPU display: the primary-plane FetchLayer scans a framebuffer out of
+   guest DRAM to a QEMU console, and the FrameGen vblank / shadow-load
+   interrupts are funnelled through a ``fsl,imx-irqsteer`` model, so the
+   ``dpu95`` driver binds, atomic commits complete on interrupt, and the
+   kernel boot logo renders at 1920x1200 on the LVDS panel timing
+ * Audio: eDMA (``hw/dma/imx95_edma.c``), SAI and MICFIL front-ends, and
+   a WM8962 I2C codec, so all three EVK ASoC cards register
+   (``wm8962-audio``, ``micfil-audio``, ``bt-sco-audio``)
+ * HW JPEG codecs (``mxc-jpeg``) register as V4L2 mem2mem devices
+   ``/dev/video2`` (decode) and ``/dev/video3`` (encode)
  * Functional models for the SM bring-up path: ANATOP (PLL lock and
    DFS), SRC (system reset controller), GPC (general power
    controller), ELE responder, FSB (fuse shadow block), eMcem, PF53
    and PCAL6408A on LPI2C
  * Logging stubs for blocks that are not on the boot critical path or
-   that have no behaviour to emulate (NETC, USB host, PCIe link
-   training, GPU/VPU/NPU MMIO, DPU command sequencer, watchdog, etc.)
+   that have no behaviour to emulate (Wave6 VPU, GPU/NPU MMIO, PCIe
+   link training, the camera ISI/ISP, watchdog, etc.)
 
-The Mali-G310 (GPU), Amphion (VPU), Neutron (NPU), and DPU (display
-controller) are intentionally probe-time stubs only; no rendering,
-codec, inference, or scanout occurs. See ``Caveats`` below.
+The Mali-G310 (GPU), Wave6 (VPU), and Neutron (NPU) are intentionally
+probe-time stubs only; no rendering, codec, or inference occurs. The DPU
+and the HW JPEG / audio paths are modelled to their registration bar (the
+drivers bind and the devices enumerate, and the DPU additionally renders
+the boot logo), but functional compositing, playback / capture and codec
+encode-decode are not driven. See ``Caveats`` below.
 
 Boot options
 ------------
@@ -180,23 +202,29 @@ Caveats
   ``hw/intc/arm_gicv3_cpuif.c``.
 
 * **No hardware-accelerated rendering, codec, or inference.** Mali-G310,
-  Amphion VPU, and Neutron NPU are logging stubs. The Mali kernel
+  Wave6 VPU, and Neutron NPU are logging stubs. The Mali kernel
   driver in particular fails probe with ``-22`` at the product-ID
   check (``Unknown GPU Product ID 0``), so no Mali Vulkan ICD is
   installed and ``vulkaninfo`` reports
-  ``ERROR_INCOMPATIBLE_DRIVER``. The DPU stub does register
-  ``/dev/dri/card0``, but it has no connectors and no scanout, so
-  ``kmscube`` fails with ``no connected connector``.
+  ``ERROR_INCOMPATIBLE_DRIVER``.
 
-* **No networking interfaces.** The NETC blocks are stubs; only the
-  loopback interface ``lo`` appears in the guest.
+* **Display is scanout-only.** The DPU models the primary-plane
+  FetchLayer + FrameGen, so ``dpu95`` binds and the kernel boot logo
+  renders to a QEMU console (the FrameGen vblank is driven through a
+  modelled ``fsl,imx-irqsteer``, so atomic commits complete on
+  interrupt instead of timing out). Multi-plane compositing, the
+  DSI / LVDS-LDB bridge timing, and the camera ISI/ISP are not
+  modelled. The HW JPEG codecs register as V4L2 m2m devices and the
+  three audio cards register, but the JPEG/VPU codec engines and the
+  SAI/MICFIL playback-capture datapath are not driven, so a
+  ``STREAMON`` binds but no frames / samples move.
 
-* **No Linux-visible block storage.** Linux's
-  ``sdhci-esdhc-imx`` driver defers probe on an unmet dependency, so
-  ``/dev/mmcblk*`` is empty even with an SD-card image attached via
-  ``-drive ...,if=sd``. (The uSDHC model itself works — U-Boot SPL
-  boots from SD on this machine — but the Linux MMC stack does not
-  complete probe.)
+* **Networking works; no Linux block storage.** The two NETC ENETC
+  ports bring up ``eth0`` / ``eth1`` (attach a host backend with
+  ``-nic`` / ``-netdev``). Linux's ``sdhci-esdhc-imx`` driver, however,
+  still defers probe on an unmet dependency, so ``/dev/mmcblk*`` is
+  empty even with an SD-card image attached via ``-drive ...,if=sd``
+  (the uSDHC model itself works — U-Boot SPL boots from SD).
 
 * **icount is not the default boot mode.** ``-icount shift=auto``
   delays interrupt/timer delivery to idle CPUs on this heterogeneous
