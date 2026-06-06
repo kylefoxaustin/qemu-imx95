@@ -25,6 +25,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
+#include "hw/core/irq.h"
 #include "hw/i2c/i2c.h"
 #include "migration/vmstate.h"
 
@@ -76,10 +77,12 @@ struct IMXLPI2CState {
     SysBusDevice    parent_obj;
 
     MemoryRegion    iomem;
+    qemu_irq        irq;
     I2CBus         *bus;
 
     uint32_t        mcr;
     uint32_t        msr;       /* sticky status bits (SDF/NDF/MBF/BBF/...) */
+    uint32_t        mier;      /* interrupt enables (TDIE/RDIE/SDIE/NDIE) */
     uint32_t        mcfgr1;
 
     uint8_t         rxfifo[RXFIFO_LEN];
@@ -94,6 +97,20 @@ static void imx_lpi2c_rx_push(IMXLPI2CState *s, uint8_t b)
         s->rxfifo[tail] = b;
         s->rx_count++;
     }
+}
+
+/*
+ * Effective MSR for interrupt purposes: the sticky bits plus the two
+ * level-derived flags (TDF is always ready since we drain the tx command
+ * FIFO immediately; RDF tracks the rx FIFO). The MIER enable bits sit at the
+ * same positions as their MSR flags (TDIE/TDF=0, RDIE/RDF=1, SDIE/SDF=9,
+ * NDIE/NDF=10), so a plain AND yields the active, enabled sources.
+ */
+static void imx_lpi2c_update_irq(IMXLPI2CState *s)
+{
+    uint32_t eff = s->msr | MSR_TDF | (s->rx_count ? MSR_RDF : 0);
+
+    qemu_set_irq(s->irq, (eff & s->mier) != 0);
 }
 
 static void imx_lpi2c_do_command(IMXLPI2CState *s, uint32_t val)
@@ -160,7 +177,7 @@ static uint64_t imx_lpi2c_read(void *opaque, hwaddr offset, unsigned size)
         return v;
     }
     case LPI2C_MIER:
-        return 0;
+        return s->mier;
     case LPI2C_MCFGR1:
         return s->mcfgr1;
     case LPI2C_MFSR:
@@ -173,6 +190,7 @@ static uint64_t imx_lpi2c_read(void *opaque, hwaddr offset, unsigned size)
             uint8_t b = s->rxfifo[s->rx_head];
             s->rx_head = (s->rx_head + 1) % RXFIFO_LEN;
             s->rx_count--;
+            imx_lpi2c_update_irq(s);
             return b;
         }
     default:
@@ -196,16 +214,19 @@ static void imx_lpi2c_write(void *opaque, hwaddr offset,
     case LPI2C_MSR:
         /* Write-1-to-clear the status flags. */
         s->msr &= ~((uint32_t)value & MSR_W1C);
+        imx_lpi2c_update_irq(s);
         break;
     case LPI2C_MIER:
+        s->mier = value;
+        imx_lpi2c_update_irq(s);
+        break;
     case LPI2C_MCFGR1:
-        if (offset == LPI2C_MCFGR1) {
-            s->mcfgr1 = value;
-        }
+        s->mcfgr1 = value;
         break;
     case LPI2C_MTDR:
         if (s->mcr & MCR_MEN) {
             imx_lpi2c_do_command(s, value);
+            imx_lpi2c_update_irq(s);
         }
         break;
     default:
@@ -233,8 +254,10 @@ static void imx_lpi2c_reset(DeviceState *dev)
 
     s->mcr = 0;
     s->msr = 0;
+    s->mier = 0;
     s->mcfgr1 = 0;
     s->rx_head = s->rx_count = 0;
+    qemu_set_irq(s->irq, 0);
 }
 
 static void imx_lpi2c_init(Object *obj)
@@ -245,6 +268,7 @@ static void imx_lpi2c_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &imx_lpi2c_ops, s,
                           TYPE_IMX_LPI2C, IMX_LPI2C_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
     s->bus = i2c_init_bus(DEVICE(obj), "i2c");
 }
 
@@ -255,6 +279,7 @@ static const VMStateDescription vmstate_imx_lpi2c = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(mcr, IMXLPI2CState),
         VMSTATE_UINT32(msr, IMXLPI2CState),
+        VMSTATE_UINT32(mier, IMXLPI2CState),
         VMSTATE_UINT32(mcfgr1, IMXLPI2CState),
         VMSTATE_UINT8_ARRAY(rxfifo, IMXLPI2CState, RXFIFO_LEN),
         VMSTATE_UINT32(rx_head, IMXLPI2CState),
