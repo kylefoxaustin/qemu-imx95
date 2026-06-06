@@ -276,12 +276,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         /* GPIO1..5 are real RGPIO models (imx95.gpio) below. */
         FSL_IMX95_SMMU,
         /*
-         * LPI2C1 (0x42530000 = Linux i2c-2) and LPI2C2 (0x42540000 = Linux
-         * i2c-3) are real masters below.
+         * LPI2C1/2/3/4 (0x42530000/42540000/426b0000/426c0000 = Linux
+         * i2c-2/3/4/5) and LPI2C5 (0x426d0000 = Linux i2c-6) are real masters
+         * below.
          */
-        FSL_IMX95_LPI2C3,
-        /* LPI2C5 (0x426d0000 = Linux i2c-6) is a real master below. */
-        FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C6,
+        FSL_IMX95_LPI2C6,
         /* LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below. */
         FSL_IMX95_LPI2C8,
         /* usb2 (0x4c200000) is a real ChipIdea model below. */
@@ -1716,6 +1715,37 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
             i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
             i2c_slave_create_simple(i2c, "pcal6408a", 0x62);
+        }
+
+        /*
+         * lpi2c i2c-4 (0x426b0000) and i2c-5 (0x426c0000): real masters so
+         * their PCAL6408/PCAL6416 IO-expanders at 0x21 probe instead of -110.
+         * i2c-4's expander gates the AQR/serdes regulators (the Path B power
+         * chain); both are register-file devices served by the generic model.
+         */
+        {
+            static const struct {
+                hwaddr addr;
+                int irq;            /* dtsi GIC SPI */
+            } exp_i2c[] = {
+                { 0x426b0000, 181 },   /* Linux i2c-4 */
+                { 0x426c0000, 182 },   /* Linux i2c-5 */
+            };
+            int k;
+
+            for (k = 0; k < ARRAY_SIZE(exp_i2c); k++) {
+                DeviceState *m = qdev_new("imx.lpi2c");
+                I2CBus *i2c;
+
+                if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
+                    return;
+                }
+                sysbus_mmio_map(SYS_BUS_DEVICE(m), 0, exp_i2c[k].addr);
+                sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
+                                   qdev_get_gpio_in(gicdev, exp_i2c[k].irq));
+                i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+                i2c_slave_create_simple(i2c, "pcal6408a", 0x21);
+            }
         }
 
         /*
