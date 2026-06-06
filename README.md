@@ -96,10 +96,13 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-**FlexCAN is supported** — all five controllers are modelled on QEMU's CAN bus
-and validated end-to-end with the real Linux `flexcan` driver (see "What runs
-today"); other customer-specific real-time peripherals (TSN, audio SAI/DSP,
-etc.) remain further out, beyond the v1.x M7 work. See
+**FlexCAN, networking, display, USB and audio are supported** — the five
+FlexCAN controllers (real Linux driver), both ENETC Ethernet ports, the DPU
+display path (boot logo on screen), the usb2 ChipIdea host (`usb-kbd` input),
+and all three EVK ASoC sound cards bind and run against stock Linux (see "What
+runs today"). Functional A/V datapaths (display compositing beyond scanout,
+audio playback/capture, JPEG/VPU decode) and other customer-specific real-time
+peripherals (TSN, DSP) remain further out. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -164,6 +167,37 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
+**Display, input, audio & media — supported (registration bar).** The EVK's
+output and HMI peripherals bind and enumerate against stock Linux:
+
+- **DPU display — pixels on screen.** The i.MX 95 DPU scans the primary-plane
+  FetchLayer framebuffer out of guest DRAM to a QEMU console
+  (`hw/misc/imx95_dpu.c`); stock `dpu95` binds, fbcon comes up, and the
+  **kernel boot logo renders** — six Tux penguins, one per A55 — at 1920×1200
+  on the 19×19 EVK LVDS panel timing. The FrameGen vblank + shadow-load
+  interrupts are wired through a from-scratch `fsl,imx-irqsteer`
+  (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
+  `flip_done` timeouts) and the logo flushes through the normal page-flip.
+- **USB keyboard — interactive input.** The usb2 **ChipIdea** host is modelled,
+  so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
+  window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
+  PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
+- **Audio — all three ASoC cards register.** `/proc/asound/cards` lists
+  `wm8962-audio` (SAI3 ↔ a real **WM8962** codec on lpi2c4, reading device-id
+  0x6243), `micfil-audio` (PDM mic), and `bt-sco-audio`. Backed by register-file
+  **eDMA / SAI / MICFIL** models (`hw/dma/imx95_edma.c`, `hw/audio/`) so the
+  `fsl-edma`/`fsl-sai`/`fsl-micfil` drivers probe and allocate DMA channels
+  (`tests/audio/`).
+- **HW JPEG codecs.** The two dedicated `mxc-jpeg` blocks (separate from the
+  Wave6 VPU) register as V4L2 mem2mem devices `/dev/video2` (decode) and
+  `/dev/video3` (encode) (`tests/jpeg/`).
+
+These sit at the **registration / done-at-bar** milestone — the drivers bind
+and the devices enumerate, and the display additionally renders pixels;
+functional playback / capture / JPEG decode would need the codec and FIFO
+datapaths and are tracked in
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
+
 **CAN — supported.** All five **FlexCAN** controllers are modelled
 (`hw/net/can/flexcan.c`) on QEMU's CAN bus subsystem — real frame TX/RX, the
 Linux-driver MCR handshake, individual RX mailboxes and CAN-FD geometry.
@@ -192,9 +226,11 @@ load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally: a
 **24-hour run moved 4.76 billion frames / 7.19 TB at ~661 Mbps average
 (740 Mbps peak), with zero rx/tx errors or drops, zero kernel anomalies, and
 flat guest memory**, ending in a clean self-poweroff (a functional datapath
-rate under TCG, not a silicon estimate). One ENETC port is wired and validated;
-a second port is a follow-on. See
-[`tests/netc/`](tests/netc/) for the bring-up + soak recipes.
+rate under TCG, not a silicon estimate). **Both ENETC ports are now wired**
+(ENETC0 + ENETC1) and validated **back-to-back** — a dual-board EVK ⇄ FRDM
+traffic test moves frames between `eth0` and `eth1` in separate netns
+(`tests/netc/run-2port.sh`). See [`tests/netc/`](tests/netc/) for the bring-up,
+two-port, and soak recipes.
 
 Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
 characterized with precise failure points — see
@@ -211,17 +247,20 @@ Near-term focus is **landing this machine upstream** — the series plus its
 three generic-QEMU prereq patches (`target/arm/ptw.c`,
 `target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-**NETC networking** (`eth0` over a modelled ENETC PF) and **FlexCAN** (all five
-controllers) are **done** and described under "What runs today" above. What
-remains is forward-looking:
+**NETC networking** (both ENETC ports), **FlexCAN** (all five controllers), the
+**DPU display** (boot logo on screen), the **usb2 ChipIdea** host (`usb-kbd`
+input), **audio** (all three ASoC cards), and the **HW JPEG** codecs are
+**done** and described under "What runs today" above. What remains is
+forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
-| **Display output** | DPU scanout + a fixed connected output (MIPI DSI / LVDS-LDB) surfaced to a QEMU window — a visible framebuffer / working KMS connector (today the DPU/DSI/CSI/ISP are graceful stubs only) | **v3.0** |
-| **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source | after Display |
-| Second ENETC port | A second ENETC MAC (one port is wired, ping-validated, and exercised by the in-tree iperf load-soak today) | follow-on to v2.0.0 |
+| **Functional display** | Compositing / DSI-LVDS bridge timing beyond the FetchLayer scanout, and a multi-plane KMS path (the boot logo already renders today via the primary-plane scanout + a real vblank/irqsteer) | next |
+| **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
+| **Functional codec** | JPEG/VPU encode-decode datapaths (the JPEG codecs register as V4L2 m2m devices today; the compute engine is not modelled) | deferred |
+| Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
-| Real-time peripherals | TSN, audio SAI/DSP for M7 / mixed-criticality workloads (FlexCAN is already done) | deferred |
+| Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
 The deferred rows are characterized with precise failure points in
@@ -418,6 +457,12 @@ This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
     # full Linux to userspace on the real SM
     tests/swap-boot/run.sh
 
+    # audio: all three ASoC cards register (wm8962 / micfil / bt-sco)
+    SND_MODDIR=<bsp>/lib/modules/<kver>/kernel/sound tests/audio/run.sh
+
+    # HW JPEG codecs register as /dev/video2 (dec) + /dev/video3 (enc)
+    JPEG_MODDIR=<bsp>/lib/modules/<kver>/kernel/drivers/media tests/jpeg/run.sh
+
 ## Methodology & contributing
 
 The project is built measure-first: propose a hypothesis, verify it against
@@ -487,3 +532,14 @@ working artifacts — they are not committed to the repo (the directory is
   backend; RX BD-ring scatter + ring wraparound have deterministic qtests
   (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
   errors, flat memory).
+- **v2.x (on `imx95-netc`)** — the EVK's display / HMI / media peripherals to
+  their registration bar, on top of v2.0.0: a **second ENETC port**
+  (back-to-back EVK ⇄ FRDM traffic); the **DPU display** path (FetchLayer
+  scanout + a from-scratch `fsl,imx-irqsteer` driving the FrameGen vblank, so
+  the boot logo renders — six Tux at 1920×1200 — and atomic commits complete on
+  interrupt); the **usb2 ChipIdea** host (`usb-kbd` HID input, with the VBUS
+  PCAL6524 expander modelled); the **audio stack** (eDMA + SAI + MICFIL + a real
+  WM8962 codec, so all three ASoC cards register — `tests/audio/`); and the two
+  **HW JPEG** codecs as V4L2 m2m devices (`tests/jpeg/`). Along the way: backed
+  the PCIe `app`/`atu` windows so an unbacked-register external abort can't wedge
+  the boot.
