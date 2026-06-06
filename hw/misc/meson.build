@@ -81,6 +81,9 @@ system_ss.add(when: 'CONFIG_IMX95_SRC', if_true: files('imx95_src.c'))
 system_ss.add(when: 'CONFIG_IMX95_AONMIX', if_true: files('imx95_aonmix.c'))
 system_ss.add(when: 'CONFIG_IMX95_ANATOP', if_true: files('imx95_anatop.c'))
 system_ss.add(when: 'CONFIG_IMX95_DPU', if_true: files('imx95_dpu.c'))
+system_ss.add(when: 'CONFIG_IMX95_JPEG',
+              if_true: jpeg.found() ? [files('imx95_jpeg.c'), jpeg]
+                                    : files('imx95_jpeg.c'))
 system_ss.add(when: 'CONFIG_IMX95_ELE_SERVER', if_true: files('imx95_ele_server.c'))
 system_ss.add(when: 'CONFIG_MAX78000_AES', if_true: files('max78000_aes.c'))
 system_ss.add(when: 'CONFIG_MAX78000_GCR', if_true: files('max78000_gcr.c'))

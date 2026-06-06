@@ -437,15 +437,12 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
             /*
-             * HW JPEG codecs (dtsi jpegdec/jpegenc, "fsl,imx9-jpgdec/jpgenc",
-             * driver mxc-jpeg). The driver probes and registers /dev/video2,3
-             * touching no registers, so the V4L2 m2m devices appear with no
-             * model; back the windows so a stream-on (which writes the codec's
-             * GLB_CTRL/config) doesn't take a synchronous external abort.
-             * Functional encode/decode would need the codec engine + its
-             * frame-done IRQ (GIC SPI 295.. / 291..) - not modelled.
+             * HW JPEG encoder (dtsi jpegenc, driver mxc-jpeg): registers
+             * /dev/video3 touching no registers, so back the window so a
+             * stream-on doesn't external-abort. Functional encode would need
+             * libjpeg compress; left at the registration bar for now. The
+             * jpegdec (0x4c500000) is a real functional model below.
              */
-            { 0x4c500000, 0x50000 },  /* jpegdec */
             { 0x4c550000, 0x50000 },  /* jpegenc */
             { 0x4c810000, 64 * KiB }, /* syscon */
             /* netc pcie ecam0 (0x4ca00000) is now a real gpex host (v2.x). */
@@ -1576,6 +1573,28 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in(gicdev, gpio_table[g].irq0));
             sysbus_connect_irq(sbd, 1,
                 qdev_get_gpio_in(gicdev, gpio_table[g].irq1));
+        }
+    }
+
+    /*
+     * HW JPEG decoder (dtsi jpegdec@4c500000, driver mxc-jpeg). A real
+     * descriptor-driven model: it walks the slot's descriptor chain on the
+     * CAST_CTRL decode kick, decodes the source JPEG with libjpeg and writes
+     * the frame out in the descriptor's image format, then raises the slot's
+     * frame-done IRQ. Four per-slot GIC SPIs (295..298); the m2m driver uses
+     * slot 0. (jpegenc stays a registration stub above.)
+     */
+    {
+        DeviceState *jpeg = qdev_new("imx95.jpeg");
+        SysBusDevice *sbd = SYS_BUS_DEVICE(jpeg);
+        int j;
+
+        if (!sysbus_realize_and_unref(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x4c500000);
+        for (j = 0; j < 4; j++) {
+            sysbus_connect_irq(sbd, j, qdev_get_gpio_in(gicdev, 295 + j));
         }
     }
 
