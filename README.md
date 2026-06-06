@@ -97,7 +97,7 @@ the per-step (Steps 2–6) detail, and
 machine documentation.
 
 **FlexCAN, networking, display, USB and audio are supported** — the five
-FlexCAN controllers (real Linux driver), both ENETC Ethernet ports, the DPU
+FlexCAN controllers (real Linux driver), all three ENETC Ethernet ports (incl. the 10G), the DPU
 display path (boot logo on screen), the usb2 ChipIdea host (`usb-kbd` input),
 and all three EVK ASoC sound cards bind and run against stock Linux (see "What
 runs today"). Functional A/V datapaths (display compositing beyond scanout,
@@ -226,11 +226,14 @@ load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally: a
 **24-hour run moved 4.76 billion frames / 7.19 TB at ~661 Mbps average
 (740 Mbps peak), with zero rx/tx errors or drops, zero kernel anomalies, and
 flat guest memory**, ending in a clean self-poweroff (a functional datapath
-rate under TCG, not a silicon estimate). **Both ENETC ports are now wired**
-(ENETC0 + ENETC1) and validated **back-to-back** — a dual-board EVK ⇄ FRDM
-traffic test moves frames between `eth0` and `eth1` in separate netns
-(`tests/netc/run-2port.sh`). See [`tests/netc/`](tests/netc/) for the bring-up,
-two-port, and soak recipes.
+rate under TCG, not a silicon estimate). **All three ENETC ports are wired** —
+the two 1G ports (ENETC0 + ENETC1), validated **back-to-back** with a dual-board
+EVK ⇄ FRDM traffic test (`eth0` ⇄ `eth1` in separate netns,
+`tests/netc/run-2port.sh`), plus the **10G port** (ENETC2, `ethernet@10,0`):
+the same ENETC v4 PF brought up via a fixed-link `10gbase-r` node, so
+`enetc4_pf` reports `eth2: Link is Up - 10Gbps/Full` (`tests/netc/run-10g.sh`).
+See [`tests/netc/`](tests/netc/) for the bring-up, two-port, 10G, and soak
+recipes.
 
 Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
 characterized with precise failure points — see
@@ -247,7 +250,7 @@ Near-term focus is **landing this machine upstream** — the series plus its
 three generic-QEMU prereq patches (`target/arm/ptw.c`,
 `target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-**NETC networking** (both ENETC ports), **FlexCAN** (all five controllers), the
+**NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five controllers), the
 **DPU display** (boot logo on screen), the **usb2 ChipIdea** host (`usb-kbd`
 input), **audio** (all three ASoC cards), and the **HW JPEG** codecs are
 **done** and described under "What runs today" above. What remains is
@@ -533,8 +536,9 @@ working artifacts — they are not committed to the repo (the directory is
   (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
   errors, flat memory).
 - **v2.x (on `imx95-netc`)** — the EVK's display / HMI / media peripherals to
-  their registration bar, on top of v2.0.0: a **second ENETC port**
-  (back-to-back EVK ⇄ FRDM traffic); the **DPU display** path (FetchLayer
+  their registration bar, on top of v2.0.0: the **second + third ENETC ports**
+  (1G back-to-back EVK ⇄ FRDM traffic, plus the 10G `eth2`); the **DPU display**
+  path (FetchLayer
   scanout + a from-scratch `fsl,imx-irqsteer` driving the FrameGen vblank, so
   the boot logo renders — six Tux at 1920×1200 — and atomic commits complete on
   interrupt); the **usb2 ChipIdea** host (`usb-kbd` HID input, with the VBUS

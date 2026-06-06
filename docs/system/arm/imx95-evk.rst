@@ -38,9 +38,10 @@ The ``imx95-19x19-evk`` machine implements the following devices:
    expander bring-up, and by Linux for the wm8962 audio codec and the
    USB-VBUS / audio-power IO expanders)
  * NETC Ethernet: a functional GICv3 ITS, an integrated-ECAM PCIe host,
-   and two from-scratch ENETC v4 Ethernet PFs (``hw/net/fsl_enetc.c``,
+   and three from-scratch ENETC v4 Ethernet PFs (``hw/net/fsl_enetc.c``,
    PCI ``1131:e101``) with BD-ring DMA and MSI-X via the ITS; the stock
-   ``nxp_enetc4`` driver brings up ``eth0`` / ``eth1``
+   ``nxp_enetc4`` driver brings up two 1G ports (``eth0`` / ``eth1``)
+   and the 10G ``eth2`` (fixed-link ``10gbase-r``)
  * FlexCAN: all five controllers on QEMU's CAN bus subsystem (real
    frame TX/RX, validated with the Linux ``flexcan`` driver)
  * usb2 ChipIdea USB host (``-device usb-kbd`` enumerates as a USB HID
@@ -219,9 +220,10 @@ Caveats
   SAI/MICFIL playback-capture datapath are not driven, so a
   ``STREAMON`` binds but no frames / samples move.
 
-* **Networking works; no Linux block storage.** The two NETC ENETC
-  ports bring up ``eth0`` / ``eth1`` (attach a host backend with
-  ``-nic`` / ``-netdev``). Linux's ``sdhci-esdhc-imx`` driver, however,
+* **Networking works; no Linux block storage.** The three NETC ENETC
+  ports bring up ``eth0`` / ``eth1`` (1G) and ``eth2`` (10G) (attach a
+  host backend with ``-nic`` / ``-netdev``). Linux's ``sdhci-esdhc-imx``
+  driver, however,
   still defers probe on an unmet dependency, so ``/dev/mmcblk*`` is
   empty even with an SD-card image attached via ``-drive ...,if=sd``
   (the uSDHC model itself works — U-Boot SPL boots from SD).
