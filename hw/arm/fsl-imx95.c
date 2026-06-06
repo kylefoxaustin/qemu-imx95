@@ -273,8 +273,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
-        FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
-        FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
+        /* GPIO1..5 are real RGPIO models (imx95.gpio) below. */
         FSL_IMX95_SMMU,
         /* LPI2C2 (0x42540000 = Linux i2c-3) is a real master below. */
         FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C3,
@@ -1541,6 +1540,42 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             sysbus_mmio_map(sbd, 0, flexcan_table[i].addr);
             sysbus_connect_irq(sbd, 0,
                 qdev_get_gpio_in(gicdev, flexcan_table[i].irq));
+        }
+    }
+
+    /*
+     * RGPIO controllers (fsl,imx95-gpio / fsl,imx8ulp-gpio). Five instances;
+     * Linux gpio-vf610 binds each and requests only the first of the two GIC
+     * SPIs (its chained handler walks the whole ISFR), so output 0 carries
+     * every pin. Promoting these from the UNIMP stub makes output pins (resets
+     * / regulator-enables) drive their consumers and the gpio interrupt-
+     * controller latch real ISFR state instead of reading back zero.
+     */
+    {
+        static const struct {
+            hwaddr addr;
+            int irq0, irq1;     /* GIC SPIs, per the dtsi interrupts cells */
+        } gpio_table[] = {
+            { 0x47400000, 10, 11 },   /* GPIO1 (AONMIX) */
+            { 0x43810000, 49, 50 },   /* GPIO2 */
+            { 0x43820000, 51, 52 },   /* GPIO3 */
+            { 0x43840000, 53, 54 },   /* GPIO4 */
+            { 0x43850000, 55, 56 },   /* GPIO5 */
+        };
+        int g;
+
+        for (g = 0; g < ARRAY_SIZE(gpio_table); g++) {
+            DeviceState *gpio = qdev_new("imx95.gpio");
+            SysBusDevice *sbd = SYS_BUS_DEVICE(gpio);
+
+            if (!sysbus_realize_and_unref(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0, gpio_table[g].addr);
+            sysbus_connect_irq(sbd, 0,
+                qdev_get_gpio_in(gicdev, gpio_table[g].irq0));
+            sysbus_connect_irq(sbd, 1,
+                qdev_get_gpio_in(gicdev, gpio_table[g].irq1));
         }
     }
 
