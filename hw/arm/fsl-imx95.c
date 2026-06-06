@@ -419,6 +419,17 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
+            /*
+             * HW JPEG codecs (dtsi jpegdec/jpegenc, "fsl,imx9-jpgdec/jpgenc",
+             * driver mxc-jpeg). The driver probes and registers /dev/video2,3
+             * touching no registers, so the V4L2 m2m devices appear with no
+             * model; back the windows so a stream-on (which writes the codec's
+             * GLB_CTRL/config) doesn't take a synchronous external abort.
+             * Functional encode/decode would need the codec engine + its
+             * frame-done IRQ (GIC SPI 295.. / 291..) - not modelled.
+             */
+            { 0x4c500000, 0x50000 },  /* jpegdec */
+            { 0x4c550000, 0x50000 },  /* jpegenc */
             { 0x4c810000, 64 * KiB }, /* syscon */
             /* netc pcie ecam0 (0x4ca00000) is now a real gpex host (v2.x). */
             { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 (EMDIO domain) */
