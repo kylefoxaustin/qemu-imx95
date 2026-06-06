@@ -275,8 +275,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         /* GPIO1..5 are real RGPIO models (imx95.gpio) below. */
         FSL_IMX95_SMMU,
-        /* LPI2C2 (0x42540000 = Linux i2c-3) is a real master below. */
-        FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C3,
+        /*
+         * LPI2C1 (0x42530000 = Linux i2c-2) and LPI2C2 (0x42540000 = Linux
+         * i2c-3) are real masters below.
+         */
+        FSL_IMX95_LPI2C3,
         /* LPI2C5 (0x426d0000 = Linux i2c-6) is a real master below. */
         FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C6,
         /* LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below. */
@@ -1690,6 +1693,29 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 sysbus_connect_irq(sbd, i,
                     qdev_get_gpio_in(gicdev, micfil_irqs[i]));
             }
+        }
+
+        /*
+         * lpi2c@42530000 (Linux i2c-2): real master so the on-board PCAL6408A
+         * IO-expander (0x20) and PCA9632 LED controller (0x62) probe instead
+         * of timing out (-110) on the old stub. Both are register-file i2c
+         * devices, so the generic expander model serves both (leds-pca963x
+         * only needs its MODE/LEDOUT/PWM register reads + writes to land).
+         */
+        {
+            DeviceState *m = qdev_new("imx.lpi2c");
+            I2CBus *i2c;
+
+            if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
+                return;
+            }
+            sysbus_mmio_map(SYS_BUS_DEVICE(m), 0,
+                            fsl_imx95_memmap[FSL_IMX95_LPI2C1].addr);
+            sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
+                               qdev_get_gpio_in(gicdev, 58)); /* dtsi SPI 58 */
+            i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+            i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
+            i2c_slave_create_simple(i2c, "pcal6408a", 0x62);
         }
 
         /*
