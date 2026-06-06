@@ -396,7 +396,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x42210000, 0x210000 },
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
             { 0x42490000, 64 * KiB }, /* watchdog */
-            { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
+            /* pwm@424e0000/42510000 are real TPM-PWM models below. */
             /* 0x42540000 (Linux i2c-3): real master (wm8962 codec) below. */
             { 0x42530000, 64 * KiB }, /* i2c (Linux i2c-2) */
             { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
@@ -1745,6 +1745,27 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                    qdev_get_gpio_in(gicdev, exp_i2c[k].irq));
                 i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
                 i2c_slave_create_simple(i2c, "pcal6408a", 0x21);
+            }
+        }
+
+        /*
+         * TPM PWM controllers (dtsi pwm@424e0000/42510000, "fsl,imx7ulp-pwm").
+         * pwm-imx-tpm reads PARAM for the channel count, so the UNIMP stub
+         * (PARAM == 0) failed with "failed to add PWM chip". The real model
+         * reports its channels and stores period/duty/enable, so the pwmchips
+         * register and consumers (e.g. a PWM backlight) work.
+         */
+        {
+            static const hwaddr tpm_pwm[] = { 0x424e0000, 0x42510000 };
+            int k;
+
+            for (k = 0; k < ARRAY_SIZE(tpm_pwm); k++) {
+                DeviceState *p = qdev_new("imx.tpm-pwm");
+
+                if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(p), errp)) {
+                    return;
+                }
+                sysbus_mmio_map(SYS_BUS_DEVICE(p), 0, tpm_pwm[k]);
             }
         }
 

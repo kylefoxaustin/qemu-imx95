@@ -81,6 +81,7 @@ system_ss.add(when: 'CONFIG_IMX95_SRC', if_true: files('imx95_src.c'))
 system_ss.add(when: 'CONFIG_IMX95_AONMIX', if_true: files('imx95_aonmix.c'))
 system_ss.add(when: 'CONFIG_IMX95_ANATOP', if_true: files('imx95_anatop.c'))
 system_ss.add(when: 'CONFIG_IMX95_DPU', if_true: files('imx95_dpu.c'))
+system_ss.add(when: 'CONFIG_IMX_TPM_PWM', if_true: files('imx_tpm_pwm.c'))
 system_ss.add(when: 'CONFIG_IMX95_JPEG',
               if_true: jpeg.found() ? [files('imx95_jpeg.c'), jpeg]
                                     : files('imx95_jpeg.c'))

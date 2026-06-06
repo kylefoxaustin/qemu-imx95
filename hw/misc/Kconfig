@@ -292,3 +292,6 @@ source macio/Kconfig
 
 config IMX95_JPEG
     bool
+
+config IMX_TPM_PWM
+    bool
