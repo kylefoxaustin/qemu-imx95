@@ -638,6 +638,7 @@ config FSL_IMX95
     select FLEXCAN
     select SDHCI
     select PCI_EXPRESS_GENERIC_BRIDGE
+    select USB_CHIPIDEA
     select UNIMP
 
 config FSL_IMX95_EVK

@@ -33,6 +33,7 @@
 #include "hw/sd/sdhci.h"
 #include "hw/net/flexcan.h"
 #include "hw/net/fsl_enetc.h"
+#include "hw/usb/chipidea.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
@@ -254,6 +255,8 @@ struct FslImx95State {
     FlexCanState            flexcan[FSL_IMX95_NUM_FLEXCAN];
     /* Optional per-controller CAN bus links (set via machine canbusN=...). */
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
+    /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
+    ChipideaState           usb2;
     /* NETC integrated-endpoint ECAM PCIe bus (v2.x; ENETC MACs attach here). */
     PCIBus                 *netc_pcie_bus;
     PCIDevice              *enetc[FSL_IMX95_NUM_ENETC];
@@ -269,6 +272,8 @@ struct FslImx95State {
      * logging stubs.
      */
     DeviceState            *lpi2c_pmic;
+    /* Linux lpi2c7 (0x426d0000): real master for the EVK pcal6524 expander. */
+    DeviceState            *lpi2c7;
     /* GPC (General Power Controller) - SM power-domain / CPU-mode control. */
     DeviceState            *gpc;
     /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
@@ -424,7 +429,7 @@ enum FslImx95MemoryRegions {
      * the board mid-autoboot.
      */
     FSL_IMX95_USB_PHY,
-    FSL_IMX95_USB_DWC3,
+    FSL_IMX95_USB2,
 
     FSL_IMX95_NUM_REGIONS,
 };
@@ -457,6 +462,10 @@ enum FslImx95Irqs {
     FSL_IMX95_SYSCNT_IRQ    = 72,
     /* mu2 is the SCMI mailbox to the M33 SM (dtsi:1655). */
     FSL_IMX95_SM_MU_IRQ     = 226,
+    /* usb2 ChipIdea controller (dtsi usb@4c200000, first interrupt). */
+    FSL_IMX95_USB2_IRQ      = 176,
+    /* Linux lpi2c7 (dtsi i2c@426d0000) - the EVK pcal6524 expander bus. */
+    FSL_IMX95_LPI2C7_IRQ    = 183,
 };
 
 /*

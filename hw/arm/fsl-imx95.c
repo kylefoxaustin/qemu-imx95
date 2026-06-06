@@ -229,9 +229,9 @@ static const struct {
     [FSL_IMX95_LPI2C7] = { 0x44340000, 64 * KiB, "lpi2c7" },
     [FSL_IMX95_LPI2C8] = { 0x44350000, 64 * KiB, "lpi2c8" },
 
-    /* USB PHY + DWC3 controller (autoboot bootcmd touches these). */
+    /* usb3 PHY (stub) + usb2 ChipIdea controller (a real model, below). */
     [FSL_IMX95_USB_PHY]  = { 0x4c1f0000, 64 * KiB, "usb_phy" },
-    [FSL_IMX95_USB_DWC3] = { 0x4c200000, 64 * KiB, "usb_dwc3" },
+    [FSL_IMX95_USB2]     = { 0x4c200000, 4 * KiB,  "usb2" },
 };
 
 /*
@@ -262,10 +262,12 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
         FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C2, FSL_IMX95_LPI2C3,
-        FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C5, FSL_IMX95_LPI2C6,
+        /* LPI2C5 (0x426d0000 = Linux lpi2c7) is a real master below. */
+        FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C6,
         /* LPI2C7 (0x44340000) is the SM's PMIC bus - real model below. */
         FSL_IMX95_LPI2C8,
-        FSL_IMX95_USB_PHY, FSL_IMX95_USB_DWC3,
+        /* usb2 (0x4c200000) is a real ChipIdea model below. */
+        FSL_IMX95_USB_PHY,
     };
 
     for (size_t i = 0; i < ARRAY_SIZE(unimplemented_regions); i++) {
@@ -381,8 +383,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
             { 0x42590000, 64 * KiB }, /* serial */
             { 0x425e0000, 64 * KiB }, /* spi */
-            { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB },
-            { 0x426d0000, 64 * KiB }, /* i2c */
+            { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB }, /* i2c */
+            /* 0x426d0000 (Linux lpi2c7) is a real master + pcal6524 below. */
             { 0x42710000, 64 * KiB }, /* spi */
             { 0x42850000, 64 * KiB }, { 0x42860000, 64 * KiB }, /* mmc */
             { 0x43810000, 64 * KiB }, { 0x43820000, 64 * KiB },
@@ -400,7 +402,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c010000, 64 * KiB }, /* hsio blk-ctl (clock provider) */
             { 0x4c100000, 64 * KiB }, /* usb3 dwc3 core */
             { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
-            { 0x4c200000, 0x100000 }, /* usb2 (chipidea) */
+            /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
             { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie */
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
@@ -1307,6 +1309,29 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * Linux lpi2c7 (i2c@0x426d0000; this is the enum we label LPI2C5 - the
+     * machine's LPI2C enum uses SDK numbering, the address is authoritative).
+     * The EVK hangs a PCAL6524 IO-expander at 0x22 on it whose port-0 line 3
+     * enables the USB host's 5V VBUS fixed-regulator. Model the master + the
+     * expander so the gpio-pca953x driver probes, the regulator turns on, and
+     * the usb2 ChipIdea host leaves deferred-probe and binds (-> usb-kbd input
+     * for the DPU display window). Other slaves on this bus (ptn5110 USB-PD at
+     * 0x50) stay unmodelled and simply NAK.
+     */
+    s->lpi2c7 = qdev_new("imx.lpi2c");
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c7), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c7), 0,
+                    fsl_imx95_memmap[FSL_IMX95_LPI2C5].addr);
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->lpi2c7), 0,
+                       qdev_get_gpio_in(gicdev, FSL_IMX95_LPI2C7_IRQ));
+    {
+        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c7, "i2c"));
+        i2c_slave_create_simple(i2c, "pcal6524", 0x22);
+    }
+
+    /*
      * GPC: the SM polls per-domain CMC_MODE_STAT and uses the sleep/wake
      * handshakes for CPU power-mode control. The model mirrors each status
      * register to its paired control so the SM's "request mode, wait for
@@ -1444,6 +1469,27 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             sysbus_connect_irq(sbd, 0,
                 qdev_get_gpio_in(gicdev, flexcan_table[i].irq));
         }
+    }
+
+    /*
+     * USB2 ChipIdea controller (dtsi usb@4c200000, "fsl,imx7d-usb"). The EVK
+     * runs it in host mode, so ci_hdrc binds the EHCI host and a -device
+     * usb-kbd / usb-mouse on its bus becomes an input source for the DPU
+     * display window. The companion usbmisc@4c200200 (non-core wrapper:
+     * over-current / charger-detect glue) is a logging stub - the ChipIdea
+     * driver only needs it to not fault. The usb3 DWC3 (0x4c100000) stays a
+     * stub; the ChipIdea is all we need for HID.
+     */
+    {
+        SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usb2);
+
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, fsl_imx95_memmap[FSL_IMX95_USB2].addr);
+        sysbus_connect_irq(sbd, 0,
+            qdev_get_gpio_in(gicdev, FSL_IMX95_USB2_IRQ));
+        create_unimplemented_device("usbmisc", 0x4c200200, 0x200);
     }
 
     /*
@@ -1737,6 +1783,8 @@ static void fsl_imx95_init(Object *obj)
         g_autofree char *name = g_strdup_printf("flexcan%d", i + 1);
         object_initialize_child(obj, name, &s->flexcan[i], TYPE_FLEXCAN);
     }
+
+    object_initialize_child(obj, "usb2", &s->usb2, TYPE_CHIPIDEA);
 }
 
 static const Property fsl_imx95_properties[] = {

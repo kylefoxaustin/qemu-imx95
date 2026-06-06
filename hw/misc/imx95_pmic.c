@@ -239,6 +239,22 @@ static const TypeInfo pcal6408a_info = {
     .class_init    = pcal6408a_class_init,
 };
 
+/*
+ * PCAL6524 - the 24-bit (3-bank) sibling of the PCAL6408A. The register-file
+ * model above is bank-agnostic (a flat 256-entry array with a register pointer
+ * and auto-increment), so the wider part needs no new logic: it inherits the
+ * PCAL6408A class wholesale. On the 19x19 EVK this expander sits on lpi2c7 at
+ * 0x22; one of its GPIOs (port 0, line 3) is the enable for the USB host's
+ * 5V VBUS fixed-regulator, so the usb2 ChipIdea host can't bind until the
+ * gpio-pca953x driver probes this device and the regulator turns on.
+ */
+#define TYPE_PCAL6524 "pcal6524"
+
+static const TypeInfo pcal6524_info = {
+    .name          = TYPE_PCAL6524,
+    .parent        = TYPE_PCAL6408A,
+};
+
 /* ============================ PF53 PMIC ============================ */
 
 /*
@@ -337,6 +353,7 @@ static void imx95_pmic_register_types(void)
 {
     type_register_static(&pf09_info);
     type_register_static(&pcal6408a_info);
+    type_register_static(&pcal6524_info);
     type_register_static(&pf53_info);
 }
 
