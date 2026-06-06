@@ -102,7 +102,7 @@ enum FslImx95Configuration {
     FSL_IMX95_NUM_LPUARTS   = 8,    /* LPUART1..LPUART8 */
     FSL_IMX95_NUM_USDHCS    = 3,    /* uSDHC1..uSDHC3 */
     FSL_IMX95_NUM_FLEXCAN   = 5,    /* FlexCAN1..FlexCAN5 */
-    FSL_IMX95_NUM_ENETC     = 2,    /* ENETC0 (devfn 0x0) + ENETC1 (0x40) */
+    FSL_IMX95_NUM_ENETC     = 3,    /* ENETC0 (0x0) + ENETC1 (0x40) + ENETC2 10G (0x80) */
     FSL_IMX95_NUM_SAIS      = 2,    /* the EVK's active SAI cards: sai1 + sai3 */
     FSL_IMX95_EDMA1_CHANNELS = 31,  /* edma1@44000000 (fsl,imx93-edma3) */
     FSL_IMX95_EDMA2_CHANNELS = 64,  /* edma2@42000000 (fsl,imx95-edma5) */

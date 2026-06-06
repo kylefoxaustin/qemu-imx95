@@ -2,10 +2,13 @@
 
 Boots the emulated i.MX 95 and shows how far Linux's `enetc4_pf` (`nxp_enetc4`)
 driver gets binding to the modelled ENETC PFs on the NETC integrated ECAM bus
-(PCI `1131:e101`). The machine models **two 1G station interfaces** — ENETC0
-(`ethernet@0,0`, devfn `0x0`) and ENETC1 (`ethernet@8,0`, devfn `0x40`) — the 1G
-port pair the 15x15 FRDM and 19x19 EVK boards pin out. (The EVK's second port is
-a 10G `10gbase-r` port — ENETC2 — which is a roadmap item, not modelled here.)
+(PCI `1131:e101`). The machine models **three station interfaces** — ENETC0
+(`ethernet@0,0`, devfn `0x0`, 1G), ENETC1 (`ethernet@8,0`, devfn `0x40`, 1G),
+and ENETC2 (`ethernet@10,0`, devfn `0x80`, the EVK's **10G** `10gbase-r` port).
+The MAC + BD-ring datapath is identical across all three — the wire speed is a
+property of the (fixed-)link, not the model — so the 10G port is just a third
+PF brought up via a fixed-link `10gbase-r` node (no real Aquantia PHY / EMDIO):
+`enetc4_pf` reports `eth2: Link is Up - 10Gbps/Full`.
 
 ## Files
 

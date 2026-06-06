@@ -978,20 +978,20 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         s->netc_pcie_bus = PCI_HOST_BRIDGE(pcie)->bus;
 
         /*
-         * ENETC PFs (PCI 1131:e101). Two 1G station interfaces, placed at the
-         * devfns the BSP DT maps to ENETC0 (ethernet@0,0 = 00.0) and ENETC1
-         * (ethernet@8,0 = 08.0/devfn 0x40) - the 1G pair the 15x15 FRDM and
-         * 19x19 EVK boards pin out. Both are devfns the netc-blk-ctrl NETCMIX
-         * init accepts (its link-MII switch handles ENETC0=0x0 / ENETC1=0x40;
-         * ENETC2's 10G port is a roadmap item). Each PF binds the next -nic
-         * backend in order (qemu_configure_nic_device consumes nd_table
-         * sequentially), so the two ports map to the two -nic devices on the
-         * command line; the test DTB (tests/netc) enables both nodes with a
-         * fixed MAC + fixed-link.
+         * ENETC PFs (PCI 1131:e101). Three station interfaces at the devfns the
+         * BSP DT maps to ENETC0 (ethernet@0,0 = 00.0), ENETC1 (ethernet@8,0 =
+         * devfn 0x40) and ENETC2 (ethernet@10,0 = devfn 0x80, the 10G port).
+         * The MAC + BD-ring datapath is identical across all three - the wire
+         * speed is a property of the (fixed-)link, not the model - so the 10G
+         * port is just a third PF; the test DTB (tests/netc/patch-dtb.py)
+         * enables it as a fixed-link 10gbase-r node, so enetc4_pf brings up a
+         * 10G eth without the real Aquantia PHY / EMDIO. Each PF binds the next
+         * -nic backend in order (qemu_configure_nic_device consumes nd_table
+         * sequentially), so the ports map to the -nic devices on the cmdline.
          */
         {
             static const int enetc_devfn[FSL_IMX95_NUM_ENETC] = {
-                PCI_DEVFN(0, 0), PCI_DEVFN(8, 0),
+                PCI_DEVFN(0, 0), PCI_DEVFN(8, 0), PCI_DEVFN(0x10, 0),
             };
             int p;
 

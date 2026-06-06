@@ -37,11 +37,15 @@
 import re
 import sys
 
-# Per-port fixed MAC (Freescale OUI 00:04:9f). Distinct so a back-to-back
-# eth0<->eth1 test has different src/dst MACs.
-PORT_MAC = {
-    '0,0':  '00 04 9f 06 11 22',   # ENETC0
-    '8,0':  '00 04 9f 06 11 33',   # ENETC1
+# Per-port (fixed MAC, fixed-link speed Mbps, phy-mode). Distinct MACs so a
+# back-to-back test has different src/dst. ENETC2 is the 10G port (devfn 0x80,
+# ethernet@10,0): a fixed-link 10gbase-r node, so enetc4_pf brings it up at 10G
+# without the real Aquantia PHY / EMDIO. The MAC datapath is identical to the
+# 1G ports - "10G" is just the link speed phylink reports.
+PORT_CFG = {
+    '0,0':  ('00 04 9f 06 11 22', 1000,  'rgmii-id'),    # ENETC0 (1G)
+    '8,0':  ('00 04 9f 06 11 33', 1000,  'rgmii-id'),    # ENETC1 (1G)
+    '10,0': ('00 04 9f 06 11 44', 10000, '10gbase-r'),   # ENETC2 (10G)
 }
 
 
@@ -51,7 +55,7 @@ def get_prop(node, name):
     return m.group(1).strip() if m else None
 
 
-def rewrite_port(s, unit, mac):
+def rewrite_port(s, unit, mac, speed, phy_mode):
     """Replace the ethernet@<unit> node with an enabled fixed-link node,
     preserving its base reg / clocks / clock-names / phandle."""
     i = s.index('ethernet@%s {' % unit)
@@ -75,13 +79,13 @@ def rewrite_port(s, unit, mac):
     if clock_names is not None:
         L.append('\t\t\t\tclock-names = %s;' % clock_names)
     L += ['\t\t\t\tlocal-mac-address = [%s];' % mac,
-          '\t\t\t\tphy-mode = "rgmii-id";',
+          '\t\t\t\tphy-mode = "%s";' % phy_mode,
           '\t\t\t\tstatus = "okay";']
     if phandle is not None:
         L.append('\t\t\t\tphandle = %s;' % phandle)
     L += ['',
           '\t\t\t\tfixed-link {',
-          '\t\t\t\t\tspeed = <1000>;',
+          '\t\t\t\t\tspeed = <%d>;' % speed,
           '\t\t\t\t\tfull-duplex;',
           '\t\t\t\t};',
           '\t\t\t};']
@@ -98,7 +102,7 @@ def rewrite_port(s, unit, mac):
 # (group 1, required to repeat by the \1 backref so other PCIe msi-maps on the
 # board, which use DeviceID bases 0x10/0x98, can't match) and spanning the
 # middle entries with [^>]*. Replaced with a single identity entry over all RIDs
-# (covers both ports, RID 0x0 + 0x40), reusing the captured ITS phandle.
+# (covers all three ports: RID 0x0, 0x40, 0x80), reusing the captured ITS phandle.
 OLD_MSI_MAP = re.compile(
     r'msi-map = <0x0+ (0x[0-9a-f]+) 0x60 0x0*1 [^>]*\1 0x67 0x0*1>;')
 NEW_MSI_MAP = r'msi-map = <0x0 \g<1> 0x0 0x10000>;'
@@ -108,8 +112,8 @@ def main():
     src = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdin'
     s = open(src).read()
 
-    for unit, mac in PORT_MAC.items():
-        s = rewrite_port(s, unit, mac)
+    for unit, (mac, speed, phy_mode) in PORT_CFG.items():
+        s = rewrite_port(s, unit, mac, speed, phy_mode)
 
     s, n = OLD_MSI_MAP.subn(NEW_MSI_MAP, s)
     if n != 1:
