@@ -109,6 +109,7 @@
 #define ENETC_TXBD_FLAGS_F   (1u << 7)   /* final BD of a frame */
 #define ENETC_TXBD_FLAGS_OFF 24          /* flags live in lstatus[31:24] */
 #define ENETC_RXBD_INET_CSUM_OFF 0       /* RX writeback: inet_csum __le16 */
+#define ENETC_L2_HLEN          14         /* Ethernet MAC header (no VLAN) */
 #define ENETC_RXBD_BUFLEN_OFF 8          /* RX writeback: buf_len __le16 */
 #define ENETC_RXBD_LSTATUS_OFF 12        /* RX writeback: lstatus __le32 */
 #define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final BD */
@@ -319,15 +320,14 @@ static bool fsl_enetc_can_receive(NetClientState *nc)
 }
 
 /*
- * Folded 16-bit ones-complement sum of a frame, matching the kernel's
+ * Folded 16-bit ones-complement sum of a buffer, matching the kernel's
  * do_csum() (lib/checksum.c) on a little-endian host: 16-bit words summed
  * little-endian, a trailing odd byte added as the low byte, carries folded
  * in. The HW reports CHECKSUM_COMPLETE via the RX BD inet_csum field; the
- * driver rebuilds skb->csum as csum_unfold(~htons(inet_csum)), so storing
- * ~sum (network order) in that field yields skb->csum == this sum, i.e. the
- * canonical CHECKSUM_COMPLETE value over the whole frame. Without it the
- * field is 0 and the stack faults ("hw csum failure") re-verifying the first
- * received packet.
+ * driver rebuilds skb->csum as csum_unfold(~htons(inet_csum)). Storing ~sum
+ * (network order) over the L3 payload (see the caller) yields the canonical
+ * CHECKSUM_COMPLETE value the receive path expects; without it the field is 0
+ * and the stack faults ("hw csum failure") re-verifying a received packet.
  */
 static uint16_t fsl_enetc_inet_csum(const uint8_t *buf, size_t len)
 {
@@ -381,10 +381,22 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     }
 
     /*
-     * Whole-frame checksum; reported (network order, complemented) in the
-     * first BD only, which is where enetc_build_skb() reads inet_csum.
+     * Checksum covers the L3 payload only: real ENETC parses the L2 header and
+     * begins the running inet checksum at the network header, so the MAC header
+     * is NOT included. The kernel relies on this - eth_type_trans() pulls the
+     * MAC without adjusting skb->csum, and the IPv6/IPv4 receive path only
+     * subtracts the L3 header from the CHECKSUM_COMPLETE value. Including the
+     * MAC here makes the first re-verified RX packet fault ("hw csum failure").
+     * Reported (network order, complemented) in the first BD only, where
+     * enetc_build_skb() reads inet_csum. (Untagged frames assumed; the model
+     * does not deliver VLAN-tagged RX, so the L3 header is at ENETC_L2_HLEN.)
      */
-    inet_csum = ~fsl_enetc_inet_csum(buf, size) & 0xffff;
+    if (size > ENETC_L2_HLEN) {
+        inet_csum = ~fsl_enetc_inet_csum(buf + ENETC_L2_HLEN,
+                                         size - ENETC_L2_HLEN) & 0xffff;
+    } else {
+        inet_csum = 0xffff; /* no L3 payload; ~0 */
+    }
 
     for (off = 0; off < size || off == 0; ) {
         uint64_t bd_addr = ring + (uint64_t)s->rx_pi * ENETC_BD_SIZE;
