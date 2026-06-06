@@ -64,7 +64,7 @@ static inline uint32_t irqsteer_status(IMXIRQSteerState *s, int idx)
     return (s->inlevel[idx] | s->set[idx]) & s->mask[idx];
 }
 
-/* Recompute the parent output levels: output g ORs its group's two registers. */
+/* Recompute the parent outputs: output g ORs its group's two registers. */
 static void irqsteer_update(IMXIRQSteerState *s)
 {
     int g;
