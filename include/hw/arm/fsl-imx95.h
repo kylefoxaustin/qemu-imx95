@@ -34,6 +34,9 @@
 #include "hw/net/flexcan.h"
 #include "hw/net/fsl_enetc.h"
 #include "hw/usb/chipidea.h"
+#include "hw/dma/imx95_edma.h"
+#include "hw/audio/imx95_sai.h"
+#include "hw/audio/imx95_micfil.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
@@ -100,6 +103,10 @@ enum FslImx95Configuration {
     FSL_IMX95_NUM_USDHCS    = 3,    /* uSDHC1..uSDHC3 */
     FSL_IMX95_NUM_FLEXCAN   = 5,    /* FlexCAN1..FlexCAN5 */
     FSL_IMX95_NUM_ENETC     = 2,    /* ENETC0 (devfn 0x0) + ENETC1 (0x40) */
+    FSL_IMX95_NUM_SAIS      = 2,    /* the EVK's active SAI cards: sai1 + sai3 */
+    FSL_IMX95_EDMA1_CHANNELS = 31,  /* edma1@44000000 (fsl,imx93-edma3) */
+    FSL_IMX95_EDMA2_CHANNELS = 64,  /* edma2@42000000 (fsl,imx95-edma5) */
+    FSL_IMX95_EDMA2_CHAN_STRIDE = 0x8000,
     FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
 };
 
@@ -257,6 +264,12 @@ struct FslImx95State {
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
+    /* Audio: eDMA front-ends + SAI/MICFIL; wm8962 codec on lpi2c4. */
+    IMX95EdmaState          edma1;   /* 0x44000000: serves sai1 + micfil */
+    IMX95EdmaState          edma2;   /* 0x42000000: serves sai3 */
+    IMX95SaiState           sai[FSL_IMX95_NUM_SAIS];  /* sai1, sai3 */
+    IMX95MicfilState        micfil;
+    DeviceState            *lpi2c4;  /* wm8962 audio-codec i2c bus */
     /* NETC integrated-endpoint ECAM PCIe bus (v2.x; ENETC MACs attach here). */
     PCIBus                 *netc_pcie_bus;
     PCIDevice              *enetc[FSL_IMX95_NUM_ENETC];
@@ -466,7 +479,19 @@ enum FslImx95Irqs {
     FSL_IMX95_USB2_IRQ      = 176,
     /* Linux lpi2c7 (dtsi i2c@426d0000) - the EVK pcal6524 expander bus. */
     FSL_IMX95_LPI2C7_IRQ    = 183,
+    /* Linux lpi2c4 (dtsi i2c@42540000) - the wm8962 audio-codec bus. */
+    FSL_IMX95_LPI2C4_IRQ    = 59,
+    /* Audio: SAI + MICFIL + eDMA channel interrupts. */
+    FSL_IMX95_SAI1_IRQ      = 34,
+    FSL_IMX95_SAI3_IRQ      = 170,
+    FSL_IMX95_EDMA1_IRQ_BASE = 96,   /* edma1 channel N -> GIC SPI 96 + N */
+    FSL_IMX95_EDMA2_IRQ_BASE = 128,  /* edma2 channel N -> GIC SPI 128 + N/2 */
 };
+
+/* MICFIL's four interrupt lines (dtsi micfil@44520000), in DT order. */
+#define FSL_IMX95_MICFIL_IRQS { 188, 187, 186, 185 }
+/* wm8962 audio codec I2C address on lpi2c4. */
+#define FSL_IMX95_WM8962_ADDR 0x1a
 
 /*
  * M33 NVIC external interrupt number for the MU2 B-side (MU2_B_IRQn in the

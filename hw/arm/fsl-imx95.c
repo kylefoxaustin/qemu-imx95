@@ -43,6 +43,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/i2c/i2c.h"
+#include "hw/audio/wm8962.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
@@ -261,7 +262,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
-        FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C2, FSL_IMX95_LPI2C3,
+        /* LPI2C2 (0x42540000 = Linux lpi2c4) is a real master below. */
+        FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C3,
         /* LPI2C5 (0x426d0000 = Linux lpi2c7) is a real master below. */
         FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C6,
         /* LPI2C7 (0x44340000) is the SM's PMIC bus - real model below. */
@@ -374,12 +376,14 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
              * 0x200000), so a 1 MiB stub faults on the high channels. Use the
              * DT-declared sizes: edma5 = 0x210000, edma3 = 0x200000.
              */
-            { 0x42000000, 0x210000 }, { 0x42210000, 0x210000 },
-            { 0x44000000, 0x200000 },
+            /* edma2 (0x42000000) + edma1 (0x44000000) are real models below;
+             * edma3 (0x42210000) stays a stub (no modelled consumer). */
+            { 0x42210000, 0x210000 },
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
             { 0x42490000, 64 * KiB }, /* watchdog */
             { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
-            { 0x42530000, 64 * KiB }, { 0x42540000, 64 * KiB }, /* i2c */
+            /* lpi2c4 (0x42540000) is a real master (wm8962 codec) below. */
+            { 0x42530000, 64 * KiB }, /* i2c (lpi2c3) */
             { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
             { 0x42590000, 64 * KiB }, /* serial */
             { 0x425e0000, 64 * KiB }, /* spi */
@@ -443,13 +447,12 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
              * (reads-as-0) instead of taking an unmapped-access fault on the
              * first MMIO. (FlexCAN is a real model, wired below.)
              */
-            { 0x42650000, 64 * KiB }, /* sai3 */
+            /* sai1 (0x443b0000) + sai3 (0x42650000) + micfil (0x44520000) are
+             * real audio front-ends below; sai4/5 + xcvr stay stubbed. */
             { 0x42660000, 64 * KiB }, /* sai4 */
             { 0x42670000, 64 * KiB }, /* sai5 */
             { 0x42680000, 64 * KiB }, /* xcvr (spdif) */
-            { 0x443b0000, 64 * KiB }, /* sai1 */
             { 0x4c880000, 64 * KiB }, /* sai2 */
-            { 0x44520000, 64 * KiB }, /* micfil (pdm mic) */
             /*
              * Display (MIPI DSI) and camera (MIPI CSI / ISI / ISP) interface
              * controllers: not modelled. Stub them so enabling these DT nodes
@@ -1549,6 +1552,103 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * Audio. The EVK runs three ASoC cards: wm8962 (sai3 <-> wm8962 codec on
+     * lpi2c4), micfil (PDM mic), and bt-sco (sai1 <-> a dummy codec). Their
+     * SAI/MICFIL FIFOs are serviced by eDMA - sai1 + micfil on edma1
+     * (0x44000000), sai3 on edma2 (0x42000000) - so a working DMA engine that
+     * the fsl-edma driver can probe and allocate channels from is required for
+     * the cards to register. The SAI/MICFIL models carry the register file the
+     * fsl-sai/fsl-micfil drivers probe; sample movement rides the eDMA
+     * datapath (no audio backend is attached).
+     */
+    {
+        SysBusDevice *sbd;
+
+        /* edma1 (fsl,imx93-edma3): 31 channels, default 0x10000 page stride;
+         * channel N raises GIC SPI 96 + N. */
+        object_property_set_uint(OBJECT(&s->edma1), "num-channels",
+                                 FSL_IMX95_EDMA1_CHANNELS, &error_abort);
+        sbd = SYS_BUS_DEVICE(&s->edma1);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x44000000);
+        for (i = 0; i < FSL_IMX95_EDMA1_CHANNELS; i++) {
+            sysbus_connect_irq(sbd, i,
+                qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA1_IRQ_BASE + i));
+        }
+
+        /* edma2 (fsl,imx95-edma5): 64 channels at a 0x8000 page stride;
+         * channels are paired so channel N raises GIC SPI 128 + N/2. */
+        object_property_set_uint(OBJECT(&s->edma2), "num-channels",
+                                 FSL_IMX95_EDMA2_CHANNELS, &error_abort);
+        object_property_set_uint(OBJECT(&s->edma2), "chan-stride",
+                                 FSL_IMX95_EDMA2_CHAN_STRIDE, &error_abort);
+        sbd = SYS_BUS_DEVICE(&s->edma2);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x42000000);
+        for (i = 0; i < FSL_IMX95_EDMA2_CHANNELS; i++) {
+            sysbus_connect_irq(sbd, i,
+                qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA2_IRQ_BASE + i / 2));
+        }
+
+        /* SAI1 (0x443b0000, bt-sco) and SAI3 (0x42650000, wm8962). */
+        sbd = SYS_BUS_DEVICE(&s->sai[0]);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x443b0000);
+        sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(gicdev, FSL_IMX95_SAI1_IRQ));
+
+        sbd = SYS_BUS_DEVICE(&s->sai[1]);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x42650000);
+        sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(gicdev, FSL_IMX95_SAI3_IRQ));
+
+        /* MICFIL PDM mic (0x44520000), four interrupt lines. */
+        {
+            static const int micfil_irqs[IMX95_MICFIL_IRQS] =
+                FSL_IMX95_MICFIL_IRQS;
+            sbd = SYS_BUS_DEVICE(&s->micfil);
+            if (!sysbus_realize(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0, 0x44520000);
+            for (i = 0; i < IMX95_MICFIL_IRQS; i++) {
+                sysbus_connect_irq(sbd, i,
+                    qdev_get_gpio_in(gicdev, micfil_irqs[i]));
+            }
+        }
+
+        /* lpi2c4 (0x42540000): the wm8962 audio-codec bus. Real master so the
+         * codec probes; the fsl-sai card then binds wm8962 as its codec. */
+        s->lpi2c4 = qdev_new("imx.lpi2c");
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c4), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c4), 0, 0x42540000);
+        sysbus_connect_irq(SYS_BUS_DEVICE(s->lpi2c4), 0,
+                           qdev_get_gpio_in(gicdev, FSL_IMX95_LPI2C4_IRQ));
+        {
+            I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c4, "i2c"));
+
+            i2c_slave_create_simple(i2c, TYPE_WM8962, FSL_IMX95_WM8962_ADDR);
+            /*
+             * PCAL6408A IO-expander at 0x21 (dtsi i2c4_gpio_expander_21). Its
+             * GPIOs gate reg_audio_pwr - the fixed regulator that powers all 8
+             * wm8962 supplies - so without it the codec stays in deferred probe
+             * and the wm8962 ASoC card never registers. Reuse the register-file
+             * expander model.
+             */
+            i2c_slave_create_simple(i2c, "pcal6408a", 0x21);
+        }
+    }
+
+    /*
      * Cortex-M33 System Manager core (v0.6). Build the M33's 32-bit
      * address space: its private ITCM/DTCM RAM layered over a
      * low-priority alias of the A55 system memory (so the M33 can also
@@ -1841,6 +1941,12 @@ static void fsl_imx95_init(Object *obj)
     }
 
     object_initialize_child(obj, "usb2", &s->usb2, TYPE_CHIPIDEA);
+
+    object_initialize_child(obj, "edma1", &s->edma1, TYPE_IMX95_EDMA);
+    object_initialize_child(obj, "edma2", &s->edma2, TYPE_IMX95_EDMA);
+    object_initialize_child(obj, "sai1", &s->sai[0], TYPE_IMX95_SAI);
+    object_initialize_child(obj, "sai3", &s->sai[1], TYPE_IMX95_SAI);
+    object_initialize_child(obj, "micfil", &s->micfil, TYPE_IMX95_MICFIL);
 }
 
 static const Property fsl_imx95_properties[] = {

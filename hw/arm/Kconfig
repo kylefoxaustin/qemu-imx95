@@ -634,6 +634,8 @@ config FSL_IMX95
     select IMX95_ANATOP
     select IMX95_DPU
     select IMX_IRQSTEER
+    select IMX95_AUDIO
+    select IMX95_EDMA
     select IMX95_SYSCTR
     select IMX_LPI2C
     select FLEXCAN
