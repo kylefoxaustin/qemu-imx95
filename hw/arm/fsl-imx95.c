@@ -395,7 +395,6 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4ad00000, 64 * KiB }, /* display stream csr (clock provider) */
             { 0x4ad10000, 64 * KiB }, /* display master csr (mmio-mux) */
             { 0x4b010000, 64 * KiB }, /* syscon (dispmix csr) */
-            { 0x4b0b0000, 64 * KiB }, /* displaymix irqsteer */
             { 0x4b0c0000, 64 * KiB }, /* lvds csr / ldb */
             { 0x4b0d0000, 0x20000 },  /* pixel interleaver bridge */
             /* 0x4b400000 display-controller (dpu) -> imx95.dpu status stub */
@@ -453,25 +452,58 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
     }
 
     /*
-     * DPU (display-controller @0x4b400000). The imx95.dpu model does two
-     * things: it reports the blit-engine command-sequencer idle with FIFO
-     * space (the dpu95 probe busy-waits that status with no timeout, so a
-     * zero-returning stub would wedge wait_for_device_probe() forever), and
-     * it scans the primary plane's FetchLayer framebuffer out of guest DRAM
-     * to a QEMU console — enough for the dpu95 driver to bind and put the
-     * boot logo / fbcon on screen. The downstream pixel-link/LDB/DSI bridge
-     * blocks carry no pixels in emulation. The FrameGen vblank/shadow-load
-     * IRQ is not yet wired, so atomic commits fall through dpu95's flip_done
-     * timeout (~10s/modeset) rather than completing on interrupt; see
-     * hw/misc/imx95_dpu.c.
+     * displaymix IRQSTEER (interrupt-controller@0x4b0b0000). Funnels the DPU's
+     * 512 interrupt inputs onto 8 GIC outputs (64 inputs each). The dpu95
+     * driver reaches its frame-complete / shadow-load interrupts only through
+     * this irqsteer, so without it those interrupts can't be requested and the
+     * commit path falls back to timeouts. The reserved 6th/7th outputs share
+     * GIC SPI 303 per the dtsi. The DPU's interrupts ride inputs 64..127
+     * (output group 1 -> GIC SPI 215).
+     */
+    DeviceState *irqsteer = qdev_new("imx.irqsteer");
+    {
+        static const int irqsteer_spi[8] = { 214, 215, 216, 217,
+                                             218, 303, 303, 219 };
+        DeviceState *gicdev = DEVICE(&s->gic);
+        int i;
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(irqsteer), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(irqsteer), 0, 0x4b0b0000);
+        for (i = 0; i < 8; i++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(irqsteer), i,
+                               qdev_get_gpio_in(gicdev, irqsteer_spi[i]));
+        }
+    }
+
+    /*
+     * DPU (display-controller @0x4b400000). The imx95.dpu model: reports the
+     * blit-engine command-sequencer idle with FIFO space (the dpu95 probe
+     * busy-waits that status with no timeout, so a zero-returning stub would
+     * wedge wait_for_device_probe() forever); scans the primary plane's
+     * FetchLayer framebuffer out of guest DRAM to a QEMU console (enough for
+     * the dpu95 driver to bind and put the boot logo / fbcon on screen); and
+     * drives a ~60 Hz frame-complete + shadow-load interrupt through the
+     * irqsteer so atomic commits complete on interrupt instead of falling
+     * through dpu95's ~10 s flip_done/SHDLD timeouts. The four modelled
+     * sources map to irqsteer input lines (dtsi dpu interrupts): EXTDST0_SHDLOAD
+     * ->64, DOMAINBLEND0_SHDLOAD ->70, DISENGCFG_SHDLOAD0 ->73, vblank ->74.
+     * The downstream pixel-link/LDB/DSI bridge blocks carry no pixels.
      */
     {
+        static const int dpu_irqsteer_line[4] = { 64, 70, 73, 74 };
         DeviceState *dpu = qdev_new("imx95.dpu");
+        int i;
 
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(dpu), errp)) {
             return false;
         }
         sysbus_mmio_map(SYS_BUS_DEVICE(dpu), 0, 0x4b400000);
+        for (i = 0; i < 4; i++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(dpu), i,
+                               qdev_get_gpio_in(irqsteer, dpu_irqsteer_line[i]));
+        }
     }
 
     return true;

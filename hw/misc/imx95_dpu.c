@@ -42,6 +42,7 @@
 #include "hw/display/framebuffer.h"
 #include "system/address-spaces.h"
 #include "exec/cpu-common.h"
+#include "qemu/timer.h"
 
 #define TYPE_IMX95_DPU "imx95.dpu"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
@@ -72,16 +73,50 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define FG_HTCFG1   0x0c   /* HACT (active width)  in [13:0] */
 #define FG_VTCFG1   0x14   /* VACT (active height) in [13:0] */
 #define FG_FGINCTRL 0x80   /* FGDM[2:0] display mode; non-zero => scanning out */
+#define FG_FGENABLE 0x8c   /* FGEN (bit0): FrameGen running */
+#define FG_FGEN     (1u << 0)
+#define FG_FGCHSTAT 0x9c   /* channel status: PRIMSYNCSTAT (bit8) = primary synced */
+#define FG_PRIMSYNCSTAT (1u << 8)
+#define FG_FGTIMESTAMP 0x98   /* FRAMEINDEX in [..:14] - the HW vblank counter */
+#define FG_FRAMEINDEX_SHIFT 14
 
 /* blit-engine command-sequencer status (probe-time poll) */
 #define DPU_CMDSEQ_STATUS           0x1019c
 #define DPU_CMDSEQ_STATUS_IDLE      0x40000000u
 #define DPU_CMDSEQ_STATUS_FIFOSPACE 0x0001ffffu
 
+/*
+ * Stream-0 display interrupt-status block (dpu95-core.c: disp_irq0_reg =
+ * dpu_base + 0x381000). Register n covers IRQs [n*32, n*32+32); the four
+ * sources the dpu95 CRTC waits on during an atomic commit all live in n=0:
+ *   bit 3  EXTDST0_SHDLOAD        bit 18 DISENGCFG_SHDLOAD0
+ *   bit 15 DOMAINBLEND0_SHDLOAD   bit 19 DISENGCFG_FRAMECOMPLETE0 (vblank)
+ * Each enabled source drives a dedicated displaymix-irqsteer input line (the
+ * dpu node's interrupts map index->line: 3->64, 15->70, 18->73, 19->74),
+ * which the irqsteer funnels onto GIC SPI 215. The driver acks by writing
+ * INTERRUPTCLEAR; handle_level_irq masks via INTERRUPTENABLE.
+ */
+#define DPU_DISP_IRQ0_BASE      0x381000
+#define DPU_INT_ENABLE0         (DPU_DISP_IRQ0_BASE + 0x08)
+#define DPU_INT_PRESET0         (DPU_DISP_IRQ0_BASE + 0x14)
+#define DPU_INT_CLEAR0          (DPU_DISP_IRQ0_BASE + 0x20)
+#define DPU_INT_STATUS0         (DPU_DISP_IRQ0_BASE + 0x2c)
+
+#define DPU_IRQ_EXTDST0_SHDLOAD      (1u << 3)
+#define DPU_IRQ_DOMAINBLEND0_SHDLOAD (1u << 15)
+#define DPU_IRQ_DISENGCFG_SHDLOAD0   (1u << 18)
+#define DPU_IRQ_DISENGCFG_FRAMECOMP0 (1u << 19)   /* vblank */
+#define DPU_IRQ_SOURCES (DPU_IRQ_EXTDST0_SHDLOAD | DPU_IRQ_DOMAINBLEND0_SHDLOAD |\
+                         DPU_IRQ_DISENGCFG_SHDLOAD0 | DPU_IRQ_DISENGCFG_FRAMECOMP0)
+#define DPU_NUM_IRQ_OUT  4   /* one irqsteer line per modelled source */
+
+/* ~60 Hz frame tick that drives the shadow-load + frame-complete interrupts. */
+#define DPU_VBLANK_PERIOD_NS  16666667
+
 struct IMX95DPUState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
-    qemu_irq irq;                   /* framegen vblank (unconnected for now) */
+    qemu_irq irq_out[DPU_NUM_IRQ_OUT];  /* -> displaymix irqsteer input lines */
     QemuConsole *con;
     uint32_t *regs;                 /* full 4 MiB register-file backing */
     MemoryRegionSection fbsection;
@@ -90,7 +125,57 @@ struct IMX95DPUState {
     uint64_t fb_base;
     int rows;
     int src_width;
+
+    /* stream-0 display interrupt block (n=0) + the frame tick */
+    uint32_t int_status;
+    uint32_t int_enable;
+    uint32_t frame_index;       /* HW vblank counter (FGTIMESTAMP) */
+    QEMUTimer *vblank_timer;
 };
+
+/* Drive each modelled source's irqsteer line from (status & enable). */
+static void imx95_dpu_update_irq(IMX95DPUState *s)
+{
+    uint32_t active = s->int_status & s->int_enable;
+
+    qemu_set_irq(s->irq_out[0], !!(active & DPU_IRQ_EXTDST0_SHDLOAD));
+    qemu_set_irq(s->irq_out[1], !!(active & DPU_IRQ_DOMAINBLEND0_SHDLOAD));
+    qemu_set_irq(s->irq_out[2], !!(active & DPU_IRQ_DISENGCFG_SHDLOAD0));
+    qemu_set_irq(s->irq_out[3], !!(active & DPU_IRQ_DISENGCFG_FRAMECOMP0));
+}
+
+/*
+ * Re-arm (or stop) the frame tick. It only needs to run while one of our
+ * sources is enabled — i.e. during a modeset or while DRM holds a vblank
+ * reference. When DRM disables vblank on idle the tick stops, so a quiescent
+ * display costs nothing (and doesn't steal guest cycles from the rest of boot).
+ */
+static void imx95_dpu_arm_vblank(IMX95DPUState *s)
+{
+    if (s->int_enable & DPU_IRQ_SOURCES) {
+        timer_mod(s->vblank_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DPU_VBLANK_PERIOD_NS);
+    } else {
+        timer_del(s->vblank_timer);
+    }
+}
+
+/*
+ * Frame tick: raise the status for whichever of our sources the driver has
+ * enabled. The driver acks each (INTERRUPTCLEAR) inside handle_level_irq, so a
+ * source re-fires once per tick while it stays enabled — a steady ~60 Hz
+ * vblank plus the shadow-load completions an atomic commit blocks on. Without
+ * this the dpu95 commit falls through its ~10 s flip_done/SHDLD timeouts.
+ */
+static void imx95_dpu_vblank_tick(void *opaque)
+{
+    IMX95DPUState *s = opaque;
+
+    s->frame_index++;   /* advance the HW vblank counter (FGTIMESTAMP) */
+    s->int_status |= s->int_enable & DPU_IRQ_SOURCES;
+    imx95_dpu_update_irq(s);
+    imx95_dpu_arm_vblank(s);
+}
 
 static inline uint32_t dpu_r(IMX95DPUState *s, hwaddr off)
 {
@@ -220,6 +305,26 @@ static uint64_t imx95_dpu_read(void *opaque, hwaddr off, unsigned size)
          */
         return DPU_CMDSEQ_STATUS_IDLE | DPU_CMDSEQ_STATUS_FIFOSPACE;
     }
+    if (off == DPU_INT_STATUS0) {
+        return s->int_status;
+    }
+    if (off == DPU_INT_ENABLE0) {
+        return s->int_enable;
+    }
+    if (off == DPU_FRAMEGEN0 + FG_FGCHSTAT) {
+        /*
+         * Primary channel "synced up" once the FrameGen is enabled. The CRTC
+         * enable path polls this (readl_poll_timeout) and would otherwise log
+         * "FrameGen primary channel isn't syncup" and abort the modeset. Leave
+         * P/S-FIFOEMPTY clear so the FIFO-empty warning path stays quiet.
+         */
+        return (dpu_r(s, DPU_FRAMEGEN0 + FG_FGENABLE) & FG_FGEN)
+               ? FG_PRIMSYNCSTAT : 0;
+    }
+    if (off == DPU_FRAMEGEN0 + FG_FGTIMESTAMP) {
+        /* HW vblank counter: drm_crtc diffs the frame index across vblanks. */
+        return s->frame_index << FG_FRAMEINDEX_SHIFT;
+    }
     return dpu_r(s, off);
 }
 
@@ -229,6 +334,25 @@ static void imx95_dpu_write(void *opaque, hwaddr off, uint64_t val,
     IMX95DPUState *s = opaque;
     bool scanout_reg = in_block(off, DPU_FETCHLAYER0) ||
                        in_block(off, DPU_FRAMEGEN0);
+
+    /* stream-0 display interrupt block (n=0): enable / ack / preset */
+    switch (off) {
+    case DPU_INT_ENABLE0:
+        s->int_enable = val;
+        imx95_dpu_update_irq(s);
+        imx95_dpu_arm_vblank(s);   /* start ticking once a source is enabled */
+        return;
+    case DPU_INT_CLEAR0:
+        s->int_status &= ~(uint32_t)val;   /* W1C ack */
+        imx95_dpu_update_irq(s);
+        return;
+    case DPU_INT_PRESET0:
+        s->int_status |= (uint32_t)val;    /* software trigger */
+        imx95_dpu_update_irq(s);
+        return;
+    default:
+        break;
+    }
 
     s->regs[off >> 2] = val;
 
@@ -259,6 +383,13 @@ static void imx95_dpu_reset(DeviceState *dev)
     s->rows = 0;
     s->src_width = 0;
     s->invalidate = true;
+    s->int_status = 0;
+    s->int_enable = 0;
+    s->frame_index = 0;
+    imx95_dpu_update_irq(s);
+    if (s->vblank_timer) {
+        timer_del(s->vblank_timer);   /* armed lazily when a source is enabled */
+    }
 }
 
 static void imx95_dpu_realize(DeviceState *dev, Error **errp)
@@ -272,7 +403,10 @@ static void imx95_dpu_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->iomem, OBJECT(dev), &imx95_dpu_ops, s,
                           TYPE_IMX95_DPU, IMX95_DPU_REG_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
-    sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
+    for (int i = 0; i < DPU_NUM_IRQ_OUT; i++) {
+        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq_out[i]);
+    }
+    s->vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_dpu_vblank_tick, s);
     s->con = qemu_graphic_console_create(dev, 0, &imx95_dpu_gfx_ops, s);
 }
 
