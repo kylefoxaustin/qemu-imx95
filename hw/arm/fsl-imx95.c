@@ -402,7 +402,20 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c100000, 64 * KiB }, /* usb3 dwc3 core */
             { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
             /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
-            { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie */
+            { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie dbi */
+            /*
+             * PCIe controller "app" + "atu" windows (dtsi pcie0/pcie1
+             * reg-names). The imx_pcie driver maps "app" as its iomuxc_gpr and
+             * reads IMX95_PCIE_RST_CTRL (app+0x3010) during core-reset; if the
+             * window is unbacked the async probe worker takes a synchronous
+             * external abort and dies, so wait_for_device_probe() hangs and
+             * userspace never starts. Backing them (read-0) lets the probe fail
+             * fast (PHY PLL never locks -> timeout -> returns) instead. These
+             * probe only once the M.2/slot power regulators come up, which
+             * happens now that the pcal6524 expander is modelled.
+             */
+            { 0x4c340000, 0x4000 }, { 0x4c360000, 64 * KiB }, /* pcie0 app/atu */
+            { 0x4c3c0000, 0x4000 }, { 0x4c3e0000, 64 * KiB }, /* pcie1 app/atu */
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
