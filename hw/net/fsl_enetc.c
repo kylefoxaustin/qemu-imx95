@@ -108,6 +108,7 @@
 #define ENETC_BD_SIZE        16
 #define ENETC_TXBD_FLAGS_F   (1u << 7)   /* final BD of a frame */
 #define ENETC_TXBD_FLAGS_OFF 24          /* flags live in lstatus[31:24] */
+#define ENETC_RXBD_INET_CSUM_OFF 0       /* RX writeback: inet_csum __le16 */
 #define ENETC_RXBD_BUFLEN_OFF 8          /* RX writeback: buf_len __le16 */
 #define ENETC_RXBD_LSTATUS_OFF 12        /* RX writeback: lstatus __le32 */
 #define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final BD */
@@ -317,6 +318,34 @@ static bool fsl_enetc_can_receive(NetClientState *nc)
     return fsl_enetc_rx_free_bds(s) != 0;
 }
 
+/*
+ * Folded 16-bit ones-complement sum of a frame, matching the kernel's
+ * do_csum() (lib/checksum.c) on a little-endian host: 16-bit words summed
+ * little-endian, a trailing odd byte added as the low byte, carries folded
+ * in. The HW reports CHECKSUM_COMPLETE via the RX BD inet_csum field; the
+ * driver rebuilds skb->csum as csum_unfold(~htons(inet_csum)), so storing
+ * ~sum (network order) in that field yields skb->csum == this sum, i.e. the
+ * canonical CHECKSUM_COMPLETE value over the whole frame. Without it the
+ * field is 0 and the stack faults ("hw csum failure") re-verifying the first
+ * received packet.
+ */
+static uint16_t fsl_enetc_inet_csum(const uint8_t *buf, size_t len)
+{
+    uint32_t sum = 0;
+    size_t i;
+
+    for (i = 0; i + 1 < len; i += 2) {
+        sum += (uint32_t)buf[i] | ((uint32_t)buf[i + 1] << 8);
+    }
+    if (i < len) {
+        sum += buf[i];
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return (uint16_t)sum;
+}
+
 static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
                                  size_t size)
 {
@@ -327,6 +356,7 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
     uint32_t bufsz = enetc_reg(s, rbase + ENETC_RBBSR);
     uint32_t need, off;
+    uint16_t inet_csum;
 
     if (size > ENETC_FRAME_MAX) {
         return size; /* drop oversized; reported as received */
@@ -350,6 +380,12 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
         return 0;
     }
 
+    /*
+     * Whole-frame checksum; reported (network order, complemented) in the
+     * first BD only, which is where enetc_build_skb() reads inet_csum.
+     */
+    inet_csum = ~fsl_enetc_inet_csum(buf, size) & 0xffff;
+
     for (off = 0; off < size || off == 0; ) {
         uint64_t bd_addr = ring + (uint64_t)s->rx_pi * ENETC_BD_SIZE;
         uint8_t bd[ENETC_BD_SIZE];
@@ -370,6 +406,9 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
          * driver takes their size from RBBSR, so just mark them ready.
          */
         memset(bd, 0, sizeof(bd));
+        if (off == 0) {
+            stw_be_p(bd + ENETC_RXBD_INET_CSUM_OFF, inet_csum);
+        }
         stw_le_p(bd + ENETC_RXBD_BUFLEN_OFF, (uint16_t)chunk);
         stl_le_p(bd + ENETC_RXBD_LSTATUS_OFF,
                  final ? ENETC_RXBD_LSTATUS_F : ENETC_RXBD_LSTATUS_F >> 1);
