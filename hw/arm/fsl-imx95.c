@@ -221,6 +221,20 @@ static const struct {
     [FSL_IMX95_USDHC3]               = { 0x428b0000, 64 * KiB,   "usdhc3" },
 
     /* LPI2C1..8 from imx95.dtsi - logging stubs in v0.2. */
+    /*
+     * NB: this LPI2C<N> enum uses SDK block numbering, which does NOT match the
+     * Linux i2c bus number (i2c-N in dmesg / "N-00xx" device names). The MMIO
+     * address is the only invariant; the Linux bus number comes from the dtb
+     * `aliases` node (decompile + grep `i2c[0-9] = `), not from this enum.
+     * For the 19x19 EVK dtb the aliases map addr -> Linux i2c-N:
+     *   0x44340000 i2c-0   0x44350000 i2c-1
+     *   0x42530000 i2c-2   0x42540000 i2c-3
+     *   0x426b0000 i2c-4   0x426c0000 i2c-5
+     *   0x426d0000 i2c-6   0x426e0000 i2c-7
+     * (so e.g. LPI2C2 = 0x42540000 = Linux i2c-3, not "i2c-2"). A `pca953x
+     * N-00xx: -110` on a bus with no real master here is just an unmodelled
+     * stub, not a bug.
+     */
     [FSL_IMX95_LPI2C1] = { 0x42530000, 64 * KiB, "lpi2c1" },
     [FSL_IMX95_LPI2C2] = { 0x42540000, 64 * KiB, "lpi2c2" },
     [FSL_IMX95_LPI2C3] = { 0x426b0000, 64 * KiB, "lpi2c3" },
@@ -262,11 +276,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_GPIO1, FSL_IMX95_GPIO2, FSL_IMX95_GPIO3,
         FSL_IMX95_GPIO4, FSL_IMX95_GPIO5,
         FSL_IMX95_SMMU,
-        /* LPI2C2 (0x42540000 = Linux lpi2c4) is a real master below. */
+        /* LPI2C2 (0x42540000 = Linux i2c-3) is a real master below. */
         FSL_IMX95_LPI2C1, FSL_IMX95_LPI2C3,
-        /* LPI2C5 (0x426d0000 = Linux lpi2c7) is a real master below. */
+        /* LPI2C5 (0x426d0000 = Linux i2c-6) is a real master below. */
         FSL_IMX95_LPI2C4, FSL_IMX95_LPI2C6,
-        /* LPI2C7 (0x44340000) is the SM's PMIC bus - real model below. */
+        /* LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below. */
         FSL_IMX95_LPI2C8,
         /* usb2 (0x4c200000) is a real ChipIdea model below. */
         FSL_IMX95_USB_PHY,
@@ -382,13 +396,13 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
             { 0x42490000, 64 * KiB }, /* watchdog */
             { 0x424e0000, 64 * KiB }, { 0x42510000, 64 * KiB }, /* pwm */
-            /* lpi2c4 (0x42540000) is a real master (wm8962 codec) below. */
-            { 0x42530000, 64 * KiB }, /* i2c (lpi2c3) */
+            /* 0x42540000 (Linux i2c-3): real master (wm8962 codec) below. */
+            { 0x42530000, 64 * KiB }, /* i2c (Linux i2c-2) */
             { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
             { 0x42590000, 64 * KiB }, /* serial */
             { 0x425e0000, 64 * KiB }, /* spi */
             { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB }, /* i2c */
-            /* 0x426d0000 (Linux lpi2c7) is a real master + pcal6524 below. */
+            /* 0x426d0000 (Linux i2c-6) is a real master + pcal6524 below. */
             { 0x42710000, 64 * KiB }, /* spi */
             { 0x42850000, 64 * KiB }, { 0x42860000, 64 * KiB }, /* mmc */
             { 0x43810000, 64 * KiB }, { 0x43820000, 64 * KiB },
@@ -1368,10 +1382,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * Linux lpi2c7 (i2c@0x426d0000; this is the enum we label LPI2C5 - the
-     * machine's LPI2C enum uses SDK numbering, the address is authoritative).
-     * The EVK hangs a PCAL6524 IO-expander at 0x22 on it whose port-0 line 3
-     * enables the USB host's 5V VBUS fixed-regulator. Model the master + the
+     * Linux i2c-6 (i2c@0x426d0000; the enum we label LPI2C5 - SDK numbering,
+     * see the memmap note; the dtb-alias bus number and the address are what
+     * matter). The EVK hangs a PCAL6524 IO-expander at 0x22 on it whose port-0
+     * line 3 enables the USB host's 5V VBUS fixed-regulator. Model master + the
      * expander so the gpio-pca953x driver probes, the regulator turns on, and
      * the usb2 ChipIdea host leaves deferred-probe and binds (-> usb-kbd input
      * for the DPU display window). Other slaves on this bus (ptn5110 USB-PD at
@@ -1624,8 +1638,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             }
         }
 
-        /* lpi2c4 (0x42540000): the wm8962 audio-codec bus. Real master so the
-         * codec probes; the fsl-sai card then binds wm8962 as its codec. */
+        /*
+         * 0x42540000 (Linux i2c-3): the wm8962 audio-codec bus. Real master so
+         * the codec probes; the fsl-sai card then binds wm8962 as its codec.
+         */
         s->lpi2c4 = qdev_new("imx.lpi2c");
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c4), errp)) {
             return;
@@ -1638,8 +1654,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 
             i2c_slave_create_simple(i2c, TYPE_WM8962, FSL_IMX95_WM8962_ADDR);
             /*
-             * PCAL6408A IO-expander at 0x21 (dtsi i2c4_gpio_expander_21). Its
-             * GPIOs gate reg_audio_pwr - the fixed regulator that powers all 8
+             * PCAL6408A IO-expander at 0x21 (dtsi gpio@21 on this i2c-3 bus -
+             * distinct from the AQR/serdes expander at the same 0x21 on Linux
+             * i2c-4 = 0x426b0000, which is a stub here). Its GPIOs gate
+             * reg_audio_pwr - the fixed regulator that powers all 8
              * wm8962 supplies - so without it the codec stays in deferred probe
              * and the wm8962 ASoC card never registers. Reuse the register-file
              * expander model.
