@@ -10,18 +10,21 @@
  * (drivers/gpu/drm/imx/dpu95) through a large register file in one 4 MiB window.
  * This models two functional datapaths and leaves the rest as permission stubs:
  *
- * 1. SCANOUT (the display side). The primary plane's FetchLayer unit reads a
- *    framebuffer out of guest DRAM and the FrameGen unit times it out to a
- *    display stream:
- *      - FetchLayer (DPU+0x1d0000): BASEADDRESS(+MSB) = the FB DMA address,
+ * 1. SCANOUT + COMPOSITING (the display side). FetchLayer units read plane
+ *    framebuffers out of guest DRAM, a chain of LayerBlend units composites
+ *    them, and the FrameGen times the result out:
+ *      - FetchLayer (DPU+0x1d0000 / 0x1e0000): BASEADDRESS(+MSB) = FB address,
  *        SOURCEBUFFERATTRIBUTES (stride+bpp), SOURCEBUFFERDIMENSION (w x h),
  *        LAYERPROPERTY (SOURCEBUFFERENABLE);
- *      - FrameGen (DPU+0x2b0000): HTCFG1/VTCFG1 (active w/h), FGINCTRL (display
- *        mode / scanning out).
- *    On each console refresh, if the FrameGen is enabled and a FetchLayer base
- *    is set, we blit that guest buffer to the QEMU console via framebuffer.c.
- *    Downstream (pixel-link / DSI / LDB / bridge) carries no pixels — it is
- *    "permission plumbing" that lets the DRM driver bind and enable scanout.
+ *      - LayerBlend (DPU+0x170000..0x1c0000): PIXENGCFG dynamic routes its two
+ *        inputs (a ConstFrame / previous LayerBlend as primary, a plane as
+ *        secondary), POSITION places the plane, BLENDCONTROL.ALPHA blends it;
+ *      - FrameGen (DPU+0x2b0000): HTCFG1/VTCFG1 (active w/h), FGINCTRL (mode).
+ *    On each console refresh we walk the LayerBlend chain bottom-up and
+ *    composite the planes (primary + overlays) to the QEMU console; opaque
+ *    blend only (alpha-blend TODO). The connector chain (pixel-interleaver /
+ *    pixel-link / LDB / LVDS PHY / panel) registers a DRM connector when the
+ *    dtb enables it, but carries no pixels here.
  *
  * 2. 2D BLIT (the "9"-suffixed pipeline: FetchDecode9 source -> ROP9 /
  *    BlitBlend9 / scalers -> Store9 dest writeback, sequenced by the Command
@@ -88,6 +91,29 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define FG_PRIMSYNCSTAT (1u << 8)
 #define FG_FGTIMESTAMP 0x98   /* FRAMEINDEX in [..:14] - the HW vblank counter */
 #define FG_FRAMEINDEX_SHIFT 14
+
+/*
+ * Display compositing. The dpu95 driver builds a LayerBlend chain per CRTC:
+ * ConstFrame (background) -> LayerBlend1 (secondary = primary plane) ->
+ * LayerBlend2 (primary = LB1, secondary = an overlay plane) -> ... -> ExtDst ->
+ * FrameGen. Each plane is fed by a FetchLayer; the LayerBlend's POSITION places
+ * it and BLENDCONTROL.ALPHA blends it. We walk that chain and composite the
+ * planes (opaque, matching DRM atomic plane composition; alpha-blend is TODO).
+ */
+#define DPU_FETCHLAYER1   0x1e0000   /* second FetchLayer = overlay plane */
+#define DPU_LINK_FETCHLAYER0 0x1a    /* pixengcfg link ids (dpu95.h) */
+#define DPU_LINK_FETCHLAYER1 0x1b
+/* LayerBlend per-unit regs: pixengcfg DYNAMIC at +0x1008, rest at low offs. */
+#define DPU_LB_DYNAMIC    0x1008   /* PRIM_SEL[5:0] SEC_SEL[13:8] CLKEN[25:24]*/
+#define DPU_LB_POSITION   0x14     /* XPOS[15:0] YPOS[31:16] */
+#define DPU_LB_PRIM(v)    ((v) & 0x3f)
+#define DPU_LB_SEC(v)     (((v) >> 8) & 0x3f)
+#define DPU_LB_CLKEN(v)   (((v) >> 24) & 0x3)
+#define DPU_LINK_IS_CONSTFRAME(l) \
+    ((l) == 0x0c || (l) == 0x0d || (l) == 0x10 || (l) == 0x11)
+/* FetchLayer SOURCEBUFFERDIMENSION (+0x2c): w-1 [13:0], h-1 [29:16]. */
+#define FL_DIM_W(v)       (((v) & 0x3fff) + 1)
+#define FL_DIM_H(v)       ((((v) >> 16) & 0x3fff) + 1)
 
 /* blit-engine command-sequencer status (probe-time poll) */
 #define DPU_CMDSEQ_STATUS           0x1019c
@@ -280,96 +306,133 @@ static inline bool in_block(hwaddr off, hwaddr base)
     return off >= base && off < base + DPU_BLOCK_SIZE;
 }
 
-/* Derive scanout geometry from the FrameGen + FetchLayer state. */
-static bool imx95_dpu_scanout(IMX95DPUState *s, uint32_t *w, uint32_t *h,
-                              uint64_t *base, uint32_t *stride)
+/* Output geometry from the FrameGen (the display-timing active area). */
+static bool imx95_dpu_display_on(IMX95DPUState *s, uint32_t *w, uint32_t *h)
 {
     uint32_t fgdm = dpu_r(s, DPU_FRAMEGEN0 + FG_FGINCTRL) & 0x7;
-    uint32_t prop = dpu_r(s, DPU_FETCHLAYER0 + FL_LAYERPROPERTY);
-    uint32_t attr = dpu_r(s, DPU_FETCHLAYER0 + FL_SOURCEBUFFERATTRIBUTES);
 
     *w = dpu_r(s, DPU_FRAMEGEN0 + FG_HTCFG1) & 0x3fff;
     *h = dpu_r(s, DPU_FRAMEGEN0 + FG_VTCFG1) & 0x3fff;
-    *base = dpu_r(s, DPU_FETCHLAYER0 + FL_BASEADDRESS) |
-            ((uint64_t)dpu_r(s, DPU_FETCHLAYER0 + FL_BASEADDRESSMSB) << 32);
-    *stride = FL_ATTR_STRIDE(attr);
-
-    /* Scanning out only when the FrameGen is in a display mode, the primary
-     * FetchLayer is enabled, and a framebuffer base is programmed. */
-    return fgdm != 0 && (prop & FL_SOURCEBUFFERENABLE) &&
-           *base != 0 && *w != 0 && *h != 0;
+    return fgdm != 0 && *w != 0 && *h != 0;
 }
 
-/* First cut: assume an XRGB8888 primary plane (the standard DRM fb format). */
-static void imx95_dpu_draw_xrgb8888(void *opaque, uint8_t *dst,
-                                    const uint8_t *src, int width, int dststep)
+/* pixengcfg link id -> FetchLayer sub-block base (the RGB planes we model). */
+static hwaddr imx95_dpu_plane_base(uint32_t link)
 {
-    uint32_t *d = (uint32_t *)dst;
-    int i;
-
-    for (i = 0; i < width; i++) {
-        uint32_t p = ldl_le_p(src);
-
-        *d++ = rgb_to_pixel32((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
-        src += 4;
+    switch (link) {
+    case DPU_LINK_FETCHLAYER0: return DPU_FETCHLAYER0;
+    case DPU_LINK_FETCHLAYER1: return DPU_FETCHLAYER1;
+    default:                   return 0;   /* YUV/eco planes not modelled yet */
     }
+}
+
+/* Blit one enabled FetchLayer plane onto the surface at (px,py), XRGB8888. */
+static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
+                                hwaddr fl, int px, int py)
+{
+    uint32_t prop = dpu_r(s, fl + FL_LAYERPROPERTY);
+    uint64_t base = dpu_r(s, fl + FL_BASEADDRESS) |
+                    ((uint64_t)dpu_r(s, fl + FL_BASEADDRESSMSB) << 32);
+    uint32_t stride = FL_ATTR_STRIDE(dpu_r(s, fl + FL_SOURCEBUFFERATTRIBUTES));
+    uint32_t dim = dpu_r(s, fl + FL_SOURCEBUFFERDIMENSION);
+    uint32_t pw = FL_DIM_W(dim), ph = FL_DIM_H(dim);
+    uint8_t *sd = surface_data(surface);
+    int sstride = surface_stride(surface);
+    int sw = surface_width(surface), sh = surface_height(surface);
+    g_autofree uint8_t *row = NULL;
+
+    if (!(prop & FL_SOURCEBUFFERENABLE) || base == 0 || pw == 0 || ph == 0) {
+        return 0;
+    }
+    row = g_malloc((size_t)pw * 4);
+    for (uint32_t y = 0; y < ph; y++) {
+        int dy = py + (int)y;
+        uint32_t *d;
+        if (dy < 0 || dy >= sh) {
+            continue;
+        }
+        cpu_physical_memory_read(base + (uint64_t)y * stride, row,
+                                 (size_t)pw * 4);
+        d = (uint32_t *)(sd + (size_t)dy * sstride);
+        for (uint32_t x = 0; x < pw; x++) {
+            int dx = px + (int)x;
+            uint32_t p;
+            if (dx < 0 || dx >= sw) {
+                continue;
+            }
+            p = ldl_le_p(row + x * 4);
+            d[dx] = rgb_to_pixel32((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
+        }
+    }
+    if (s->trace) {
+        qemu_log("imx95-dpu: plane fl=0x%" HWADDR_PRIx " %ux%u @ (%d,%d)\n",
+                 fl, pw, ph, px, py);
+    }
+    return 1;
 }
 
 static bool imx95_dpu_gfx_update(void *opaque)
 {
     IMX95DPUState *s = opaque;
     DisplaySurface *surface = qemu_console_surface(s->con);
-    uint32_t width, height, stride;
-    uint64_t base;
-    int first = 0, last = 0, src_width;
+    static const hwaddr lb_ofs[6] = { 0x170000, 0x180000, 0x190000,
+                                      0x1a0000, 0x1b0000, 0x1c0000 };
+    uint32_t w, h;
+    int cur, guard, planes = 0;
 
-    if (!imx95_dpu_scanout(s, &width, &height, &base, &stride)) {
-        if (s->trace) {
-            qemu_log("imx95-dpu: SCANOUT off: fgdm=0x%x prop=0x%08x "
-                     "base=0x%" PRIx64 " w=%u h=%u\n",
-                     dpu_r(s, DPU_FRAMEGEN0 + FG_FGINCTRL) & 0x7,
-                     dpu_r(s, DPU_FETCHLAYER0 + FL_LAYERPROPERTY),
-                     base, width, height);
-        }
-        return true;   /* no active CRTC / framebuffer yet */
+    if (!imx95_dpu_display_on(s, &w, &h)) {
+        return true;   /* no active CRTC yet */
     }
-    if (s->trace) {
-        uint8_t probe[16] = {0};
-        uint32_t nz = 0, i;
-        cpu_physical_memory_read(base, probe, sizeof(probe));
-        for (i = 0; i < sizeof(probe); i++) {
-            nz |= probe[i];
-        }
-        qemu_log("imx95-dpu: SCANOUT on: base=0x%" PRIx64 " %ux%u stride=%u "
-                 "dram[0..16]nz=%u first=%02x%02x%02x%02x\n",
-                 base, width, height, stride, nz,
-                 probe[0], probe[1], probe[2], probe[3]);
-    }
-
-    if (surface_width(surface) != width || surface_height(surface) != height) {
-        qemu_console_resize(s->con, width, height);
+    if (surface_width(surface) != (int)w || surface_height(surface) != (int)h) {
+        qemu_console_resize(s->con, w, h);
         surface = qemu_console_surface(s->con);
-        s->invalidate = true;
+    }
+    /* Background (ConstFrame): clear to black; opaque planes paint over it. */
+    memset(surface_data(surface), 0, (size_t)surface_stride(surface) * h);
+
+    /*
+     * Composite the LayerBlend chain bottom-up: the bottom LayerBlend takes a
+     * ConstFrame as its primary input and the primary plane as secondary; each
+     * one above takes the previous LayerBlend's output as primary and another
+     * plane as secondary. Blit each secondary plane at its POSITION.
+     */
+    cur = -1;
+    for (int i = 0; i < 6; i++) {
+        uint32_t dyn = dpu_r(s, lb_ofs[i] + DPU_LB_DYNAMIC);
+        if (DPU_LB_CLKEN(dyn) && DPU_LINK_IS_CONSTFRAME(DPU_LB_PRIM(dyn))) {
+            cur = i;
+            break;
+        }
+    }
+    for (guard = 0; cur >= 0 && guard < 6; guard++) {
+        uint32_t dyn = dpu_r(s, lb_ofs[cur] + DPU_LB_DYNAMIC);
+        uint32_t pos = dpu_r(s, lb_ofs[cur] + DPU_LB_POSITION);
+        hwaddr fl = imx95_dpu_plane_base(DPU_LB_SEC(dyn));
+        int next = -1;
+
+        if (fl) {
+            planes += imx95_dpu_blit_plane(s, surface, fl, pos & 0xffff,
+                                           (pos >> 16) & 0xffff);
+        }
+        for (int j = 0; j < 6; j++) {
+            uint32_t dj = dpu_r(s, lb_ofs[j] + DPU_LB_DYNAMIC);
+            if (DPU_LB_CLKEN(dj) && DPU_LB_PRIM(dj) == 0x14 + cur) {
+                next = j;
+                break;
+            }
+        }
+        cur = next;
     }
 
-    src_width = stride;   /* source row pitch in bytes (XRGB8888) */
-    if (s->invalidate || s->fb_base != base || s->src_width != src_width ||
-        s->rows != (int)height) {
-        framebuffer_update_memory_section(&s->fbsection, get_system_memory(),
-                                          base, height, src_width);
-        s->fb_base = base;
-        s->src_width = src_width;
-        s->rows = height;
+    /*
+     * Fallback: if no LayerBlend chain was active, scan the primary directly
+     * (keeps the plain boot-logo path working regardless of LB programming).
+     */
+    if (planes == 0) {
+        imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0);
     }
 
-    framebuffer_update_display(surface, &s->fbsection, width, height,
-                               src_width, surface_stride(surface), 0,
-                               s->invalidate, imx95_dpu_draw_xrgb8888, s,
-                               &first, &last);
-    if (first >= 0) {
-        qemu_console_update(s->con, 0, first, width, last - first + 1);
-    }
-    s->invalidate = false;
+    qemu_console_update(s->con, 0, 0, w, h);
     return true;
 }
 

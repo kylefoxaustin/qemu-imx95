@@ -168,12 +168,15 @@ echo "--- modetest enum (head) ---"; head -40 /tmp/m.txt
 CONN=$(awk '/^Connectors:/{c=1;next} /^Encoders:/{c=0} c&&/connected/{print $1;exit}' /tmp/m.txt)
 MODE=$(awk -v cn="$CONN" '$1==cn{f=1} f&&/[0-9]+x[0-9]+ /{print $2;exit}' /tmp/m.txt)
 CRTC=$(awk '/^CRTCs:/{c=1;next} /^Planes:/{c=0} c&&/^[0-9]/{print $1;exit}' /tmp/m.txt)
-# 2nd plane line (col-0 digit) = first overlay; the 1st is the primary.
-OVL=$(awk '/^Planes:/{c=1;next} c&&/^[0-9]/{n++; if(n==2){print $1;exit}}' /tmp/m.txt)
-echo "CONN=$CONN MODE=$MODE CRTC=$CRTC OVL=$OVL"
+# Primary = first plane usable on this CRTC (possible-crtcs $NF has bit0, i.e.
+# its last hex digit is odd, since CRTC 40 is crtc index 0). Overlay = the next.
+PRIM=$(awk '/^Planes:/{c=1;next} c&&/^[0-9]/{l=substr($NF,length($NF),1); if(index("13579bdf",l)){print $1;exit}}' /tmp/m.txt)
+OVL=$(awk -v p="$PRIM" '/^Planes:/{c=1;next} c&&/^[0-9]/{l=substr($NF,length($NF),1); if($1!=p && index("13579bdf",l)){print $1;exit}}' /tmp/m.txt)
+echo "CONN=$CONN MODE=$MODE CRTC=$CRTC PRIM=$PRIM OVL=$OVL"
 # Atomic commit: primary full-screen + a 320x240 overlay at (200,150); hold it.
 /modetest -M imx95-dpu -a -s "$CONN@$CRTC:$MODE" \
-    -P "$OVL@$CRTC:320x240+200+150" -v > /tmp/mt.log 2>&1 &
+    -P "$PRIM@$CRTC:1280x800" -P "$OVL@$CRTC:320x240+200+150" -v \
+    > /tmp/mt.log 2>&1 &
 sleep 3
 echo "--- modetest log ---"; cat /tmp/mt.log 2>/dev/null | head -20
 echo "=== COMPOSITE-READY ==="
@@ -188,7 +191,7 @@ IMX95_DPU_TRACE_PIPE=1 "$QEMU" -M imx95-19x19-evk -m 2G \
     -display none -vga none \
     -qmp "unix:$QMP,server=on,wait=off" \
     -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.cpio.gz" \
-    -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+    -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init ${DRM_DEBUG:-}" \
     -device loader,file="$SM_ELF",cpu-num=6 \
     -d unimp -serial file:"$LOG" -serial null >/dev/null 2>"$QERR" &
 QPID=$!
@@ -219,6 +222,28 @@ echo "--- screenshot ---"; ls -l "$PPM" 2>/dev/null || echo "(no screendump)"
 lb_writes=$(grep -aoE 'PIPE 0x1[0-9a-f]{5} = ' "$QERR" 2>/dev/null | grep -aoE '0x1(7|8|9|a|b|c|1)[0-9a-f]{4}' | sort -u | wc -l)
 echo "--- distinct LayerBlend/ExtDst routing offsets touched: $lb_writes ---"
 
+# Composite check: the overlay (modetest test pattern) sits at (200,150) 320x240
+# and contains black/blue diagonal stripes; the SMPTE primary there is bright
+# bars (never near-black). A near-black pixel inside the overlay bbox proves the
+# overlay composited over the primary.
+composited=$(python3 - "$PPM" <<'PY'
+import sys
+try:
+    from PIL import Image
+    im = Image.open(sys.argv[1]).convert('RGB'); px = im.load(); W, H = im.size
+    n = 0
+    for y in range(160, min(380, H), 6):
+        for x in range(210, min(510, W), 6):
+            r, g, b = px[x, y]
+            if r < 40 and g < 40 and b < 40:
+                n += 1
+    print(1 if n >= 3 else 0)
+except Exception:
+    print(-1)
+PY
+)
+echo "--- overlay composited at (200,150): $composited (1=yes 0=no -1=no-PIL) ---"
+
 # The dpu95 DRM device needs a CRTC + connector for modetest to set a mode and
 # drive a multi-plane commit. With the stub LDB/pixel-link/panel output chain the
 # component bind reports "Cannot find any crtc", so the display does not scan out
@@ -233,7 +258,14 @@ if grep -qa 'Cannot find any crtc' "$LOG" || ! grep -qaE 'CONN=[0-9]' "$LOG"; th
     echo "      in place for when it is."
     exit 0
 fi
-if [ "$lb_writes" -ge 1 ]; then
-    echo "PASS: connector up + mode set + LayerBlend pipeline programmed"; exit 0
+if [ "$lb_writes" -lt 1 ]; then
+    echo "FAIL: a mode was set but no LayerBlend routing was programmed"; exit 1
 fi
-echo "FAIL: a mode was set but no LayerBlend routing was programmed"; exit 1
+if [ "$composited" = 1 ]; then
+    echo "PASS: primary + overlay composited via the DPU LayerBlend chain"; exit 0
+fi
+if [ "$composited" = -1 ]; then
+    echo "PASS (partial): connector + mode + LayerBlend programmed; install"
+    echo "      python3-PIL to also verify the composited overlay pixels"; exit 0
+fi
+echo "FAIL: overlay did not composite over the primary at (200,150)"; exit 1

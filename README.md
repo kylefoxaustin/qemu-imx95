@@ -181,14 +181,21 @@ driver's data path runs end to end — data actually moves) or **brings up** (th
 driver binds and the device registers / enumerates — the registration bar, no
 working host data path yet):
 
-- **DPU display — functional.** The i.MX 95 DPU scans the primary-plane
-  FetchLayer framebuffer out of guest DRAM to a QEMU console
-  (`hw/misc/imx95_dpu.c`); stock `dpu95` binds, fbcon comes up, and the
-  **kernel boot logo renders** — six Tux penguins, one per A55 — at 1920×1200
-  on the 19×19 EVK LVDS panel timing. The FrameGen vblank + shadow-load
-  interrupts are wired through a from-scratch `fsl,imx-irqsteer`
+- **DPU display + compositing — functional.** The i.MX 95 DPU
+  (`hw/misc/imx95_dpu.c`) reads plane framebuffers out of guest DRAM and
+  composites them through the **LayerBlend** chain to a QEMU console. stock
+  `dpu95` binds, fbcon comes up, and the **kernel boot logo renders** — six Tux
+  penguins, one per A55. **Multi-plane compositing** works: a primary plus an
+  overlay plane (each FetchLayer → LayerBlend, positioned by POSITION) blend in
+  the modelled chain — validated by booting libdrm `modetest`, atomically
+  committing a primary + a 320×240 overlay, and confirming the overlay
+  composited over the primary via QMP screendump (`tests/compositing/`). The
+  FrameGen vblank + shadow-load interrupts ride a from-scratch `fsl,imx-irqsteer`
   (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
-  `flip_done` timeouts) and the logo flushes through the normal page-flip.
+  `flip_done` timeouts). The display-output connector chain (pixel-interleaver →
+  pixel-link → LDB → LVDS-PHY → panel) registers a DRM connector once enabled in
+  the dtb. Opaque blend only so far (per-pixel alpha-blend, scaling, the second
+  pixel pipeline and YUV planes are not modelled yet).
 - **2D blit engine — functional.** The DPU's 2D blit block (the Socionext
   display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
