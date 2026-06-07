@@ -37,6 +37,7 @@ exec > /dev/console 2>&1
 sleep 9
 echo "=== I2C2-TEST ==="
 echo "leds: $(ls /sys/class/leds/ 2>/dev/null | tr '\n' ' ')"
+echo "adp5585: $(readlink /sys/bus/i2c/devices/1-0034/driver 2>/dev/null | xargs basename 2>/dev/null)"
 echo "=== I2C2-TEST-DONE ==="
 /bin/busybox poweroff -f
 INIT
@@ -56,5 +57,6 @@ grep -qa 'pca963x:backlight' "$LOG" && echo "  ok   PCA9632 LED controller bound
 # No expander on any real bus should time out (i2c-2 0x20, i2c-4/5 0x21).
 n=$(grep -caE 'pca953x (2-0020|4-0021|5-0021).* -110' "$LOG" 2>/dev/null || true)
 [ "${n:-0}" = 0 ] && echo "  ok   PCA953x/6416 expanders probed (no -110)" || { echo "  MISS expander (-110)"; pass=0; }
-[ "$pass" = 1 ] && { echo "PASS: i2c-2/4/5 buses + devices functional"; exit 0; }
+grep -qa 'adp5585: adp5585' "$LOG" && echo "  ok   ADP5585 MFD bound (i2c-1)" || { echo "  MISS adp5585"; pass=0; }
+[ "$pass" = 1 ] && { echo "PASS: i2c-1/2/4/5 buses + devices functional"; exit 0; }
 echo "FAIL"; exit 1

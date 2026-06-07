@@ -281,8 +281,10 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
          * below.
          */
         FSL_IMX95_LPI2C6,
-        /* LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below. */
-        FSL_IMX95_LPI2C8,
+        /*
+         * LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below.
+         * LPI2C8 (0x44350000 = Linux i2c-1): real master + adp5585, below.
+         */
         /* usb2 (0x4c200000) is a real ChipIdea model below. */
         FSL_IMX95_USB_PHY,
     };
@@ -1750,6 +1752,27 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
                 i2c_slave_create_simple(i2c, "pcal6408a", 0x21);
             }
+        }
+
+        /*
+         * lpi2c@44350000 (Linux i2c-1): real master so the ADP5585 GPIO/PWM
+         * IO-expander at 0x34 probes instead of -110. The adp5585 model seeds
+         * its manufacturer-id register so the MFD driver accepts it and adds
+         * its gpio + pwm sub-devices.
+         */
+        {
+            DeviceState *m = qdev_new("imx.lpi2c");
+            I2CBus *i2c;
+
+            if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
+                return;
+            }
+            sysbus_mmio_map(SYS_BUS_DEVICE(m),
+                            0, fsl_imx95_memmap[FSL_IMX95_LPI2C8].addr);
+            sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
+                               qdev_get_gpio_in(gicdev, 14)); /* dtsi SPI 14 */
+            i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+            i2c_slave_create_simple(i2c, "adp5585", 0x34);
         }
 
         /*

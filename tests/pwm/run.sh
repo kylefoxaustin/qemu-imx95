@@ -28,10 +28,15 @@ cat > "$root/init" <<'INIT'
 /bin/busybox --install -s /bin 2>/dev/null
 exec > /dev/console 2>&1
 sleep 9
-C=/sys/class/pwm/pwmchip0
+# The TPM chips have 6 channels; find one by npwm (other PWMs, e.g. the adp5585,
+# may enumerate as lower-numbered pwmchips).
+C=""
+for c in /sys/class/pwm/pwmchip*; do
+    [ "$(cat $c/npwm 2>/dev/null)" = 6 ] && C=$c && break
+done
 echo "=== PWM-TEST ==="
 echo "chips: $(ls /sys/class/pwm/ 2>/dev/null | tr '\n' ' ')"
-echo "npwm0=$(cat $C/npwm 2>/dev/null)"
+echo "tpm=$C npwm=$(cat $C/npwm 2>/dev/null)"
 echo 0 > $C/export 2>/dev/null
 echo 1000000 > $C/pwm0/period 2>/dev/null
 echo 400000 > $C/pwm0/duty_cycle 2>/dev/null
@@ -49,7 +54,7 @@ timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
     -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 echo "=== pwm report ==="; sed -n '/PWM-TEST ===/,/PWM-TEST-DONE/p' "$LOG" | grep -vE 'PWM-TEST ==='
 pass=1
-grep -qa 'npwm0=6' "$LOG" && echo "  ok   pwmchip npwm=6" || { echo "  MISS npwm"; pass=0; }
+grep -qa 'npwm=6' "$LOG" && echo "  ok   pwmchip npwm=6" || { echo "  MISS npwm"; pass=0; }
 grep -qa 'rd period=1000000 duty=400000 en=1' "$LOG" && echo "  ok   period/duty round-trip" || { echo "  MISS round-trip"; pass=0; }
 [ "$pass" = 1 ] && { echo "PASS: TPM PWM registers + functional"; exit 0; }
 echo "FAIL"; exit 1

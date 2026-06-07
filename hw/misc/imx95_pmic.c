@@ -255,6 +255,42 @@ static const TypeInfo pcal6524_info = {
     .parent        = TYPE_PCAL6408A,
 };
 
+/*
+ * ADP5585 - ADI GPIO/PWM IO-expander MFD (i2c-1 at 0x34 on the 19x19 EVK). The
+ * adp5585 driver reads the ID register (0x00) and rejects the device unless its
+ * manufacturer-id nibble (bits [7:4]) is 0x2, so the register file is the same
+ * as the PCAL6408A but with that ID byte seeded; the gpio/pwm sub-devices the
+ * MFD then adds just drive the remaining registers.
+ */
+#define TYPE_ADP5585 "adp5585"
+
+#define ADP5585_ID_REG          0x00
+#define ADP5585_MAN_ID_VALUE    0x20   /* bits [7:4] = 0x2 */
+
+static void adp5585_reset(DeviceState *dev)
+{
+    PCAL6408AState *s = PCAL6408A(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+    s->regs[ADP5585_ID_REG] = ADP5585_MAN_ID_VALUE;
+    s->cur_reg = 0;
+    s->wcount = 0;
+}
+
+static void adp5585_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    device_class_set_legacy_reset(dc, adp5585_reset);
+    dc->desc = "ADI ADP5585 GPIO/PWM expander";
+}
+
+static const TypeInfo adp5585_info = {
+    .name          = TYPE_ADP5585,
+    .parent        = TYPE_PCAL6408A,
+    .class_init    = adp5585_class_init,
+};
+
 /* ============================ PF53 PMIC ============================ */
 
 /*
@@ -354,6 +390,7 @@ static void imx95_pmic_register_types(void)
     type_register_static(&pf09_info);
     type_register_static(&pcal6408a_info);
     type_register_static(&pcal6524_info);
+    type_register_static(&adp5585_info);
     type_register_static(&pf53_info);
 }
 
