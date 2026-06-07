@@ -29,7 +29,14 @@ at (200,150)** atomically, and `hw/misc/imx95_dpu.c` walks the LayerBlend chain
 to composite the planes. The QMP screendump shows the overlay's test pattern
 over the SMPTE bars at the right position; the harness asserts that (a near-black
 overlay pixel inside the 320x240 bbox the bright SMPTE bars never produce) and
-PASSES. Opaque blend only for now — per-pixel alpha-blend is TODO.
+PASSES.
+
+By default the overlay is XR24 (RGB, via a FetchLayer). Set `OVL_FMT=NV12` to
+make modetest drive a **YUV (NV12) overlay** instead: the model routes it
+through the FetchYUV (luma) + FetchEco (interleaved chroma) units and converts
+NV12->RGB (BT.601) before compositing. The screendump shows the modetest YUV
+test pattern (diagonal stripes) rendered with correct colours over the SMPTE
+primary. Opaque blend only for now — per-pixel alpha-blend is TODO.
 
 ## Running
 

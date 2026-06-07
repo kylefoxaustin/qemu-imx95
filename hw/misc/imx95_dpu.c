@@ -105,6 +105,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define DPU_FETCHLAYER1   0x1e0000   /* second FetchLayer = overlay plane */
 #define DPU_LINK_FETCHLAYER0 0x1a    /* pixengcfg link ids (dpu95.h) */
 #define DPU_LINK_FETCHLAYER1 0x1b
+/*
+ * FetchYUV planes (Y) + their FetchEco companions (chroma) for NV12 overlays.
+ * FetchYUV register offsets differ from FetchLayer: BASEADDRESS +0x28, ATTR
+ * +0x38, DIM +0x3c, LAYERPROPERTY +0x58, and its pixengcfg dynamic (+0x1008)
+ * selects the FetchEco that holds the interleaved UV plane (BASEADDRESS +0x10).
+ */
+#define FY_BASEADDRESS    0x28
+#define FY_BASEADDRESSMSB 0x2c
+#define FY_ATTR           0x38       /* [15:0] stride-1 */
+#define FY_DIM            0x3c       /* w-1 | (h-1)<<16 */
+#define FY_LAYERPROPERTY  0x58       /* bit31 SOURCEBUFFERENABLE */
+#define FY_PEC_DYNAMIC    0x1008     /* SEC_SEL[..] = the FetchEco link id */
+#define FE_BASEADDRESS    0x10
+#define FE_BASEADDRESSMSB 0x14
+#define FE_ATTR           0x20       /* [15:0] stride-1 */
+#define FE_DIM            0x24       /* chroma w-1 | (h-1)<<16 (half-res) */
 /* LayerBlend per-unit regs: pixengcfg DYNAMIC at +0x1008, rest at low offs. */
 #define DPU_LB_DYNAMIC    0x1008   /* PRIM_SEL[5:0] SEC_SEL[13:8] CLKEN[25:24]*/
 #define DPU_LB_BLENDCTL   0x10     /* PRIM_C[3:0] SEC_C[7:4] ALPHA[23:16] */
@@ -328,7 +344,33 @@ static hwaddr imx95_dpu_plane_base(uint32_t link)
     switch (link) {
     case DPU_LINK_FETCHLAYER0: return DPU_FETCHLAYER0;
     case DPU_LINK_FETCHLAYER1: return DPU_FETCHLAYER1;
-    default:                   return 0;   /* YUV/eco planes not modelled yet */
+    default:                   return 0;   /* not a FetchLayer */
+    }
+}
+
+/*
+ * pixengcfg link id -> FetchYUV sub-block base (NV12 luma plane). (dpu95-core.c
+ * fy_ofss[], indexed by fy_ids {0,1,2,3}; link ids from dpu95.h.)
+ */
+static hwaddr imx95_dpu_fetchyuv_base(uint32_t link)
+{
+    switch (link) {
+    case 0x1d: return 0x200000;   /* FETCHYUV0 */
+    case 0x1f: return 0x220000;   /* FETCHYUV1 */
+    case 0x21: return 0x240000;   /* FETCHYUV2 */
+    case 0x1c: return 0x1f0000;   /* FETCHYUV3 */
+    default:   return 0;          /* not a FetchYUV */
+    }
+}
+
+/* pixengcfg link id -> FetchEco sub-block base (interleaved-UV companion). */
+static hwaddr imx95_dpu_fetcheco_base(uint32_t link)
+{
+    switch (link) {
+    case 0x1e: return 0x210000;   /* FETCHECO0 */
+    case 0x20: return 0x230000;   /* FETCHECO1 */
+    case 0x22: return 0x250000;   /* FETCHECO2 */
+    default:   return 0;          /* not a FetchEco */
     }
 }
 
@@ -424,6 +466,102 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
     return 1;
 }
 
+/* BT.601 limited-range NV12 -> RGB for one pixel. */
+static inline void imx95_yuv601_to_rgb(int y, int u, int v,
+                                       uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    int c = y - 16, d = u - 128, e = v - 128;
+    int rr = (298 * c + 409 * e + 128) >> 8;
+    int gg = (298 * c - 100 * d - 208 * e + 128) >> 8;
+    int bb = (298 * c + 516 * d + 128) >> 8;
+
+    *r = rr < 0 ? 0 : rr > 255 ? 255 : rr;
+    *g = gg < 0 ? 0 : gg > 255 ? 255 : gg;
+    *b = bb < 0 ? 0 : bb > 255 ? 255 : bb;
+}
+
+/*
+ * Composite an NV12 overlay onto the surface at (px,py): luma from the FetchYUV
+ * unit (fy); interleaved chroma from the FetchEco its DYNAMIC reg selects.
+ * Same LayerBlend blend as imx95_dpu_blit_plane; YUV pixels are fully opaque.
+ */
+static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
+                              hwaddr fy, hwaddr lb, int px, int py)
+{
+    uint32_t prop = dpu_r(s, fy + FY_LAYERPROPERTY);
+    uint64_t ybase = dpu_r(s, fy + FY_BASEADDRESS) |
+                     ((uint64_t)dpu_r(s, fy + FY_BASEADDRESSMSB) << 32);
+    uint32_t ystride = FL_ATTR_STRIDE(dpu_r(s, fy + FY_ATTR));
+    uint32_t dim = dpu_r(s, fy + FY_DIM);
+    uint32_t pw = (dim & 0x3fff) + 1, ph = ((dim >> 16) & 0x3fff) + 1;
+    uint32_t eco = dpu_r(s, fy + FY_PEC_DYNAMIC) & 0x3f;
+    hwaddr fe = imx95_dpu_fetcheco_base(eco);
+    uint64_t cbase;
+    uint32_t cstride;
+    uint8_t *sd = surface_data(surface);
+    int sstride = surface_stride(surface);
+    int sw = surface_width(surface), sh = surface_height(surface);
+    uint32_t bc = lb ? dpu_r(s, lb + DPU_LB_BLENDCTL) : 0;
+    uint8_t ca = DPU_LB_ALPHA(bc);
+    uint32_t pf = DPU_LB_PRIM_FUNC(bc), sf = DPU_LB_SEC_FUNC(bc);
+    bool opaque = lb == 0 || (pf == 0 && sf == 6 && ca == 0xff);
+    g_autofree uint8_t *yrow = NULL;
+    g_autofree uint8_t *crow = NULL;
+
+    if (!(prop & FL_SOURCEBUFFERENABLE) || ybase == 0 || fe == 0 ||
+        pw == 0 || ph == 0) {
+        return 0;
+    }
+    cbase = dpu_r(s, fe + FE_BASEADDRESS) |
+            ((uint64_t)dpu_r(s, fe + FE_BASEADDRESSMSB) << 32);
+    cstride = FL_ATTR_STRIDE(dpu_r(s, fe + FE_ATTR));
+    if (cbase == 0) {
+        return 0;
+    }
+    yrow = g_malloc(pw);
+    crow = g_malloc((size_t)(pw / 2 + 1) * 2);   /* interleaved Cb,Cr */
+    for (uint32_t y = 0; y < ph; y++) {
+        int dy = py + (int)y;
+        uint32_t *d;
+        if (dy < 0 || dy >= sh) {
+            continue;
+        }
+        cpu_physical_memory_read(ybase + (uint64_t)y * ystride, yrow, pw);
+        cpu_physical_memory_read(cbase + (uint64_t)(y / 2) * cstride, crow,
+                                 (size_t)(pw / 2) * 2);
+        d = (uint32_t *)(sd + (size_t)dy * sstride);
+        for (uint32_t x = 0; x < pw; x++) {
+            int dx = px + (int)x;
+            uint8_t sr, sg, sb;
+            if (dx < 0 || dx >= sw) {
+                continue;
+            }
+            uint32_t ci = (x / 2) * 2;
+            imx95_yuv601_to_rgb(yrow[x], crow[ci], crow[ci + 1],
+                                &sr, &sg, &sb);
+            if (opaque) {
+                d[dx] = rgb_to_pixel32(sr, sg, sb);
+            } else {
+                uint8_t sa = 0xff;
+                uint32_t fp = imx95_lb_factor(pf, ca, sa);
+                uint32_t fs = imx95_lb_factor(sf, ca, sa);
+                uint32_t pp = d[dx];
+                uint32_t r = (((pp >> 16) & 0xff) * fp + sr * fs) / 255;
+                uint32_t g = (((pp >> 8) & 0xff) * fp + sg * fs) / 255;
+                uint32_t b = ((pp & 0xff) * fp + sb * fs) / 255;
+                d[dx] = rgb_to_pixel32(r > 255 ? 255 : r, g > 255 ? 255 : g,
+                                       b > 255 ? 255 : b);
+            }
+        }
+    }
+    if (s->trace) {
+        qemu_log("imx95-dpu: yuv fy=0x%" HWADDR_PRIx " eco=0x%" HWADDR_PRIx
+                 " %ux%u @ (%d,%d) %s a=%u\n", fy, fe, pw, ph, px, py,
+                 opaque ? "opaque" : "blend", ca);
+    }
+    return 1;
+}
+
 static bool imx95_dpu_gfx_update(void *opaque)
 {
     IMX95DPUState *s = opaque;
@@ -460,12 +598,16 @@ static bool imx95_dpu_gfx_update(void *opaque)
     for (guard = 0; cur >= 0 && guard < 6; guard++) {
         uint32_t dyn = dpu_r(s, lb_ofs[cur] + DPU_LB_DYNAMIC);
         uint32_t pos = dpu_r(s, lb_ofs[cur] + DPU_LB_POSITION);
-        hwaddr fl = imx95_dpu_plane_base(DPU_LB_SEC(dyn));
+        uint32_t sec = DPU_LB_SEC(dyn);
+        hwaddr fl = imx95_dpu_plane_base(sec);
+        hwaddr fy = imx95_dpu_fetchyuv_base(sec);
+        int px = pos & 0xffff, py = (pos >> 16) & 0xffff;
         int next = -1;
 
         if (fl) {
-            planes += imx95_dpu_blit_plane(s, surface, fl, lb_ofs[cur],
-                                           pos & 0xffff, (pos >> 16) & 0xffff);
+            planes += imx95_dpu_blit_plane(s, surface, fl, lb_ofs[cur], px, py);
+        } else if (fy) {
+            planes += imx95_dpu_blit_yuv(s, surface, fy, lb_ofs[cur], px, py);
         }
         for (int j = 0; j < 6; j++) {
             uint32_t dj = dpu_r(s, lb_ofs[j] + DPU_LB_DYNAMIC);
