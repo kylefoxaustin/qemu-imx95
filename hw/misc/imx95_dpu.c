@@ -206,6 +206,7 @@ struct IMX95DPUState {
     MemoryRegionSection fbsection;
     bool invalidate;
     bool trace;
+    bool pipe_trace;
     uint64_t fb_base;
     int rows;
     int src_width;
@@ -692,6 +693,17 @@ static void imx95_dpu_write(void *opaque, hwaddr off, uint64_t val,
         }
         s->invalidate = true;
     }
+
+    /*
+     * Display-pipeline write trace (IMX95_DPU_TRACE_PIPE) — used to reverse-
+     * engineer the LayerBlend/ExtDst/plane routing for compositing. Covers the
+     * 0xf0000.. units (constframe / fetch* / layerblend / extdst / framegen);
+     * the blit blocks sit below 0xf0000 so they are not logged here.
+     */
+    if (s->pipe_trace && off >= 0xf0000 && off < 0x3a0000) {
+        qemu_log("imx95-dpu: PIPE 0x%05x = 0x%08x\n",
+                 (unsigned)off, (uint32_t)val);
+    }
 }
 
 static const MemoryRegionOps imx95_dpu_ops = {
@@ -732,6 +744,7 @@ static void imx95_dpu_realize(DeviceState *dev, Error **errp)
 
     s->regs = g_malloc0(IMX95_DPU_REG_SIZE);
     s->trace = getenv("IMX95_DPU_TRACE") != NULL;
+    s->pipe_trace = getenv("IMX95_DPU_TRACE_PIPE") != NULL;
     s->invalidate = true;
 
     memory_region_init_io(&s->iomem, OBJECT(dev), &imx95_dpu_ops, s,
