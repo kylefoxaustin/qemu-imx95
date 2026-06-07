@@ -53,6 +53,8 @@
 #include "hw/misc/unimp.h"
 #include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
+#include "hw/ssi/ssi.h"
+#include "system/blockdev.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
 #include "target/arm/cpu-qom.h"
@@ -403,7 +405,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x42530000, 64 * KiB }, /* i2c (Linux i2c-2) */
             { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
             { 0x42590000, 64 * KiB }, /* serial */
-            { 0x425e0000, 64 * KiB }, /* spi */
+            /* 0x425e0000 (flexspi1) is a real FlexSPI + NOR model below. */
             { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB }, /* i2c */
             /* 0x426d0000 (Linux i2c-6) is a real master + pcal6524 below. */
             { 0x42710000, 64 * KiB }, /* spi */
@@ -1816,6 +1818,48 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 sysbus_connect_irq(adc_sbd, k,
                                    qdev_get_gpio_in(gicdev, 199 + k));
             }
+        }
+
+        /*
+         * FlexSPI (dtsi flexspi1 spi@425e0000, "nxp,imx8mm-fspi") + a serial
+         * NOR. The controller has two windows: the register block and a 128 MiB
+         * AHB read window at 0x28000000. The UNIMP stub returned zeros, so
+         * spi-nor's JEDEC/SFDP probe matched nothing and spi-nxp-fspi failed;
+         * the real model replays the driver's LUT onto an SSI bus so the flash
+         * enumerates and reads.
+         *
+         * The flash chip is a Micron mt25ql512ab (a fully-modelled SDR part)
+         * rather than the EVK's actual mt35xu01gbba: spi-nor's mt35xu info
+         * carries SPI_NOR_OCTAL_DTR_READ, so it forces an 8D-8D-8D transition
+         * that QEMU's generic m25p80 does not model. The substitute exercises
+         * the same controller datapath (the model being added here) over a NOR
+         * the m25p80 fully supports. The DT node is a generic "jedec,spi-nor",
+         * so it binds whatever part is present.
+         */
+        {
+            DeviceState *fspi = qdev_new("imx.fspi");
+            SysBusDevice *fspi_sbd = SYS_BUS_DEVICE(fspi);
+            DeviceState *flash;
+            DriveInfo *dinfo;
+
+            if (!sysbus_realize_and_unref(fspi_sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(fspi_sbd, 0, 0x425e0000);   /* registers */
+            sysbus_mmio_map(fspi_sbd, 1, 0x28000000);   /* AHB mmap window */
+            sysbus_connect_irq(fspi_sbd, 0,
+                               qdev_get_gpio_in(gicdev, 48)); /* dtsi SPI 48 */
+
+            flash = qdev_new("mt25ql512ab");
+            dinfo = drive_get(IF_MTD, 0, 0);
+            if (dinfo) {
+                qdev_prop_set_drive(flash, "drive",
+                                    blk_by_legacy_dinfo(dinfo));
+            }
+            qdev_realize_and_unref(flash,
+                                   qdev_get_child_bus(fspi, "spi"), errp);
+            qdev_connect_gpio_out_named(fspi, "cs", 0,
+                            qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0));
         }
 
         /*

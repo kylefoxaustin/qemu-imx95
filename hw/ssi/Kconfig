@@ -1,3 +1,8 @@
+config IMX_FSPI
+    bool
+    select SSI
+    select SSI_M25P80
+
 config PL022
     bool
     select SSI
