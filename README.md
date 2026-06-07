@@ -214,6 +214,14 @@ the display additionally renders pixels):
   real interrupt-driven masters with their slaves modelled: PCAL6408A / PCA953x
   expanders, a PCA9632 LED controller (`/sys/class/leds/pca963x:backlight`), and
   an ADP5585 GPIO/PWM expander MFD all probe over real buses (`tests/i2c/`).
+- **FlexSPI + serial NOR — functional.** The `nxp,imx8mm-fspi` controller
+  (`hw/ssi/imx_fspi.c`) decodes the `spi-nxp-fspi` driver's LUT and replays it
+  onto an SSI bus carrying a real `m25p80`, over both the IP-command FIFO path
+  and the AHB memory-mapped read window. Stock Linux enumerates a 64 MiB `mtd0`;
+  `tests/flexspi/` reads erased flash and round-trips a page-program
+  write/read-back. (The chip is a fully-SDR Micron `mt25ql512ab` stand-in: the
+  EVK's `mt35xu01gbba` mandates an octal-DTR mode QEMU's generic `m25p80` does
+  not model.)
 
 The display additionally renders pixels but stays at the registration bar for
 compositing; functional audio playback / capture would need the SAI/MICFIL FIFO
@@ -495,6 +503,9 @@ This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
     # functional small peripherals: RGPIO, TPM PWM, i.MX93 ADC, LPI2C buses
     tests/gpio/run.sh ; tests/pwm/run.sh ; tests/adc/run.sh ; tests/i2c/run.sh
 
+    # FlexSPI + serial NOR: enumerate a 64 MiB mtd, read + write/read-back
+    tests/flexspi/run.sh
+
 ## Methodology & contributing
 
 The project is built measure-first: propose a hypothesis, verify it against
@@ -576,6 +587,8 @@ working artifacts — they are not committed to the repo (the directory is
   model-level by qtest and through the real GStreamer media stack —
   `tests/gstreamer/`); and a sweep of **functional small peripherals** —
   RGPIO (`tests/gpio/`), TPM PWM (`tests/pwm/`), the i.MX93 ADC (`tests/adc/`),
-  and real interrupt-driven LPI2C masters with their expander / LED / ADP5585
-  slaves (`tests/i2c/`). Along the way: backed the PCIe `app`/`atu` windows so an
+  real interrupt-driven LPI2C masters with their expander / LED / ADP5585
+  slaves (`tests/i2c/`), and a LUT-driven **FlexSPI** controller + serial NOR
+  (`hw/ssi/imx_fspi.c`, a 64 MiB `mtd0` with read + write/read-back —
+  `tests/flexspi/`). Along the way: backed the PCIe `app`/`atu` windows so an
   unbacked-register external abort can't wedge the boot.
