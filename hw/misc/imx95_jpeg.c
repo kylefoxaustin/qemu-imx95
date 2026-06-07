@@ -50,8 +50,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95JpegState, IMX95_JPEG)
 
 /* CAST core. */
 #define CAST_STATUS0            0x100
+#define CAST_MODE               0x100   /* = CAST_STATUS0 */
+#define CAST_QUALITY            0x108   /* = CAST_STATUS2 */
 #define CAST_CTRL               0x134   /* = CAST_STATUS13 */
 #define CAST_STATUS_LAST        0x14c
+
+/* CAST_MODE "GO" values written by enc_mode_go() (extended-seq / baseline). */
+#define CAST_MODE_ENC_GO        0x140
+#define CAST_MODE_ENC_GO_EXT    0x150
+#define JPEG_ENC_DEFAULT_QUALITY 85
 
 /* Per-slot registers (slot s at 0x10000 * (s + 1)). */
 #define SLOT_BASE               0x10000
@@ -308,25 +315,166 @@ static uint32_t imx95_jpeg_emit(const MxcJpegDesc *d, const uint8_t *rgb,
     }
     return total;
 }
+
+/* YCbCr (BT.601, libjpeg convention) -> RGB, for raw YUV encode input. */
+static inline void yuv_to_rgb(int y, int cb, int cr, uint8_t *rgb)
+{
+    cb -= 128;
+    cr -= 128;
+    rgb[0] = clamp_u8(y + ((91881 * cr) >> 16));
+    rgb[1] = clamp_u8(y - ((22554 * cb + 46802 * cr) >> 16));
+    rgb[2] = clamp_u8(y + ((116130 * cb) >> 16));
+}
+
+/*
+ * Read the raw source frame (descriptor buf_base0/1) in the STM_CTRL output
+ * format and return it as a w*h*3 RGB buffer (the inverse of imx95_jpeg_emit).
+ * NULL on an unsupported format.
+ */
+static uint8_t *imx95_jpeg_ingest(const MxcJpegDesc *d, uint32_t w, uint32_t h)
+{
+    uint32_t fmt = (d->stm_ctrl >> STM_CTRL_IMG_FMT_SHIFT) &
+                   STM_CTRL_IMG_FMT_MASK;
+    uint32_t pitch = d->line_pitch;
+    uint8_t *rgb = g_malloc((size_t)w * h * 3);
+    g_autofree uint8_t *line = NULL;
+    uint32_t y, x, bpp;
+
+    switch (fmt) {
+    case IMGFMT_BGR:
+    case IMGFMT_ABGR:
+    case IMGFMT_GRAY:
+    case IMGFMT_YUV444:
+        bpp = (fmt == IMGFMT_GRAY) ? 1 : (fmt == IMGFMT_ABGR) ? 4 : 3;
+        if (!pitch) {
+            pitch = w * bpp;
+        }
+        line = g_malloc(pitch);
+        for (y = 0; y < h; y++) {
+            uint8_t *o = rgb + (size_t)y * w * 3;
+            dma_memory_read(&address_space_memory,
+                            d->buf_base0 + (uint64_t)y * pitch, line, pitch,
+                            MEMTXATTRS_UNSPECIFIED);
+            for (x = 0; x < w; x++) {
+                const uint8_t *s = line + x * bpp;
+                switch (fmt) {
+                case IMGFMT_BGR:
+                    o[x * 3] = s[2]; o[x * 3 + 1] = s[1]; o[x * 3 + 2] = s[0];
+                    break;
+                case IMGFMT_ABGR:
+                    o[x * 3] = s[3]; o[x * 3 + 1] = s[2]; o[x * 3 + 2] = s[1];
+                    break;
+                case IMGFMT_GRAY:
+                    o[x * 3] = o[x * 3 + 1] = o[x * 3 + 2] = s[0];
+                    break;
+                default: /* YUV444 */
+                    yuv_to_rgb(s[0], s[1], s[2], o + x * 3);
+                    break;
+                }
+            }
+        }
+        break;
+    case IMGFMT_YUV420: {           /* NV12: Y plane buf0, UV plane buf1 */
+        uint32_t yp = pitch ? pitch : w;
+        g_autofree uint8_t *yl = g_malloc(yp);
+        g_autofree uint8_t *uvl = g_malloc(yp);
+
+        for (y = 0; y < h; y++) {
+            uint8_t *o = rgb + (size_t)y * w * 3;
+            dma_memory_read(&address_space_memory,
+                            d->buf_base0 + (uint64_t)y * yp, yl, yp,
+                            MEMTXATTRS_UNSPECIFIED);
+            dma_memory_read(&address_space_memory,
+                            d->buf_base1 + (uint64_t)(y / 2) * yp, uvl, yp,
+                            MEMTXATTRS_UNSPECIFIED);
+            for (x = 0; x < w; x++) {
+                yuv_to_rgb(yl[x], uvl[(x / 2) * 2], uvl[(x / 2) * 2 + 1],
+                           o + x * 3);
+            }
+        }
+        break;
+    }
+    default:
+        g_free(rgb);
+        return NULL;
+    }
+    return rgb;
+}
+
+/* Compress an RGB frame to a JPEG bitstream; g_malloc'd, *len set. */
+static uint8_t *imx95_jpeg_compress(const uint8_t *rgb, uint32_t w, uint32_t h,
+                                    int quality, unsigned long *len)
+{
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_err_jmp jerr;
+    unsigned char *out = NULL;
+    unsigned long outlen = 0;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = imx95_jpeg_err_exit;
+    if (setjmp(jerr.jmp)) {
+        jpeg_destroy_compress(&cinfo);
+        free(out);
+        return NULL;
+    }
+
+    jpeg_create_compress(&cinfo);
+    jpeg_mem_dest(&cinfo, &out, &outlen);
+    cinfo.image_width = w;
+    cinfo.image_height = h;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = (JSAMPROW)(rgb + (size_t)cinfo.next_scanline * w * 3);
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    /* Copy out of libjpeg's malloc into g_malloc so callers free uniformly. */
+    *len = outlen;
+    uint8_t *ret = g_malloc(outlen);
+    memcpy(ret, out, outlen);
+    free(out);
+    return ret;
+}
 #endif /* CONFIG_LIBJPEG */
 
 /* Perform the decode for one slot, latch status, raise the interrupt. */
-static void imx95_jpeg_run(IMX95JpegState *s, int slot_idx)
+/*
+ * Follow the slot's descriptor chain to the end-of-chain (data) descriptor -
+ * the one with the real source/destination buffers; the leading cfg descriptor
+ * only primes the real HW. Returns false if the slot has no descriptor.
+ */
+static bool imx95_jpeg_data_desc(IMX95JpegState *s, IMX95JpegSlot *slot,
+                                 MxcJpegDesc *d)
 {
-    IMX95JpegSlot *slot = &s->slot[slot_idx];
     uint32_t addr = slot->nxt_descpt & ~MXC_NXT_DESCPT_EN;
-    MxcJpegDesc d;
     int guard = 0;
 
     if (!addr) {
-        return;
+        return false;
     }
-    /* Walk to the end-of-chain (data) descriptor. */
     do {
         slot->cur_descpt = addr;
-        imx95_jpeg_read_desc(&d, addr);
-        addr = d.next_descpt_ptr & ~MXC_NXT_DESCPT_EN;
+        imx95_jpeg_read_desc(d, addr);
+        addr = d->next_descpt_ptr & ~MXC_NXT_DESCPT_EN;
     } while (addr && ++guard < IMX95_JPEG_NUM_SLOTS + 2);
+    return true;
+}
+
+/* Decode: source JPEG (stm_bufbase) -> frame (buf_base0) in stm_ctrl's fmt. */
+static void imx95_jpeg_run(IMX95JpegState *s, int slot_idx)
+{
+    IMX95JpegSlot *slot = &s->slot[slot_idx];
+    MxcJpegDesc d;
+
+    if (!imx95_jpeg_data_desc(s, slot, &d)) {
+        return;
+    }
 
 #ifdef CONFIG_LIBJPEG
     if (d.stm_bufbase && d.stm_bufsize && d.buf_base0) {
@@ -347,6 +495,48 @@ static void imx95_jpeg_run(IMX95JpegState *s, int slot_idx)
     }
 #endif
     /* No libjpeg, or a malformed stream: report a decode error. */
+    slot->status |= SLOT_STATUS_ENC_CONFIG_ERR;
+    qemu_set_irq(s->irq[slot_idx], 1);
+}
+
+/* Encode: raw frame (buf_base0/1) -> JPEG bitstream (stm_bufbase). */
+static void imx95_jpeg_run_encode(IMX95JpegState *s, int slot_idx)
+{
+    IMX95JpegSlot *slot = &s->slot[slot_idx];
+    MxcJpegDesc d;
+
+    if (!imx95_jpeg_data_desc(s, slot, &d)) {
+        return;
+    }
+
+#ifdef CONFIG_LIBJPEG
+    if (d.stm_bufbase && d.stm_bufsize && d.buf_base0 && d.imgsize) {
+        uint32_t w = d.imgsize >> 16;
+        uint32_t h = d.imgsize & 0xffff;
+        int q = s->cast[(CAST_QUALITY - CAST_STATUS0) / 4];
+        g_autofree uint8_t *rgb = NULL;
+        g_autofree uint8_t *jpg = NULL;
+        unsigned long jlen = 0;
+
+        if (q <= 0 || q > 100) {
+            q = JPEG_ENC_DEFAULT_QUALITY;
+        }
+        if (w && w <= JPEG_MAX_DIM && h && h <= JPEG_MAX_DIM) {
+            rgb = imx95_jpeg_ingest(&d, w, h);
+        }
+        if (rgb) {
+            jpg = imx95_jpeg_compress(rgb, w, h, q, &jlen);
+        }
+        if (jpg && jlen && jlen <= d.stm_bufsize) {
+            dma_memory_write(&address_space_memory, d.stm_bufbase, jpg, jlen,
+                             MEMTXATTRS_UNSPECIFIED);
+            slot->buf_ptr = jlen;
+            slot->status |= SLOT_STATUS_FRMDONE;
+            qemu_set_irq(s->irq[slot_idx], 1);
+            return;
+        }
+    }
+#endif
     slot->status |= SLOT_STATUS_ENC_CONFIG_ERR;
     qemu_set_irq(s->irq[slot_idx], 1);
 }
@@ -425,9 +615,14 @@ static void imx95_jpeg_write(void *opaque, hwaddr off, uint64_t val,
 
     if (off >= CAST_STATUS0 && off <= CAST_STATUS_LAST) {
         s->cast[(off - CAST_STATUS0) / 4] = v;
-        /* dec_mode_go() writes CAST_CTRL = MXC_DEC_EXIT_IDLE_MODE: kick. */
+        /* dec_mode_go() writes CAST_CTRL = MXC_DEC_EXIT_IDLE_MODE: decode. */
         if (off == CAST_CTRL && v == MXC_DEC_EXIT_IDLE_MODE) {
             imx95_jpeg_run(s, imx95_jpeg_active_slot(s));
+        }
+        /* enc_mode_go() writes CAST_MODE = 0x140/0x150 ("GO"): encode. */
+        if (off == CAST_MODE &&
+            (v == CAST_MODE_ENC_GO || v == CAST_MODE_ENC_GO_EXT)) {
+            imx95_jpeg_run_encode(s, imx95_jpeg_active_slot(s));
         }
         return;
     }

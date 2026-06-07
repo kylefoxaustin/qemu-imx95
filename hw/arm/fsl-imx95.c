@@ -438,14 +438,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
-            /*
-             * HW JPEG encoder (dtsi jpegenc, driver mxc-jpeg): registers
-             * /dev/video3 touching no registers, so back the window so a
-             * stream-on doesn't external-abort. Functional encode would need
-             * libjpeg compress; left at the registration bar for now. The
-             * jpegdec (0x4c500000) is a real functional model below.
-             */
-            { 0x4c550000, 0x50000 },  /* jpegenc */
+            /* jpegdec/jpegenc (0x4c500000/4c550000) are real models below. */
             { 0x4c810000, 64 * KiB }, /* syscon */
             /* netc pcie ecam0 (0x4ca00000) is now a real gpex host (v2.x). */
             { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 (EMDIO domain) */
@@ -1579,24 +1572,35 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * HW JPEG decoder (dtsi jpegdec@4c500000, driver mxc-jpeg). A real
-     * descriptor-driven model: it walks the slot's descriptor chain on the
-     * CAST_CTRL decode kick, decodes the source JPEG with libjpeg and writes
-     * the frame out in the descriptor's image format, then raises the slot's
-     * frame-done IRQ. Four per-slot GIC SPIs (295..298); the m2m driver uses
-     * slot 0. (jpegenc stays a registration stub above.)
+     * HW JPEG codecs (dtsi jpegdec@4c500000 / jpegenc@4c550000, driver
+     * mxc-jpeg). One descriptor-driven model serves both: on the decode kick
+     * (CAST_CTRL) it decodes the source JPEG with libjpeg into the descriptor's
+     * frame format; on the encode "GO" (CAST_MODE) it compresses the raw frame
+     * back to a JPEG. Each has four per-slot GIC SPIs (jpegdec 295.., jpegenc
+     * 291..); the m2m driver uses slot 0.
      */
     {
-        DeviceState *jpeg = qdev_new("imx95.jpeg");
-        SysBusDevice *sbd = SYS_BUS_DEVICE(jpeg);
-        int j;
+        static const struct {
+            hwaddr addr;
+            int irq;            /* first of four consecutive GIC SPIs */
+        } jpeg_table[] = {
+            { 0x4c500000, 295 },   /* jpegdec */
+            { 0x4c550000, 291 },   /* jpegenc */
+        };
+        int t, j;
 
-        if (!sysbus_realize_and_unref(sbd, errp)) {
-            return;
-        }
-        sysbus_mmio_map(sbd, 0, 0x4c500000);
-        for (j = 0; j < 4; j++) {
-            sysbus_connect_irq(sbd, j, qdev_get_gpio_in(gicdev, 295 + j));
+        for (t = 0; t < ARRAY_SIZE(jpeg_table); t++) {
+            DeviceState *jpeg = qdev_new("imx95.jpeg");
+            SysBusDevice *sbd = SYS_BUS_DEVICE(jpeg);
+
+            if (!sysbus_realize_and_unref(sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(sbd, 0, jpeg_table[t].addr);
+            for (j = 0; j < 4; j++) {
+                sysbus_connect_irq(sbd, j,
+                    qdev_get_gpio_in(gicdev, jpeg_table[t].irq + j));
+            }
         }
     }
 

@@ -144,9 +144,92 @@ static void test_jpeg_decode(void)
     qtest_quit(qts);
 }
 
+#define JPEGENC_BASE  0x4c550000
+#define CAST_MODE     0x100
+#define CAST_MODE_ENC_GO 0x140
+#define SLOT_BUF_PTR  0x8
+#define RAW_GPA       (RAM_BASE + 0x04000000)   /* raw BGR input  */
+#define EDESC_GPA     (RAM_BASE + 0x05000000)   /* encode desc    */
+#define JPGOUT_GPA    (RAM_BASE + 0x06000000)   /* encoded JPEG   */
+#define DDESC_GPA     (RAM_BASE + 0x07000000)   /* decode desc    */
+#define RT_OUT_GPA    (RAM_BASE + 0x08000000)   /* decoded BGR    */
+
+/*
+ * Round-trip: fill a solid-colour BGR frame, encode it on jpegenc, then decode
+ * the produced JPEG on jpegdec and check the pixels survive (within JPEG loss).
+ * Proves the encode path end-to-end without a kernel.
+ */
+static void test_jpeg_encode_roundtrip(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint8_t desc[32] = { 0 };
+    uint8_t raw[IMG_W * IMG_H * 3];
+    uint32_t jlen, status;
+    uint8_t px[3];
+    int x, y;
+
+    /* Solid BGR(80,49,200) source frame. */
+    for (y = 0; y < IMG_W * IMG_H; y++) {
+        raw[y * 3] = 80; raw[y * 3 + 1] = 49; raw[y * 3 + 2] = 200;
+    }
+    qtest_memwrite(qts, RAW_GPA, raw, sizeof(raw));
+
+    /* Encode descriptor: buf_base0 = raw in, stm_bufbase = JPEG out. */
+    stl_le_p(desc + 0,  0);
+    stl_le_p(desc + 4,  RAW_GPA);                /* buf_base0 (raw)      */
+    stl_le_p(desc + 12, PITCH);                  /* line_pitch           */
+    stl_le_p(desc + 16, JPGOUT_GPA);             /* stm_bufbase (jpeg)   */
+    stl_le_p(desc + 20, 0x10000);                /* stm_bufsize (max)    */
+    stl_le_p(desc + 24, (IMG_W << 16) | IMG_H);
+    stl_le_p(desc + 28, IMGFMT_BGR << 3);
+    qtest_memwrite(qts, EDESC_GPA, desc, sizeof(desc));
+
+    qtest_writel(qts, JPEGENC_BASE + SLOT0 + SLOT_NXT,
+                 EDESC_GPA | MXC_NXT_DESCPT_EN);
+    qtest_writel(qts, JPEGENC_BASE + GLB_CTRL, 0x1 | (1u << 4));
+    qtest_writel(qts, JPEGENC_BASE + CAST_MODE, CAST_MODE_ENC_GO);
+
+    status = qtest_readl(qts, JPEGENC_BASE + SLOT0 + SLOT_STATUS);
+    if (status & SLOT_STATUS_ENC_CONFIG_ERR) {
+        g_test_skip("JPEG model built without libjpeg");
+        qtest_quit(qts);
+        return;
+    }
+    g_assert_cmphex(status & SLOT_STATUS_FRMDONE, ==, SLOT_STATUS_FRMDONE);
+    jlen = qtest_readl(qts, JPEGENC_BASE + SLOT0 + SLOT_BUF_PTR);
+    g_assert_cmpuint(jlen, >, 2);
+
+    /* Now decode the produced JPEG on jpegdec and check the colour. */
+    memset(desc, 0, sizeof(desc));
+    stl_le_p(desc + 0,  0);
+    stl_le_p(desc + 4,  RT_OUT_GPA);             /* buf_base0 (frame)    */
+    stl_le_p(desc + 12, PITCH);
+    stl_le_p(desc + 16, JPGOUT_GPA);             /* stm_bufbase (jpeg)   */
+    stl_le_p(desc + 20, jlen);
+    stl_le_p(desc + 24, (IMG_W << 16) | IMG_H);
+    stl_le_p(desc + 28, IMGFMT_BGR << 3);
+    qtest_memwrite(qts, DDESC_GPA, desc, sizeof(desc));
+
+    qtest_writel(qts, JPEG_BASE + SLOT0 + SLOT_NXT,
+                 DDESC_GPA | MXC_NXT_DESCPT_EN);
+    qtest_writel(qts, JPEG_BASE + GLB_CTRL, 0x1 | (1u << 4));
+    qtest_writel(qts, JPEG_BASE + 0x134, MXC_DEC_EXIT_IDLE_MODE);
+
+    for (y = 0; y < IMG_H; y++) {
+        for (x = 0; x < IMG_W; x++) {
+            qtest_memread(qts, RT_OUT_GPA + y * PITCH + x * 3, px, 3);
+            g_assert_cmpint(abs((int)px[0] - 80),  <=, 14);
+            g_assert_cmpint(abs((int)px[1] - 49),  <=, 14);
+            g_assert_cmpint(abs((int)px[2] - 200), <=, 14);
+        }
+    }
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/aarch64/imx95-jpeg/decode", test_jpeg_decode);
+    qtest_add_func("/aarch64/imx95-jpeg/encode", test_jpeg_encode_roundtrip);
     return g_test_run();
 }
