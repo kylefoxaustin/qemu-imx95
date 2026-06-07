@@ -449,7 +449,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl ierb */
             { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
             { 0x4d900000, 0x100000 }, /* gpu */
-            { 0x4ab00000, 0x100000 }, /* neutron npu */
+            /* 0x4ab00000 neutron npu -> imx95.neutron (rproc + mailbox) below */
             /*
              * Audio (SAI/XCVR/MICFIL): not yet modelled. Stub them so a
              * board/use case enabling these nodes degrades gracefully
@@ -546,6 +546,28 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             sysbus_connect_irq(SYS_BUS_DEVICE(dpu), 4 + i,
                 qdev_get_gpio_in(irqsteer, blit_irqsteer_line[i]));
         }
+    }
+
+    /*
+     * Neutron NPU (bring-up). Two DT reg windows: the remoteproc's RESETCTRL
+     * @0x4ab00000 (clock gate) and the device/mailbox @0x4ab00004. Linux loads
+     * NeutronFirmware.elf onto the NPU core and drives inference over the
+     * mailbox (completion on GIC SPI 318). The proprietary NPU compute is not
+     * modelled; the model brings the whole stack up so the driver binds and the
+     * TFLite/LiteRT Neutron delegate runs inferences to completion. Gated behind
+     * the imx95-19x19-evk-neutron.dtso overlay (not in the base EVK dtb).
+     */
+    {
+        DeviceState *gicdev = DEVICE(&s->gic);
+        DeviceState *npu = qdev_new("imx95.neutron");
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(npu), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(npu), 0, 0x4ab00000);  /* RESETCTRL */
+        sysbus_mmio_map(SYS_BUS_DEVICE(npu), 1, 0x4ab00004);  /* dev/mailbox */
+        sysbus_connect_irq(SYS_BUS_DEVICE(npu), 0,
+                           qdev_get_gpio_in(gicdev, 318));
     }
 
     return true;

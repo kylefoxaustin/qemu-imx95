@@ -633,6 +633,7 @@ config FSL_IMX95
     select IMX95_AONMIX
     select IMX95_ANATOP
     select IMX95_DPU
+    select IMX95_NEUTRON
     select IMX_IRQSTEER
     select IMX95_GPIO
     select IMX95_JPEG
