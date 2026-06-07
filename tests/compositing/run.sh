@@ -22,7 +22,7 @@ KBUILD=${KBUILD:-$HOME/Documents/linux-imx95-build}
 SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}}
 BSP_ROOTFS=${BSP_ROOTFS:-$HOME/Documents/nxp/linux/imx-yocto-bsp/build-imx95-drone-sizer/tmp/work/imx95_19x19_lpddr5_evk-poky-linux/imx-image-full/1.0/rootfs}
 IMAGE=$KBUILD/arch/arm64/boot/Image
-DTB=$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb
+DTB=${DTB:-$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
 TMO=${TMO:-200}
 
 need() { [ -e "$2" ] || { echo "missing $1: $2"; exit 1; }; }
