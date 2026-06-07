@@ -108,9 +108,8 @@ all three ENETC Ethernet ports (incl. the 10G) and the DPU display path (boot
 logo on screen) run end to end, while the usb2 ChipIdea host (`usb-kbd` input)
 and all three EVK ASoC sound cards bind and enumerate against stock Linux (see
 "What runs today" for the per-device **functional** / **brings up** split).
-Functional A/V datapaths (display compositing beyond scanout,
-audio playback/capture, JPEG/VPU decode) and other customer-specific real-time
-peripherals (TSN, DSP) remain further out. See
+Functional A/V datapaths (audio playback/capture, VPU decode) and other
+customer-specific real-time peripherals (TSN, DSP) remain further out. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -185,17 +184,20 @@ working host data path yet):
   (`hw/misc/imx95_dpu.c`) reads plane framebuffers out of guest DRAM and
   composites them through the **LayerBlend** chain to a QEMU console. stock
   `dpu95` binds, fbcon comes up, and the **kernel boot logo renders** — six Tux
-  penguins, one per A55. **Multi-plane compositing** works: a primary plus an
-  overlay plane (each FetchLayer → LayerBlend, positioned by POSITION) blend in
-  the modelled chain — validated by booting libdrm `modetest`, atomically
-  committing a primary + a 320×240 overlay, and confirming the overlay
-  composited over the primary via QMP screendump (`tests/compositing/`). The
-  FrameGen vblank + shadow-load interrupts ride a from-scratch `fsl,imx-irqsteer`
+  penguins, one per A55. **Multi-plane compositing** works: a primary plus
+  overlay planes blend in the modelled chain — each plane fed by a FetchLayer
+  (RGB) or **FetchYUV + FetchEco (NV12, converted BT.601 → RGB)**, positioned by
+  POSITION, **per-pixel/const alpha-blended** by BLENDCONTROL, and
+  **nearest-neighbour scaled** when its on-screen rect differs from the source
+  (resolving the FetchUnit → VScaler4 → HScaler4 → LayerBlend chain). Validated
+  by booting libdrm `modetest`, atomically committing a primary + a 320×240
+  overlay (RGB or NV12, native or 2× scaled) and confirming it composited over
+  the primary via QMP screendump (`tests/compositing/`). The FrameGen vblank +
+  shadow-load interrupts ride a from-scratch `fsl,imx-irqsteer`
   (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
   `flip_done` timeouts). The display-output connector chain (pixel-interleaver →
   pixel-link → LDB → LVDS-PHY → panel) registers a DRM connector once enabled in
-  the dtb. Opaque blend only so far (per-pixel alpha-blend, scaling, the second
-  pixel pipeline and YUV planes are not modelled yet).
+  the dtb. The second pixel pipeline (CRTC 51 / FrameGen1) is not modelled yet.
 - **2D blit engine — functional.** The DPU's 2D blit block (the Socionext
   display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
@@ -249,8 +251,7 @@ working host data path yet):
   EVK's `mt35xu01gbba` mandates an octal-DTR mode QEMU's generic `m25p80` does
   not model.)
 
-The display additionally renders pixels but stays at the registration bar for
-compositing; functional audio playback / capture would need the SAI/MICFIL FIFO
+Functional audio playback / capture would need the SAI/MICFIL FIFO
 datapaths and is tracked in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
@@ -315,7 +316,7 @@ under "What runs today" above. What remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
-| **Functional display** | Compositing / DSI-LVDS bridge timing beyond the FetchLayer scanout, and a multi-plane KMS path (the boot logo already renders today via the primary-plane scanout + a real vblank/irqsteer) | next |
+| **Functional display** | The second pixel pipeline (CRTC 51 / FrameGen1, a 2nd connector) and DSI-LVDS bridge timing (multi-plane KMS compositing — RGB + NV12 planes, alpha-blend and scaling — already works today over the LayerBlend chain, on top of the boot-logo scanout + a real vblank/irqsteer) | next |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
