@@ -189,6 +189,17 @@ working host data path yet):
   interrupts are wired through a from-scratch `fsl,imx-irqsteer`
   (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
   `flip_done` timeouts) and the logo flushes through the normal page-flip.
+- **2D blit engine — functional.** The DPU's 2D blit block (the Socionext
+  display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
+  in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
+  decoded and the configured operation run — same-format **copy**,
+  constant-colour **fill**, and Porter-Duff **alpha-blend** (BlitBlend9) — with
+  the completion fence signalled through a ComCtrl SW interrupt. Proven through
+  the real NXP **G2D** stack: stock `g2d_basic_test` drives `libg2d-dpu` over
+  `/dev/dri/renderD128` and its `g2d_copy`, `g2d_cache_op` and Porter-Duff
+  clear-mode self-checks all pass (`tests/blit/`, plus a kernel-free
+  `tests/qtest/imx95-blit-test.c`). Scaling, rotation and format conversion are
+  not modelled yet.
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
