@@ -38,6 +38,16 @@ NV12->RGB (BT.601) before compositing. The screendump shows the modetest YUV
 test pattern (diagonal stripes) rendered with correct colours over the SMPTE
 primary. Opaque blend only for now — per-pixel alpha-blend is TODO.
 
+Set `OVL_SCALE=N` (e.g. `OVL_SCALE=2`) to drive a **scaled overlay**: modetest
+asks for an NxN-larger on-screen rect than the source, so the dpu95 driver
+routes the plane through the display H/VScaler units (FetchYUV -> VScaler4 ->
+HScaler4 -> LayerBlend — only FetchYUV units have scalers, so a scaled RGB plane
+goes through FetchYUV too). The model resolves that scaler chain, reads each
+scaler's OUTPUT_SIZE, and nearest-neighbour scales the plane. Combine with
+`OVL_FMT=NV12` to scale a YUV overlay. The screendump shows the 320x240 source
+enlarged to 640x480 over the primary. All four combinations (XR24/NV12 x
+native/scaled) are validated.
+
 ## Running
 
 ```

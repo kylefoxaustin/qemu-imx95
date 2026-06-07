@@ -180,16 +180,19 @@ echo "CONN=$CONN MODE=$MODE CRTC=$CRTC PRIM=$PRIM OVL=$OVL"
 # alpha-blend path reuses the g2d-validated Porter-Duff factors regardless.)
 /modetest -M imx95-dpu -a -s "$CONN@$CRTC:$MODE" \
     -P "$PRIM@$CRTC:1280x800" \
-    -P "$OVL@$CRTC:320x240+200+150__FMT__" -v > /tmp/mt.log 2>&1 &
+    -P "$OVL@$CRTC:320x240+200+150__SCALE____FMT__" -v > /tmp/mt.log 2>&1 &
 sleep 3
 echo "--- modetest log ---"; cat /tmp/mt.log 2>/dev/null | head -20
 echo "=== COMPOSITE-READY ==="
 sleep 20
 /bin/busybox poweroff -f
 INIT
-# Bake the overlay format into the init (OVL_FMT=NV12 etc.; default XR24).
+# Bake the overlay format/scale into the init (OVL_FMT=NV12, OVL_SCALE=2 etc.;
+# modetest plane spec is WxH+x+y[*scale][@format], so scale precedes format).
 OVL_FMT=${OVL_FMT:-}
-sed -i "s/320x240+200+150__FMT__/320x240+200+150${OVL_FMT:+@}${OVL_FMT}/" "$STAGE/init"
+OVL_SCALE=${OVL_SCALE:-}
+sed -i "s/__SCALE__/${OVL_SCALE:+*}${OVL_SCALE}/" "$STAGE/init"
+sed -i "s/__FMT__/${OVL_FMT:+@}${OVL_FMT}/" "$STAGE/init"
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.cpio.gz"
 

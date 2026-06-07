@@ -137,6 +137,21 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define FL_DIM_W(v)       (((v) & 0x3fff) + 1)
 #define FL_DIM_H(v)       ((((v) >> 16) & 0x3fff) + 1)
 
+/*
+ * Display H/VScaler units (dpu95-core.c hs_ofss[0]/vs_ofss[0], link ids from
+ * dpu95.h). A scaled plane chains FetchUnit -> [VScaler4] -> [HScaler4] ->
+ * LayerBlend: the LB secondary is the scaler link, the scaler's pixengcfg
+ * DYNAMIC (+0x1008, SRC_SEL[5:0]) points at its source, and CONTROL (+0x14)
+ * OUTPUT_SIZE[29:16] holds the (dst-1) line/pixel count.
+ */
+#define DPU_HSCALER4      0x270000
+#define DPU_VSCALER4      0x280000
+#define DPU_LINK_HSCALER4 0x24
+#define DPU_LINK_VSCALER4 0x25
+#define SC_PEC_DYNAMIC    0x1008
+#define SC_CONTROL        0x14
+#define SC_OUTPUT_SIZE(v) ((((v) >> 16) & 0x3fff) + 1)
+
 /* blit-engine command-sequencer status (probe-time poll) */
 #define DPU_CMDSEQ_STATUS           0x1019c
 #define DPU_CMDSEQ_STATUS_IDLE      0x40000000u
@@ -395,10 +410,13 @@ static uint32_t imx95_lb_factor(uint32_t f, uint8_t ca, uint8_t sa)
 /*
  * Composite one enabled FetchLayer plane onto the surface at (px,py), XRGB8888,
  * blending per its LayerBlend's BLENDCONTROL (lb = the LayerBlend base, or 0
- * for a plain opaque copy). The surface is the standard 32bpp xRGB console fmt.
+ * for a plain opaque copy). dw/dh are the on-screen size (0 = native source
+ * size); when they differ from the source the plane is nearest-neighbour
+ * scaled. The surface is the standard 32bpp xRGB console fmt.
  */
 static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
-                                hwaddr fl, hwaddr lb, int px, int py)
+                                hwaddr fl, hwaddr lb, int px, int py,
+                                uint32_t dw, uint32_t dh)
 {
     uint32_t prop = dpu_r(s, fl + FL_LAYERPROPERTY);
     uint64_t base = dpu_r(s, fl + FL_BASEADDRESS) |
@@ -406,6 +424,7 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
     uint32_t stride = FL_ATTR_STRIDE(dpu_r(s, fl + FL_SOURCEBUFFERATTRIBUTES));
     uint32_t dim = dpu_r(s, fl + FL_SOURCEBUFFERDIMENSION);
     uint32_t pw = FL_DIM_W(dim), ph = FL_DIM_H(dim);
+    uint32_t ow = dw ? dw : pw, oh = dh ? dh : ph;
     uint8_t *sd = surface_data(surface);
     int sstride = surface_stride(surface);
     int sw = surface_width(surface), sh = surface_height(surface);
@@ -420,23 +439,25 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
         return 0;
     }
     row = g_malloc((size_t)pw * 4);
-    for (uint32_t y = 0; y < ph; y++) {
-        int dy = py + (int)y;
+    for (uint32_t oy = 0; oy < oh; oy++) {
+        int dy = py + (int)oy;
+        uint32_t sy = (uint32_t)((uint64_t)oy * ph / oh);   /* nearest source */
         uint32_t *d;
         if (dy < 0 || dy >= sh) {
             continue;
         }
-        cpu_physical_memory_read(base + (uint64_t)y * stride, row,
+        cpu_physical_memory_read(base + (uint64_t)sy * stride, row,
                                  (size_t)pw * 4);
         d = (uint32_t *)(sd + (size_t)dy * sstride);
-        for (uint32_t x = 0; x < pw; x++) {
-            int dx = px + (int)x;
+        for (uint32_t ox = 0; ox < ow; ox++) {
+            int dx = px + (int)ox;
+            uint32_t sx = (uint32_t)((uint64_t)ox * pw / ow);
             uint32_t p;
             uint8_t sr, sg, sb;
             if (dx < 0 || dx >= sw) {
                 continue;
             }
-            p = ldl_le_p(row + x * 4);
+            p = ldl_le_p(row + sx * 4);
             sr = (p >> 16) & 0xff; sg = (p >> 8) & 0xff; sb = p & 0xff;
             if (opaque) {
                 d[dx] = rgb_to_pixel32(sr, sg, sb);
@@ -459,9 +480,9 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
         }
     }
     if (s->trace) {
-        qemu_log("imx95-dpu: plane fl=0x%" HWADDR_PRIx " %ux%u @ (%d,%d) "
-                 "%s a=%u\n", fl, pw, ph, px, py, opaque ? "opaque" : "blend",
-                 ca);
+        qemu_log("imx95-dpu: plane fl=0x%" HWADDR_PRIx " %ux%u->%ux%u (%d,%d) "
+                 "%s a=%u\n", fl, pw, ph, ow, oh, px, py,
+                 opaque ? "opaque" : "blend", ca);
     }
     return 1;
 }
@@ -481,12 +502,16 @@ static inline void imx95_yuv601_to_rgb(int y, int u, int v,
 }
 
 /*
- * Composite an NV12 overlay onto the surface at (px,py): luma from the FetchYUV
- * unit (fy); interleaved chroma from the FetchEco its DYNAMIC reg selects.
- * Same LayerBlend blend as imx95_dpu_blit_plane; YUV pixels are fully opaque.
+ * Composite a plane fed by a FetchYUV unit (fy) onto the surface at (px,py).
+ * FetchYUV is the unit a scaled plane always uses (only FetchYUV units have
+ * scalers), so it carries either NV12 (a FetchEco companion holds interleaved
+ * chroma) or plain RGB (no FetchEco). dw/dh are the on-screen size (0 =
+ * native); differ => nearest-neighbour scaled. Same LayerBlend blend as
+ * imx95_dpu_blit_plane; pixels are fully opaque.
  */
 static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
-                              hwaddr fy, hwaddr lb, int px, int py)
+                              hwaddr fy, hwaddr lb, int px, int py,
+                              uint32_t dw, uint32_t dh)
 {
     uint32_t prop = dpu_r(s, fy + FY_LAYERPROPERTY);
     uint64_t ybase = dpu_r(s, fy + FY_BASEADDRESS) |
@@ -494,10 +519,12 @@ static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
     uint32_t ystride = FL_ATTR_STRIDE(dpu_r(s, fy + FY_ATTR));
     uint32_t dim = dpu_r(s, fy + FY_DIM);
     uint32_t pw = (dim & 0x3fff) + 1, ph = ((dim >> 16) & 0x3fff) + 1;
+    uint32_t ow = dw ? dw : pw, oh = dh ? dh : ph;
     uint32_t eco = dpu_r(s, fy + FY_PEC_DYNAMIC) & 0x3f;
     hwaddr fe = imx95_dpu_fetcheco_base(eco);
-    uint64_t cbase;
-    uint32_t cstride;
+    bool yuv = fe != 0;   /* FetchEco companion => NV12; else RGB */
+    uint64_t cbase = 0;
+    uint32_t cstride = 0;
     uint8_t *sd = surface_data(surface);
     int sstride = surface_stride(surface);
     int sw = surface_width(surface), sh = surface_height(surface);
@@ -508,37 +535,48 @@ static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
     g_autofree uint8_t *yrow = NULL;
     g_autofree uint8_t *crow = NULL;
 
-    if (!(prop & FL_SOURCEBUFFERENABLE) || ybase == 0 || fe == 0 ||
-        pw == 0 || ph == 0) {
+    if (!(prop & FL_SOURCEBUFFERENABLE) || ybase == 0 || pw == 0 || ph == 0) {
         return 0;
     }
-    cbase = dpu_r(s, fe + FE_BASEADDRESS) |
-            ((uint64_t)dpu_r(s, fe + FE_BASEADDRESSMSB) << 32);
-    cstride = FL_ATTR_STRIDE(dpu_r(s, fe + FE_ATTR));
-    if (cbase == 0) {
-        return 0;
+    if (yuv) {
+        cbase = dpu_r(s, fe + FE_BASEADDRESS) |
+                ((uint64_t)dpu_r(s, fe + FE_BASEADDRESSMSB) << 32);
+        cstride = FL_ATTR_STRIDE(dpu_r(s, fe + FE_ATTR));
+        if (cbase == 0) {
+            return 0;
+        }
     }
-    yrow = g_malloc(pw);
-    crow = g_malloc((size_t)(pw / 2 + 1) * 2);   /* interleaved Cb,Cr */
-    for (uint32_t y = 0; y < ph; y++) {
-        int dy = py + (int)y;
+    yrow = g_malloc((size_t)pw * (yuv ? 1 : 4));
+    crow = g_malloc((size_t)(pw / 2 + 1) * 2);   /* interleaved Cb,Cr (YUV) */
+    for (uint32_t oy = 0; oy < oh; oy++) {
+        int dy = py + (int)oy;
+        uint32_t sy = (uint32_t)((uint64_t)oy * ph / oh);   /* nearest source */
         uint32_t *d;
         if (dy < 0 || dy >= sh) {
             continue;
         }
-        cpu_physical_memory_read(ybase + (uint64_t)y * ystride, yrow, pw);
-        cpu_physical_memory_read(cbase + (uint64_t)(y / 2) * cstride, crow,
-                                 (size_t)(pw / 2) * 2);
+        cpu_physical_memory_read(ybase + (uint64_t)sy * ystride, yrow,
+                                 (size_t)pw * (yuv ? 1 : 4));
+        if (yuv) {
+            cpu_physical_memory_read(cbase + (uint64_t)(sy / 2) * cstride, crow,
+                                     (size_t)(pw / 2) * 2);
+        }
         d = (uint32_t *)(sd + (size_t)dy * sstride);
-        for (uint32_t x = 0; x < pw; x++) {
-            int dx = px + (int)x;
+        for (uint32_t ox = 0; ox < ow; ox++) {
+            int dx = px + (int)ox;
+            uint32_t sx = (uint32_t)((uint64_t)ox * pw / ow);
             uint8_t sr, sg, sb;
             if (dx < 0 || dx >= sw) {
                 continue;
             }
-            uint32_t ci = (x / 2) * 2;
-            imx95_yuv601_to_rgb(yrow[x], crow[ci], crow[ci + 1],
-                                &sr, &sg, &sb);
+            if (yuv) {
+                uint32_t ci = (sx / 2) * 2;
+                imx95_yuv601_to_rgb(yrow[sx], crow[ci], crow[ci + 1],
+                                    &sr, &sg, &sb);
+            } else {
+                uint32_t p = ldl_le_p(yrow + sx * 4);
+                sr = (p >> 16) & 0xff; sg = (p >> 8) & 0xff; sb = p & 0xff;
+            }
             if (opaque) {
                 d[dx] = rgb_to_pixel32(sr, sg, sb);
             } else {
@@ -555,11 +593,33 @@ static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
         }
     }
     if (s->trace) {
-        qemu_log("imx95-dpu: yuv fy=0x%" HWADDR_PRIx " eco=0x%" HWADDR_PRIx
-                 " %ux%u @ (%d,%d) %s a=%u\n", fy, fe, pw, ph, px, py,
-                 opaque ? "opaque" : "blend", ca);
+        qemu_log("imx95-dpu: fy=0x%" HWADDR_PRIx " %s eco=0x%" HWADDR_PRIx
+                 " %ux%u->%ux%u @ (%d,%d) %s a=%u\n", fy, yuv ? "nv12" : "rgb",
+                 fe, pw, ph, ow, oh, px, py, opaque ? "opaque" : "blend", ca);
     }
     return 1;
+}
+
+/*
+ * Resolve a LayerBlend secondary link to the fetch unit that ultimately feeds
+ * it, walking through any H/VScaler in the chain (FetchUnit -> [VScaler4] ->
+ * [HScaler4] -> LB). Returns the fetch-unit link id and, via dw/dh, the scaled
+ * on-screen size each scaler imposes (0 = that axis is not scaled).
+ */
+static uint32_t imx95_dpu_resolve_chain(IMX95DPUState *s, uint32_t sec,
+                                        uint32_t *dw, uint32_t *dh)
+{
+    *dw = 0;
+    *dh = 0;
+    if (sec == DPU_LINK_HSCALER4) {
+        *dw = SC_OUTPUT_SIZE(dpu_r(s, DPU_HSCALER4 + SC_CONTROL));
+        sec = dpu_r(s, DPU_HSCALER4 + SC_PEC_DYNAMIC) & 0x3f;
+    }
+    if (sec == DPU_LINK_VSCALER4) {
+        *dh = SC_OUTPUT_SIZE(dpu_r(s, DPU_VSCALER4 + SC_CONTROL));
+        sec = dpu_r(s, DPU_VSCALER4 + SC_PEC_DYNAMIC) & 0x3f;
+    }
+    return sec;   /* the fetch-unit link feeding the (possibly scaled) plane */
 }
 
 static bool imx95_dpu_gfx_update(void *opaque)
@@ -598,16 +658,19 @@ static bool imx95_dpu_gfx_update(void *opaque)
     for (guard = 0; cur >= 0 && guard < 6; guard++) {
         uint32_t dyn = dpu_r(s, lb_ofs[cur] + DPU_LB_DYNAMIC);
         uint32_t pos = dpu_r(s, lb_ofs[cur] + DPU_LB_POSITION);
-        uint32_t sec = DPU_LB_SEC(dyn);
+        uint32_t dw, dh;
+        uint32_t sec = imx95_dpu_resolve_chain(s, DPU_LB_SEC(dyn), &dw, &dh);
         hwaddr fl = imx95_dpu_plane_base(sec);
         hwaddr fy = imx95_dpu_fetchyuv_base(sec);
         int px = pos & 0xffff, py = (pos >> 16) & 0xffff;
         int next = -1;
 
         if (fl) {
-            planes += imx95_dpu_blit_plane(s, surface, fl, lb_ofs[cur], px, py);
+            planes += imx95_dpu_blit_plane(s, surface, fl, lb_ofs[cur],
+                                           px, py, dw, dh);
         } else if (fy) {
-            planes += imx95_dpu_blit_yuv(s, surface, fy, lb_ofs[cur], px, py);
+            planes += imx95_dpu_blit_yuv(s, surface, fy, lb_ofs[cur],
+                                         px, py, dw, dh);
         }
         for (int j = 0; j < 6; j++) {
             uint32_t dj = dpu_r(s, lb_ofs[j] + DPU_LB_DYNAMIC);
@@ -624,7 +687,7 @@ static bool imx95_dpu_gfx_update(void *opaque)
      * (keeps the plain boot-logo path working regardless of LB programming).
      */
     if (planes == 0) {
-        imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0, 0);
+        imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0, 0, 0, 0);
     }
 
     qemu_console_update(s->con, 0, 0, w, h);
