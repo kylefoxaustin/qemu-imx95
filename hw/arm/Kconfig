@@ -637,6 +637,7 @@ config FSL_IMX95
     select IMX95_GPIO
     select IMX95_JPEG
     select IMX_TPM_PWM
+    select IMX93_ADC
     select IMX95_AUDIO
     select IMX95_EDMA
     select IMX95_SYSCTR

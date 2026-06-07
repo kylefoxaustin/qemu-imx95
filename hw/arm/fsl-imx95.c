@@ -409,7 +409,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x43810000, 64 * KiB }, { 0x43820000, 64 * KiB },
             { 0x43840000, 64 * KiB }, { 0x43850000, 64 * KiB }, /* gpio */
             { 0x44350000, 64 * KiB }, /* i2c */
-            { 0x44530000, 64 * KiB }, /* adc */
+            /* adc@44530000 is a real imx93-adc model below. */
             { 0x4ac10000, 64 * KiB }, /* camera csr (clock provider) */
             { 0x4ad00000, 64 * KiB }, /* display stream csr (clock provider) */
             { 0x4ad10000, 64 * KiB }, /* display master csr (mmio-mux) */
@@ -1766,6 +1766,28 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                     return;
                 }
                 sysbus_mmio_map(SYS_BUS_DEVICE(p), 0, tpm_pwm[k]);
+            }
+        }
+
+        /*
+         * ADC (dtsi adc@44530000, "nxp,imx93-adc"). The imx93_adc driver power-
+         * cycles + calibrates + converts via a small MSR/MCR state machine, so
+         * the UNIMP stub (MSR == 0) looped on "ADC do not in power down mode".
+         * The real model reflects power state, passes calibration and answers
+         * conversions (synthetic samples) with the end-of-conversion IRQ.
+         */
+        {
+            DeviceState *adc = qdev_new("imx93.adc");
+            SysBusDevice *adc_sbd = SYS_BUS_DEVICE(adc);
+            int k;
+
+            if (!sysbus_realize_and_unref(adc_sbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(adc_sbd, 0, 0x44530000);
+            for (k = 0; k < 3; k++) {       /* dtsi GIC SPIs 199..201 */
+                sysbus_connect_irq(adc_sbd, k,
+                                   qdev_get_gpio_in(gicdev, 199 + k));
             }
         }
 

@@ -295,3 +295,6 @@ config IMX95_JPEG
 
 config IMX_TPM_PWM
     bool
+
+config IMX93_ADC
+    bool
