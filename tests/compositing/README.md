@@ -14,16 +14,24 @@ blend with position + alpha) and compositing the planes. Set
 `IMX95_DPU_TRACE_PIPE=1` (the harness does) to dump the display-pipeline register
 writes for reverse-engineering that routing.
 
-## Status — blocked on display-output bringup
+## Status — connector up; multi-plane composite is the next step
 
-Currently **SKIPs**: the dpu95 DRM device binds but its component aggregation
-reports `[drm] Cannot find any crtc` — with the stub LDB / pixel-link / panel
-output chain there is no CRTC/connector for `modetest` to set a mode on, so no
-multi-plane commit happens and there is nothing to composite. Getting a
-connector up (modelling enough of the LDB → LVDS-panel output chain to register
-one) is a display-output prerequisite, separate from the LayerBlend composite
-logic. The QMP-screendump capture and the pipeline trace are in place and work;
-they are gated on that prerequisite.
+The display-output prerequisite is **solved**. The stock EVK dtb ships the
+display output disabled (LDB / LVDS-PHY / pixel-link / pixel-interleaver all
+`status="disabled"`, no panel), so the dpu95 component aggregation found no
+CRTC/connector. The harness decompiles the dtb, enables that whole output chain
+and attaches a fixed 1280x800 LVDS panel, and recompiles — purely a dtb change,
+no model change (the 0-stub LVDS CSR is enough for the LDB/PHY drivers to bind).
+With it the connector `LVDS-1` registers, `modetest` sets the 1280x800 mode, the
+DPU scans the primary plane out (the boot logo renders at 1280x800), and the
+dpu95 LayerBlend pipeline (ConstFrame0 -> LayerBlend1 -> ExtDst0 -> FrameGen0)
+is programmed and captured by the trace. The harness PASSES on that.
+
+**Next:** drive a real multi-plane commit (a primary + an overlay plane) and
+teach `hw/misc/imx95_dpu.c` to walk the LayerBlend chain and composite the
+planes (it currently scans out only the primary FetchLayer). The routing is
+mapped from the trace: each LayerBlend's PIXENGCFG dynamic gives PRIM_SEL[5:0] /
+SEC_SEL[13:8] (link IDs), BLENDCONTROL the alpha, POSITION the offset.
 
 ## Running
 

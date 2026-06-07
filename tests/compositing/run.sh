@@ -23,10 +23,12 @@ SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_i
 BSP_ROOTFS=${BSP_ROOTFS:-$HOME/Documents/nxp/linux/imx-yocto-bsp/build-imx95-drone-sizer/tmp/work/imx95_19x19_lpddr5_evk-poky-linux/imx-image-full/1.0/rootfs}
 IMAGE=$KBUILD/arch/arm64/boot/Image
 DTB=${DTB:-$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
+DTC=${DTC:-$KBUILD/scripts/dtc/dtc}
 TMO=${TMO:-200}
 
 need() { [ -e "$2" ] || { echo "missing $1: $2"; exit 1; }; }
 need QEMU "$QEMU"; need IMAGE "$IMAGE"; need DTB "$DTB"; need SM_ELF "$SM_ELF"
+need DTC "$DTC"
 
 MODETEST="$BSP_ROOTFS/usr/bin/modetest"
 if [ ! -x "$MODETEST" ]; then
@@ -40,6 +42,61 @@ LOG=${LOG:-$WORK/serial.log}
 QERR=${QERR:-$WORK/qemu.err}
 PPM=${PPM:-$WORK/screen.ppm}
 QMP="$WORK/qmp.sock"
+
+# The stock EVK dtb has the display OUTPUT disabled (no connector -> no display).
+# Decompile, enable the output chain (pixel-interleaver -> pixel-link -> LDB ->
+# LVDS PHY) and attach a fixed LVDS panel so a connector registers, then
+# recompile (the patch-dtb.py text-splice pattern; the prebuilt dtb has no
+# __symbols__ for fdtoverlay). Skip if the dtb already has a panel.
+"$DTC" -I dtb -O dts "$DTB" > "$WORK/base.dts" 2>/dev/null
+if grep -q 'panel-lvds' "$WORK/base.dts"; then
+    cp "$DTB" "$WORK/panel.dtb"
+else
+    python3 - "$WORK/base.dts" "$WORK/panel.dts" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+def span(t, hdr, start=0):
+    i=t.index(hdr,start); j=i+t[i:].index('{'); d=0; k=j
+    while k < len(t):
+        if t[k]=='{': d+=1
+        elif t[k]=='}':
+            d-=1
+            if d==0: return i, k+1
+        k+=1
+def en(t,a,b): return t[:a]+t[a:b].replace('status = "disabled";','status = "okay";',1)+t[b:]
+# LDB + channel@0 (+ panel output endpoint)
+i,j = span(t,'ldb@4 {'); blk = t[i:j].replace('status = "disabled";','status = "okay";',1)
+ci,cj = span(blk,'channel@0 {')
+cb = blk[ci:cj].replace('status = "disabled";','status = "okay";',1)
+cb = cb.replace('port@1 {\n\t\t\t\t\t\treg = <0x01>;',
+                'port@1 {\n\t\t\t\t\t\treg = <0x01>;\n\t\t\t\t\t\tlvds0_out: endpoint { remote-endpoint = <&panel_in>; };',1)
+blk = blk[:ci]+cb+blk[cj:]; t = t[:i]+blk+t[j:]
+# lvds0 phy@8
+a,b = span(t,'phy@8 {'); t = en(t,a,b)
+# pixel-link bridge@8
+hs = t.rindex('bridge@8 {',0,t.index('nxp,imx95-dc-pixel-link')); a,b = span(t,'bridge@8 {',hs); t = en(t,a,b)
+# pixel-interleaver node + channel@0
+ci = t.index('nxp,imx95-pixel-interleaver'); hl = t.rindex('\n',0,t.rindex('{\n',0,ci))+1
+hdr = t[hl:t.index('{',hl)+1].strip()
+a,b = span(t, hdr); t = en(t,a,b)
+a2,b2 = span(t,'channel@0 {', t.index('nxp,imx95-pixel-interleaver')); t = en(t,a2,b2)
+panel = '''
+\tpanel_lvds: panel-lvds {
+\t\tcompatible = "panel-lvds"; width-mm = <217>; height-mm = <136>;
+\t\tdata-mapping = "vesa-24";
+\t\tpanel-timing { clock-frequency = <71000000>;
+\t\t\thactive = <1280>; vactive = <800>;
+\t\t\thsync-len = <70>; hfront-porch = <70>; hback-porch = <80>;
+\t\t\tvsync-len = <10>; vfront-porch = <10>; vback-porch = <10>; };
+\t\tport { panel_in: endpoint { remote-endpoint = <&lvds0_out>; }; };
+\t};
+'''
+t = t.rstrip(); assert t.endswith('};'); t = t[:-2]+panel+'};\n'
+open(sys.argv[2],'w').write(t); print("dtb patched: display output + LVDS panel enabled")
+PY
+    "$DTC" -I dts -O dtb -o "$WORK/panel.dtb" "$WORK/panel.dts" 2>/dev/null
+fi
+DTB="$WORK/panel.dtb"
 
 zcat "$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz" | \
     (cd "$STAGE" && cpio -idmu 2>/dev/null)
@@ -97,13 +154,22 @@ exec > /dev/console 2>&1
 sleep 8
 echo "=== COMPOSITE-E2E ==="
 chmod +x /modetest 2>/dev/null
+echo "--- drm class ---"; ls /sys/class/drm/ 2>/dev/null | tr '\n' ' '; echo
+echo "--- deferred ---"; cat /sys/kernel/debug/devices_deferred 2>/dev/null
+echo "--- display dmesg ---"
+dmesg | grep -aiE 'ldb|lvds|panel|pixel.?link|drm|phy@|connector|clk.*disp|Cannot find' | grep -aviE 'cycle|tcpc' | tail -20
+echo "--- ldb/panel driver bind ---"
+for d in imx95-ldb fsl-imx95-ldb panel-lvds imx95-pixel-link imx95-pixel-link-display; do
+  echo "$d: $(ls /sys/bus/platform/drivers/$d/ 2>/dev/null | grep -iE '@|panel' | tr '\n' ' ')"
+done
 # Enumerate connectors / CRTCs / planes.
 /modetest -M imx95-dpu > /tmp/m.txt 2>&1 || /modetest > /tmp/m.txt 2>&1
 echo "--- modetest enum (head) ---"; head -40 /tmp/m.txt
 CONN=$(awk '/^Connectors:/{c=1;next} /^Encoders:/{c=0} c&&/connected/{print $1;exit}' /tmp/m.txt)
 MODE=$(awk -v cn="$CONN" '$1==cn{f=1} f&&/[0-9]+x[0-9]+ /{print $2;exit}' /tmp/m.txt)
-CRTC=$(awk '/^CRTCs:/{c=1;next} /^Planes:/{c=0} c&&$1~/^[0-9]+$/{print $1;exit}' /tmp/m.txt)
-OVL=$(awk '/^Planes:/{c=1;next} c&&$1~/^[0-9]+$/{n++; if(n==2){print $1;exit}}' /tmp/m.txt)
+CRTC=$(awk '/^CRTCs:/{c=1;next} /^Planes:/{c=0} c&&/^[0-9]/{print $1;exit}' /tmp/m.txt)
+# 2nd plane line (col-0 digit) = first overlay; the 1st is the primary.
+OVL=$(awk '/^Planes:/{c=1;next} c&&/^[0-9]/{n++; if(n==2){print $1;exit}}' /tmp/m.txt)
 echo "CONN=$CONN MODE=$MODE CRTC=$CRTC OVL=$OVL"
 # Primary full-screen + a 320x240 overlay at (200,150); hold the display.
 /modetest -M imx95-dpu -s "$CONN:$MODE" -P "$OVL@$CRTC:320x240+200+150" -v \
@@ -148,8 +214,10 @@ wait "$QPID" 2>/dev/null || true
 echo "=== compositing e2e report ==="
 sed -n '/COMPOSITE-E2E ===/,/COMPOSITE-READY/p' "$LOG" | grep -vE '^\[ *[0-9].*\]'
 echo "--- screenshot ---"; ls -l "$PPM" 2>/dev/null || echo "(no screendump)"
-pipe_writes=$(grep -aoE 'PIPE 0x(11|12|15|16|17|18|19|1a|1b|1c|f|10|13|14|20|22|24|1f)[0-9a-f]{3} = 0x[0-9a-f]+' "$QERR" | sort -u | wc -l)
-echo "--- distinct LayerBlend/ExtDst/plane pipe writes (routing): $pipe_writes ---"
+# LayerBlend (0x17xxxx-0x1cxxxx) + ExtDst (0x11xxxx/0x12xxxx/0x15xxxx/0x16xxxx)
+# routing writes — 6 hex digit offsets.
+lb_writes=$(grep -aoE 'PIPE 0x1[0-9a-f]{5} = ' "$QERR" 2>/dev/null | grep -aoE '0x1(7|8|9|a|b|c|1)[0-9a-f]{4}' | sort -u | wc -l)
+echo "--- distinct LayerBlend/ExtDst routing offsets touched: $lb_writes ---"
 
 # The dpu95 DRM device needs a CRTC + connector for modetest to set a mode and
 # drive a multi-plane commit. With the stub LDB/pixel-link/panel output chain the
@@ -165,7 +233,7 @@ if grep -qa 'Cannot find any crtc' "$LOG" || ! grep -qaE 'CONN=[0-9]' "$LOG"; th
     echo "      in place for when it is."
     exit 0
 fi
-if [ "$pipe_writes" -ge 1 ]; then
-    echo "PASS: multi-plane commit reached the LayerBlend pipeline"; exit 0
+if [ "$lb_writes" -ge 1 ]; then
+    echo "PASS: connector up + mode set + LayerBlend pipeline programmed"; exit 0
 fi
 echo "FAIL: a mode was set but no LayerBlend routing was programmed"; exit 1
