@@ -1,34 +1,42 @@
 /*
- * NXP i.MX 95 DPU (Display Processing Unit) — framebuffer scanout
+ * NXP i.MX 95 DPU (Display Processing Unit) — framebuffer scanout + 2D blit
  *
  * Copyright (c) 2026, Kyle Fox
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The i.MX 95 display controller is a Vivante-class DPU. Linux's dpu95 driver
- * (drivers/gpu/drm/imx/dpu95) drives it through a large register file; the only
- * part we need for *pixels* is the scanout: the primary plane's FetchLayer unit
- * reads a framebuffer out of guest DRAM, and the FrameGen unit times it out to a
- * display stream. Everything downstream (pixel-link / DSI / LDB / bridge) carries
- * no pixels in emulation — it is "permission plumbing" that lets the DRM driver
- * bind and enable scanout (those blocks stay read-0 stubs in the machine).
+ * The i.MX 95 display controller is a Socionext display-controller IP (two
+ * pixel pipelines plus a 2D blit engine), driven by Linux's dpu95 driver
+ * (drivers/gpu/drm/imx/dpu95) through a large register file in one 4 MiB window.
+ * This models two functional datapaths and leaves the rest as permission stubs:
  *
- * What this models, from the dpu95 driver register map:
- *   - the blit-engine command-sequencer status poll (probe-time; the driver
- *     busy-waits CMDSEQ_STATUS.IDLE + FIFOSPACE>=192 with no timeout, so a
- *     0-returning stub would hang wait_for_device_probe());
- *   - FetchLayer (DPU+0x1d0000): BASEADDRESS(+MSB) = the FB DMA address,
- *     SOURCEBUFFERATTRIBUTES (stride+bpp), SOURCEBUFFERDIMENSION (w x h),
- *     LAYERPROPERTY (SOURCEBUFFERENABLE);
- *   - FrameGen (DPU+0x2b0000): HTCFG1/VTCFG1 (active w/h), FGINCTRL (display
- *     mode / scanning out).
- * On each console refresh, if the FrameGen is enabled and a FetchLayer base is
- * set, we blit that guest buffer to the QEMU console via framebuffer.c.
+ * 1. SCANOUT (the display side). The primary plane's FetchLayer unit reads a
+ *    framebuffer out of guest DRAM and the FrameGen unit times it out to a
+ *    display stream:
+ *      - FetchLayer (DPU+0x1d0000): BASEADDRESS(+MSB) = the FB DMA address,
+ *        SOURCEBUFFERATTRIBUTES (stride+bpp), SOURCEBUFFERDIMENSION (w x h),
+ *        LAYERPROPERTY (SOURCEBUFFERENABLE);
+ *      - FrameGen (DPU+0x2b0000): HTCFG1/VTCFG1 (active w/h), FGINCTRL (display
+ *        mode / scanning out).
+ *    On each console refresh, if the FrameGen is enabled and a FetchLayer base
+ *    is set, we blit that guest buffer to the QEMU console via framebuffer.c.
+ *    Downstream (pixel-link / DSI / LDB / bridge) carries no pixels — it is
+ *    "permission plumbing" that lets the DRM driver bind and enable scanout.
+ *
+ * 2. 2D BLIT (the "9"-suffixed pipeline: FetchDecode9 source -> ROP9 /
+ *    BlitBlend9 / scalers -> Store9 dest writeback, sequenced by the Command
+ *    Sequencer). Linux exposes it as a DRM render node (dpu95-blit.c); a
+ *    userspace G2D library submits a CmdSeq HIF program that configures the
+ *    pipeline and triggers Store9, and the engine writes the destination buffer
+ *    back to DRAM and signals a fence via a ComCtrl SW interrupt. We decode the
+ *    HIF command stream, run the configured operation, and write the result.
+ *    First cut: same-format rectangular copy and constant-color fill (ROP /
+ *    blend / scale / rotate land in later commits).
  *
  * The full 4 MiB MMIO is backed by a plain register store (read-back-what-was-
  * written) so the driver's many other writes (layerblend, extdst, etc.) are
  * harmless. Set IMX95_DPU_TRACE=1 to log writes into the FetchLayer/FrameGen
- * blocks while refining the offsets against a live boot.
+ * blocks and the blit command stream while refining offsets against a live boot.
  */
 
 #include "qemu/osdep.h"
@@ -113,6 +121,49 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 /* ~60 Hz frame tick that drives the shadow-load + frame-complete interrupts. */
 #define DPU_VBLANK_PERIOD_NS  16666667
 
+/*
+ * 2D Blit engine register map (dpu95-blit-registers.h). All offsets are within
+ * the same 4 MiB DPU window. The Command Sequencer's HIF (host interface) is a
+ * FIFO command port: userspace pushes a word stream the sequencer executes.
+ *   - opcode top byte 0x14 => "write N words": next word is the target byte
+ *     offset, followed by N values written to offset, offset+4, ... ;
+ *   - opcode top byte 0x20 => sync/wait (e.g. SEQCOMPLETE_SYNC 0x20000102).
+ * The program ends by writing PIXENGCFG_STORE9_TRIGGER (runs the blit) then a
+ * ComCtrl SW-interrupt preset that signals the driver's completion fence.
+ */
+#define BLIT_CMDSEQ_HIF          0x10000   /* FIFO command port */
+#define BLIT_HIF_OP_WRITE        0x14
+#define BLIT_HIF_OP_SYNC         0x20
+
+/* ComCtrl interrupt block (blit completion path; STATUS1 carries the SW IRQs) */
+#define BLIT_COMCTRL_INTPRESET0  0x1014
+#define BLIT_COMCTRL_INTPRESET1  0x1018
+#define BLIT_COMCTRL_INTCLEAR0   0x1020
+#define BLIT_COMCTRL_INTCLEAR1   0x1024
+#define BLIT_COMCTRL_INTSTATUS0  0x102c
+#define BLIT_COMCTRL_INTSTATUS1  0x1030
+
+/* FetchDecode9 — blit source 0 (sub-block 0x90000) */
+#define BLIT_FD9_BASEADDRESS0    0x90028
+#define BLIT_FD9_BASEADDRESSMSB0 0x9002c
+#define BLIT_FD9_SRCBUFATTR0     0x90038   /* [15:0] stride-1; [21:16] bits/px */
+#define BLIT_FD9_SRCBUFDIM0      0x9003c   /* [13:0] w-1; [29:16] h-1 */
+#define BLIT_FD9_CONSTANTCOLOR0  0x90054   /* fill colour (RGBA, 8b/comp) */
+#define BLIT_FD9_LAYERPROPERTY0  0x90058   /* bit31 SOURCEBUFFERENABLE */
+
+/* Store9 — blit destination (sub-block 0xe0000) + the trigger */
+#define BLIT_STORE9_BASEADDRESS0    0xe0020
+#define BLIT_STORE9_BASEADDRESSMSB0 0xe0024
+#define BLIT_STORE9_DSTBUFATTR0     0xe0030   /* [15:0] stride-1; [21:16] b/px */
+#define BLIT_STORE9_DSTBUFDIM       0xe0054   /* [13:0] w-1; [29:16] h-1 */
+#define BLIT_STORE9_TRIGGER         0xe1014   /* PIXENGCFG_STORE9_TRIGGER */
+
+#define BLIT_SRCBUF_ENABLE       (1u << 31)
+#define BLIT_ATTR_STRIDE(v)      (((v) & 0xffff) + 1)        /* bytes */
+#define BLIT_ATTR_BPP(v)         (((v) >> 16) & 0x3f)        /* bits per pixel */
+#define BLIT_DIM_W(v)            (((v) & 0x3fff) + 1)
+#define BLIT_DIM_H(v)            ((((v) >> 16) & 0x3fff) + 1)
+
 struct IMX95DPUState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
@@ -131,6 +182,13 @@ struct IMX95DPUState {
     uint32_t int_enable;
     uint32_t frame_index;       /* HW vblank counter (FGTIMESTAMP) */
     QEMUTimer *vblank_timer;
+
+    /* 2D blit engine: CmdSeq HIF decoder state + ComCtrl completion status */
+    uint32_t hif_count;         /* words still to consume for a write opcode */
+    uint32_t hif_off;           /* current target offset for the burst write */
+    bool     hif_have_off;      /* next HIF word is the target offset */
+    uint32_t comctrl_status0;
+    uint32_t comctrl_status1;   /* SW interrupts (blit completion) live here */
 };
 
 /* Drive each modelled source's irqsteer line from (status & enable). */
@@ -292,6 +350,131 @@ static const GraphicHwOps imx95_dpu_gfx_ops = {
     .gfx_update = imx95_dpu_gfx_update,
 };
 
+/* ---- 2D blit engine ------------------------------------------------------ */
+
+/*
+ * Run the configured blit. If the source layer (FetchDecode9) is enabled with a
+ * base address we copy the source rectangle to the destination (Store9);
+ * otherwise we treat it as a constant-colour fill (FetchDecode9 CONSTANTCOLOR0).
+ * First cut handles a same-format rectangular copy + fill honouring the source/
+ * destination strides; ROP, alpha-blend and scaling come in later commits.
+ */
+static void imx95_blit_run(IMX95DPUState *s)
+{
+    uint32_t dattr = dpu_r(s, BLIT_STORE9_DSTBUFATTR0);
+    uint32_t ddim  = dpu_r(s, BLIT_STORE9_DSTBUFDIM);
+    uint64_t dbase = dpu_r(s, BLIT_STORE9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_STORE9_BASEADDRESSMSB0) << 32);
+    uint32_t dstride = BLIT_ATTR_STRIDE(dattr);
+    uint32_t dbpp = BLIT_ATTR_BPP(dattr) ? BLIT_ATTR_BPP(dattr) : 32;
+    uint32_t dbytes = dbpp / 8;
+    uint32_t w = BLIT_DIM_W(ddim);
+    uint32_t h = BLIT_DIM_H(ddim);
+
+    uint32_t sprop = dpu_r(s, BLIT_FD9_LAYERPROPERTY0);
+    uint64_t sbase = dpu_r(s, BLIT_FD9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_FD9_BASEADDRESSMSB0) << 32);
+    uint32_t sstride = BLIT_ATTR_STRIDE(dpu_r(s, BLIT_FD9_SRCBUFATTR0));
+    bool copy = (sprop & BLIT_SRCBUF_ENABLE) && sbase != 0;
+
+    if (dbase == 0 || w == 0 || h == 0 || dbytes == 0 || dbytes > 4) {
+        if (s->trace) {
+            qemu_log("imx95-dpu: blit skipped (dbase=0x%" PRIx64 " %ux%u "
+                     "dbpp=%u)\n", dbase, w, h, dbpp);
+        }
+        return;
+    }
+
+    if (copy) {
+        g_autofree uint8_t *row = g_malloc(w * dbytes);
+        for (uint32_t y = 0; y < h; y++) {
+            cpu_physical_memory_read(sbase + (uint64_t)y * sstride, row,
+                                     w * dbytes);
+            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, row,
+                                      w * dbytes);
+        }
+        if (s->trace) {
+            qemu_log("imx95-dpu: blit COPY %ux%u %ubpp src=0x%" PRIx64
+                     " dst=0x%" PRIx64 "\n", w, h, dbpp, sbase, dbase);
+        }
+    } else {
+        uint32_t color = dpu_r(s, BLIT_FD9_CONSTANTCOLOR0);
+        uint8_t pix[4] = { color & 0xff, (color >> 8) & 0xff,
+                           (color >> 16) & 0xff, (color >> 24) & 0xff };
+        g_autofree uint8_t *row = g_malloc(w * dbytes);
+        for (uint32_t x = 0; x < w; x++) {
+            memcpy(row + x * dbytes, pix, dbytes);
+        }
+        for (uint32_t y = 0; y < h; y++) {
+            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, row,
+                                      w * dbytes);
+        }
+        if (s->trace) {
+            qemu_log("imx95-dpu: blit FILL %ux%u %ubpp color=0x%08x "
+                     "dst=0x%" PRIx64 "\n", w, h, dbpp, color, dbase);
+        }
+    }
+}
+
+/*
+ * Write one blit register, applying side effects: STORE9_TRIGGER runs the blit,
+ * and the ComCtrl interrupt PRESET/CLEAR registers maintain the completion
+ * status the driver's fence waits on (the SW interrupt is asserted in STATUS1).
+ */
+static void imx95_blit_reg_write(IMX95DPUState *s, hwaddr off, uint32_t val)
+{
+    switch (off) {
+    case BLIT_COMCTRL_INTPRESET0:
+        s->comctrl_status0 |= val;
+        return;
+    case BLIT_COMCTRL_INTPRESET1:
+        s->comctrl_status1 |= val;   /* blit done: SW interrupt asserted */
+        return;
+    case BLIT_COMCTRL_INTCLEAR0:
+        s->comctrl_status0 &= ~val;
+        return;
+    case BLIT_COMCTRL_INTCLEAR1:
+        s->comctrl_status1 &= ~val;
+        return;
+    default:
+        break;
+    }
+
+    s->regs[off >> 2] = val;
+    if (off == BLIT_STORE9_TRIGGER) {
+        imx95_blit_run(s);
+    }
+}
+
+/*
+ * Feed one word into the Command Sequencer's HIF decoder. A "write N" opcode
+ * (top byte 0x14) is followed by a target offset then N values; "sync" opcodes
+ * (0x20) are no-ops here because the blit runs synchronously on its trigger.
+ */
+static void imx95_blit_hif_word(IMX95DPUState *s, uint32_t word)
+{
+    if (s->hif_count == 0 && !s->hif_have_off) {
+        uint32_t op = word >> 24;
+        if (op == BLIT_HIF_OP_WRITE) {
+            s->hif_count = word & 0xffff;   /* N values follow the offset */
+            s->hif_have_off = true;
+        } else if (op != BLIT_HIF_OP_SYNC && s->trace) {
+            qemu_log("imx95-dpu: blit HIF unknown opcode 0x%08x\n", word);
+        }
+        return;
+    }
+
+    if (s->hif_have_off) {
+        s->hif_off = word;                  /* target byte offset */
+        s->hif_have_off = false;
+        return;
+    }
+
+    imx95_blit_reg_write(s, s->hif_off, word);
+    s->hif_off += 4;
+    s->hif_count--;
+}
+
 static uint64_t imx95_dpu_read(void *opaque, hwaddr off, unsigned size)
 {
     IMX95DPUState *s = opaque;
@@ -304,6 +487,12 @@ static uint64_t imx95_dpu_read(void *opaque, hwaddr off, unsigned size)
          * 0x41000080 (FIFOSPACE=128, below the threshold).
          */
         return DPU_CMDSEQ_STATUS_IDLE | DPU_CMDSEQ_STATUS_FIFOSPACE;
+    }
+    if (off == BLIT_COMCTRL_INTSTATUS0) {
+        return s->comctrl_status0;
+    }
+    if (off == BLIT_COMCTRL_INTSTATUS1) {
+        return s->comctrl_status1;   /* blit-completion SW interrupt */
     }
     if (off == DPU_INT_STATUS0) {
         return s->int_status;
@@ -350,6 +539,16 @@ static void imx95_dpu_write(void *opaque, hwaddr off, uint64_t val,
         s->int_status |= (uint32_t)val;    /* software trigger */
         imx95_dpu_update_irq(s);
         return;
+    case BLIT_CMDSEQ_HIF:
+        imx95_blit_hif_word(s, (uint32_t)val);   /* command-stream port */
+        return;
+    case BLIT_STORE9_TRIGGER:
+    case BLIT_COMCTRL_INTPRESET0:
+    case BLIT_COMCTRL_INTPRESET1:
+    case BLIT_COMCTRL_INTCLEAR0:
+    case BLIT_COMCTRL_INTCLEAR1:
+        imx95_blit_reg_write(s, off, (uint32_t)val);  /* also handles direct */
+        return;
     default:
         break;
     }
@@ -386,6 +585,11 @@ static void imx95_dpu_reset(DeviceState *dev)
     s->int_status = 0;
     s->int_enable = 0;
     s->frame_index = 0;
+    s->hif_count = 0;
+    s->hif_off = 0;
+    s->hif_have_off = false;
+    s->comctrl_status0 = 0;
+    s->comctrl_status1 = 0;
     imx95_dpu_update_irq(s);
     if (s->vblank_timer) {
         timer_del(s->vblank_timer);   /* armed lazily when a source is enabled */
