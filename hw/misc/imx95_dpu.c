@@ -240,6 +240,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_BLEND_SRC_FUNC(v)   ((v) & 0xf)
 #define BLIT_BLEND_DST_FUNC(v)   (((v) >> 8) & 0xf)
 
+/*
+ * Blit scaling: a transforming blit routes FetchDecode9 -> HScaler9 (0xb0000)
+ * -> VScaler9 (0xc0000) -> Store9. Each scaler's pixengcfg DYNAMIC (+0x1008)
+ * CLKEN [25:24] is set when it is in the pipeline; the src/dst dimension regs
+ * then carry the scale ratio (we nearest-neighbour scale src dims -> dst dims).
+ * (Rotation routes through FetchRot9 (0x80000) but is not modelled: libg2d does
+ * it as tiled FetchRot9 strips with no single rotate flag to detect.)
+ */
+#define BLIT_HSCALER9_DYN   0xb1008
+#define BLIT_VSCALER9_DYN   0xc1008
+#define BLIT_SCALER_CLKEN(v) (((v) >> 24) & 0x3)
+
 /* Store9 — blit destination (sub-block 0xe0000) + the trigger */
 #define BLIT_STORE9_BASEADDRESS0    0xe0020
 #define BLIT_STORE9_BASEADDRESSMSB0 0xe0024
@@ -761,18 +773,50 @@ static void imx95_blit_run(IMX95DPUState *s)
     }
 
     if (copy) {
-        /*
-         * First cut: only a 1:1 same-geometry copy. Scaling, rotation and
-         * format conversion (src/dst dimensions or bpp differ) are not modelled
-         * yet — skip them rather than corrupt the destination.
-         */
-        if (BLIT_DIM_W(sdim) != w || BLIT_DIM_H(sdim) != h ||
-            BLIT_FETCH_BPP(sattr) != dbpp) {
+        uint32_t sw = BLIT_DIM_W(sdim), sh = BLIT_DIM_H(sdim);
+        bool scale = sw != w || sh != h;
+        bool scaler_on =
+            BLIT_SCALER_CLKEN(dpu_r(s, BLIT_HSCALER9_DYN)) != 0 ||
+            BLIT_SCALER_CLKEN(dpu_r(s, BLIT_VSCALER9_DYN)) != 0;
+
+        if (BLIT_FETCH_BPP(sattr) != dbpp) {
             if (s->trace) {
-                qemu_log("imx95-dpu: blit unsupported transform "
-                         "(src %ux%u/%ubpp -> dst %ux%u/%ubpp)\n",
-                         BLIT_DIM_W(sdim), BLIT_DIM_H(sdim),
-                         BLIT_FETCH_BPP(sattr), w, h, dbpp);
+                qemu_log("imx95-dpu: blit format-convert (src %ubpp -> dst "
+                         "%ubpp) not modelled — skipped\n",
+                         BLIT_FETCH_BPP(sattr), dbpp);
+            }
+            return;
+        }
+        if (scale) {
+            /*
+             * Transforming blit: HScaler9/VScaler9 in the pipeline scale the
+             * source rect to the destination rect. Nearest-neighbour resample
+             * (the HW uses a bilinear filter; this matches in flat regions).
+             */
+            if (!scaler_on || dbpp != 32) {
+                if (s->trace) {
+                    qemu_log("imx95-dpu: blit unsupported transform "
+                             "(src %ux%u -> dst %ux%u, scaler %s)\n",
+                             sw, sh, w, h, scaler_on ? "on" : "off");
+                }
+                return;
+            }
+            g_autofree uint8_t *srow = g_malloc((size_t)sw * 4);
+            g_autofree uint8_t *drow = g_malloc((size_t)w * 4);
+            for (uint32_t y = 0; y < h; y++) {
+                uint32_t sy = (uint32_t)((uint64_t)y * sh / h);
+                cpu_physical_memory_read(sbase + (uint64_t)sy * sstride, srow,
+                                         (size_t)sw * 4);
+                for (uint32_t x = 0; x < w; x++) {
+                    uint32_t sx = (uint32_t)((uint64_t)x * sw / w);
+                    memcpy(drow + x * 4, srow + sx * 4, 4);
+                }
+                cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                          (size_t)w * 4);
+            }
+            if (s->trace) {
+                qemu_log("imx95-dpu: blit SCALE %ux%u -> %ux%u src=0x%" PRIx64
+                         " dst=0x%" PRIx64 "\n", sw, sh, w, h, sbase, dbase);
             }
             return;
         }
