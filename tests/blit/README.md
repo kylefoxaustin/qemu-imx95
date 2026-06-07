@@ -19,10 +19,12 @@ clean run proves the copy datapath end to end (the kernel-free
   trips correctly through the model.
 - `g2d_cache_op` self-check passes (`cache_fail=0`).
 - at least one RGBA blit ran against the model.
+- the Porter-Duff **clear-mode blend** zeroes every pixel (`blend_clear_warn=0`)
+  — g2d verifies this, so it validates the alpha-blend (BlitBlend9) math.
 
-The 2D **blend** path (Porter-Duff "clear mode" etc.), scaling and rotation are
-not in the first cut; `g2d_basic_test` exercises them too and the harness
-reports the count as a known gap rather than failing.
+Scaling, rotation and format conversion are not modelled yet; `g2d_basic_test`
+exercises them too (as performance runs g2d does not self-verify), so the model
+skips those rather than corrupt the destination.
 
 ## Running
 

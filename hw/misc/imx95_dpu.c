@@ -29,9 +29,10 @@
  *    userspace G2D library submits a CmdSeq HIF program that configures the
  *    pipeline and triggers Store9, and the engine writes the destination buffer
  *    back to DRAM and signals a fence via a ComCtrl SW interrupt. We decode the
- *    HIF command stream, run the configured operation, and write the result.
- *    First cut: same-format rectangular copy and constant-color fill (ROP /
- *    blend / scale / rotate land in later commits).
+ *    HIF command stream, run the configured operation, and write the result:
+ *    same-format rectangular copy, constant-colour fill, and Porter-Duff
+ *    alpha-blend (BlitBlend9). Scaling, rotation and format conversion land in
+ *    later commits.
  *
  * The full 4 MiB MMIO is backed by a plain register store (read-back-what-was-
  * written) so the driver's many other writes (layerblend, extdst, etc.) are
@@ -159,6 +160,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_FD9_SRCBUFDIM0      0x9003c   /* [13:0] w-1; [29:16] h-1 */
 #define BLIT_FD9_CONSTANTCOLOR0  0x90054   /* fill colour (RGBA, 8b/comp) */
 #define BLIT_FD9_LAYERPROPERTY0  0x90058   /* bit31 SOURCEBUFFERENABLE */
+
+/*
+ * BlitBlend9: Porter-Duff alpha blend (sub-block 0x70000). When the pixengcfg
+ * routes the source through BlitBlend9 (CLKEN set in its PIXENGCFG dynamic reg)
+ * the blit blends the source (FetchDecode9) with the destination's current
+ * contents: out = src*Fsrc + dst*Fdst, per channel. The per-channel blend-
+ * function registers carry the source factor in [3:0] and the destination
+ * factor in [11:8], using the g2d_blend_func enum (ZERO=0, ONE=1, SRC_ALPHA=2,
+ * 1-SRC_ALPHA=3, DST_ALPHA=4, 1-DST_ALPHA=5). CLEAR = both ZERO -> output 0.
+ */
+#define BLIT_PIXENGCFG_BLEND9_DYN 0x71008
+#define BLIT_BLEND9_COLORFUNC    0x70018   /* red; green/blue mirror it */
+#define BLIT_BLEND9_ALPHAFUNC    0x70024
+#define BLIT_BLEND9_CLKEN(v)     (((v) >> 24) & 0x3)   /* PIXENGCFG CLKEN */
+#define BLIT_BLEND_SRC_FUNC(v)   ((v) & 0xf)
+#define BLIT_BLEND_DST_FUNC(v)   (((v) >> 8) & 0xf)
 
 /* Store9 — blit destination (sub-block 0xe0000) + the trigger */
 #define BLIT_STORE9_BASEADDRESS0    0xe0020
@@ -376,6 +393,20 @@ static const GraphicHwOps imx95_dpu_gfx_ops = {
  * First cut handles a same-format rectangular copy + fill honouring the source/
  * destination strides; ROP, alpha-blend and scaling come in later commits.
  */
+/* Porter-Duff blend factor (g2d_blend_func enum) as a numerator over 255. */
+static uint32_t blit_blend_factor(uint32_t f, uint8_t sa, uint8_t da)
+{
+    switch (f & 0x7) {
+    case 0:  return 0;          /* G2D_ZERO */
+    case 1:  return 255;        /* G2D_ONE */
+    case 2:  return sa;         /* G2D_SRC_ALPHA */
+    case 3:  return 255 - sa;   /* G2D_ONE_MINUS_SRC_ALPHA */
+    case 4:  return da;         /* G2D_DST_ALPHA */
+    case 5:  return 255 - da;   /* G2D_ONE_MINUS_DST_ALPHA */
+    default: return 0;
+    }
+}
+
 static void imx95_blit_run(IMX95DPUState *s)
 {
     uint32_t dattr = dpu_r(s, BLIT_STORE9_DSTBUFATTR0);
@@ -395,6 +426,9 @@ static void imx95_blit_run(IMX95DPUState *s)
                      ((uint64_t)dpu_r(s, BLIT_FD9_BASEADDRESSMSB0) << 32);
     uint32_t sstride = BLIT_ATTR_STRIDE(sattr);
     bool copy = (sprop & BLIT_SRCBUF_ENABLE) && sbase != 0;
+    /* BlitBlend9 in the pipeline (its pixengcfg clock on) => alpha blend. */
+    bool blend = copy && dbpp == 32 &&
+        BLIT_BLEND9_CLKEN(dpu_r(s, BLIT_PIXENGCFG_BLEND9_DYN)) != 0;
 
     if (dbase == 0 || w == 0 || h == 0 || dbytes == 0 || dbytes > 4) {
         if (s->trace) {
@@ -417,6 +451,49 @@ static void imx95_blit_run(IMX95DPUState *s)
                          "(src %ux%u/%ubpp -> dst %ux%u/%ubpp)\n",
                          BLIT_DIM_W(sdim), BLIT_DIM_H(sdim),
                          BLIT_FETCH_BPP(sattr), w, h, dbpp);
+            }
+            return;
+        }
+        if (blend) {
+            /*
+             * Porter-Duff blend of the source over the destination's current
+             * contents (RGBA8888, byte order R,G,B,A). CLEAR (both factors
+             * ZERO) -> 0; SRC (ONE/ZERO) is a copy; SRC_OVER blends by alpha.
+             */
+            uint32_t cf = dpu_r(s, BLIT_BLEND9_COLORFUNC);
+            uint32_t af = dpu_r(s, BLIT_BLEND9_ALPHAFUNC);
+            uint32_t csf = BLIT_BLEND_SRC_FUNC(cf);
+            uint32_t cdf = BLIT_BLEND_DST_FUNC(cf);
+            uint32_t asf = BLIT_BLEND_SRC_FUNC(af);
+            uint32_t adf = BLIT_BLEND_DST_FUNC(af);
+            g_autofree uint8_t *srow = g_malloc(w * 4);
+            g_autofree uint8_t *drow = g_malloc(w * 4);
+
+            for (uint32_t y = 0; y < h; y++) {
+                cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                         w * 4);
+                cpu_physical_memory_read(dbase + (uint64_t)y * dstride, drow,
+                                         w * 4);
+                for (uint32_t x = 0; x < w; x++) {
+                    uint8_t *sp = srow + x * 4, *dp = drow + x * 4;
+                    uint8_t sa = sp[3], da = dp[3];
+                    uint32_t v;
+                    for (int c = 0; c < 3; c++) {
+                        v = (sp[c] * blit_blend_factor(csf, sa, da) +
+                             dp[c] * blit_blend_factor(cdf, sa, da)) / 255;
+                        dp[c] = v > 255 ? 255 : v;
+                    }
+                    v = (sa * blit_blend_factor(asf, sa, da) +
+                         da * blit_blend_factor(adf, sa, da)) / 255;
+                    dp[3] = v > 255 ? 255 : v;
+                }
+                cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                          w * 4);
+            }
+            if (s->trace) {
+                qemu_log("imx95-dpu: blit BLEND %ux%u csf=%u cdf=%u asf=%u "
+                         "adf=%u dst=0x%" PRIx64 "\n", w, h, csf, cdf, asf, adf,
+                         dbase);
             }
             return;
         }

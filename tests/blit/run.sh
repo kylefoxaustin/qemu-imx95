@@ -139,10 +139,10 @@ pass=1
 [ "$(get copy_fail)" = 0 ]  || { echo "  MISS g2d_copy self-check failed"; pass=0; }
 [ "$(get cache_fail)" = 0 ] || { echo "  MISS g2d_cache_op self-check failed"; pass=0; }
 [ "$(get blits_ran)" -ge 1 ] 2>/dev/null || { echo "  MISS no RGBA blit ran"; pass=0; }
-# 2D blend (clear mode) is not in the copy+fill first cut: report, don't fail.
-cw=$(get blend_clear_warn)
-[ "${cw:-0}" -gt 0 ] && echo "  note: 2D blend (clear mode) not modelled yet ($cw px) — deferred"
+# g2d verifies Porter-Duff CLEAR: every pixel must be zero after a clear-mode
+# blend. A non-zero count means the alpha-blend math is wrong.
+[ "$(get blend_clear_warn)" = 0 ] || { echo "  MISS blend clear-mode non-zero"; pass=0; }
 
 [ "$pass" = 1 ] && {
-    echo "PASS: 2D blit copy + cache_op validated through G2D + real driver"; exit 0; }
+    echo "PASS: 2D blit copy + fill + alpha-blend validated through G2D"; exit 0; }
 echo "FAIL"; exit 1
