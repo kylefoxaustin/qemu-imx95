@@ -167,8 +167,11 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
-**Display, input, audio & media — supported (registration bar).** The EVK's
-output and HMI peripherals bind and enumerate against stock Linux:
+**Display, input, audio & media — supported.** The EVK's output and HMI
+peripherals bind and enumerate against stock Linux; the JPEG codecs, GPIO, TPM
+PWM, ADC, and I²C buses are functional end to end, while the display, USB and
+audio paths sit at the registration bar (drivers bind, devices enumerate, and
+the display additionally renders pixels):
 
 - **DPU display — pixels on screen.** The i.MX 95 DPU scans the primary-plane
   FetchLayer framebuffer out of guest DRAM to a QEMU console
@@ -188,14 +191,33 @@ output and HMI peripherals bind and enumerate against stock Linux:
   **eDMA / SAI / MICFIL** models (`hw/dma/imx95_edma.c`, `hw/audio/`) so the
   `fsl-edma`/`fsl-sai`/`fsl-micfil` drivers probe and allocate DMA channels
   (`tests/audio/`).
-- **HW JPEG codecs.** The two dedicated `mxc-jpeg` blocks (separate from the
-  Wave6 VPU) register as V4L2 mem2mem devices `/dev/video2` (decode) and
-  `/dev/video3` (encode) (`tests/jpeg/`).
+- **HW JPEG codecs — functional encode and decode.** The two dedicated CAST
+  `mxc-jpeg` blocks (separate from the Wave6 VPU) are modelled as real
+  descriptor-chain engines (`hw/misc/imx95_jpeg.c`): `/dev/video2` decodes a
+  JPEG to a raw frame and `/dev/video3` encodes a raw frame to JPEG, both via
+  libjpeg (already a QEMU dependency through VNC). Beyond the model-level
+  `tests/qtest/imx95-jpeg-test.c` encode→decode round-trip, decode is **proven
+  through the real media stack** in `tests/gstreamer/`: a stock GStreamer
+  `filesrc ! jpegparse ! v4l2jpegdec ! videoconvert ! filesink` pipeline runs
+  end-to-end on the real `mxc-jpeg` V4L2 mem2mem driver and produces a correct
+  NV12 frame.
+- **GPIO — functional.** The five SoC RGPIO controllers (`hw/gpio/imx95_gpio.c`,
+  `fsl,imx95-gpio`) bind under `gpio-vf610`; output drives and input reads round
+  trip (PDOR/PDDR ↔ PDIR), exercised by a devmem loopback in `tests/gpio/`.
+- **TPM PWM — functional.** Both `pwm@424e0000/42510000` TPM blocks
+  (`hw/misc/imx_tpm_pwm.c`) register six channels each, and sysfs
+  period / duty / enable round-trips (`tests/pwm/`).
+- **ADC — functional.** The `nxp,imx93-adc` block (`hw/misc/imx93_adc.c`) powers
+  up, calibrates, and converts: `iio:device0` exposes eight channels that read
+  back synthetic samples on a real EOC interrupt (`tests/adc/`).
+- **I²C buses + slaves — functional.** The LPI2C masters that carry a device are
+  real interrupt-driven masters with their slaves modelled: PCAL6408A / PCA953x
+  expanders, a PCA9632 LED controller (`/sys/class/leds/pca963x:backlight`), and
+  an ADP5585 GPIO/PWM expander MFD all probe over real buses (`tests/i2c/`).
 
-These sit at the **registration / done-at-bar** milestone — the drivers bind
-and the devices enumerate, and the display additionally renders pixels;
-functional playback / capture / JPEG decode would need the codec and FIFO
-datapaths and are tracked in
+The display additionally renders pixels but stays at the registration bar for
+compositing; functional audio playback / capture would need the SAI/MICFIL FIFO
+datapaths and is tracked in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
 **CAN — supported.** All five **FlexCAN** controllers are modelled
@@ -250,17 +272,18 @@ Near-term focus is **landing this machine upstream** — the series plus its
 three generic-QEMU prereq patches (`target/arm/ptw.c`,
 `target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-**NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five controllers), the
-**DPU display** (boot logo on screen), the **usb2 ChipIdea** host (`usb-kbd`
-input), **audio** (all three ASoC cards), and the **HW JPEG** codecs are
-**done** and described under "What runs today" above. What remains is
-forward-looking:
+**NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five
+controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
+host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
+JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
+functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
+under "What runs today" above. What remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | Compositing / DSI-LVDS bridge timing beyond the FetchLayer scanout, and a multi-plane KMS path (the boot logo already renders today via the primary-plane scanout + a real vblank/irqsteer) | next |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
-| **Functional codec** | JPEG/VPU encode-decode datapaths (the JPEG codecs register as V4L2 m2m devices today; the compute engine is not modelled) | deferred |
+| **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
 | GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
@@ -466,6 +489,12 @@ This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
     # HW JPEG codecs register as /dev/video2 (dec) + /dev/video3 (enc)
     JPEG_MODDIR=<bsp>/lib/modules/<kver>/kernel/drivers/media tests/jpeg/run.sh
 
+    # HW JPEG functional decode through the real GStreamer media stack
+    BSP_ROOTFS=<imx-image-full rootfs> tests/gstreamer/run.sh
+
+    # functional small peripherals: RGPIO, TPM PWM, i.MX93 ADC, LPI2C buses
+    tests/gpio/run.sh ; tests/pwm/run.sh ; tests/adc/run.sh ; tests/i2c/run.sh
+
 ## Methodology & contributing
 
 The project is built measure-first: propose a hypothesis, verify it against
@@ -535,15 +564,18 @@ working artifacts — they are not committed to the repo (the directory is
   backend; RX BD-ring scatter + ring wraparound have deterministic qtests
   (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
   errors, flat memory).
-- **v2.x (on `imx95-netc`)** — the EVK's display / HMI / media peripherals to
-  their registration bar, on top of v2.0.0: the **second + third ENETC ports**
-  (1G back-to-back EVK ⇄ FRDM traffic, plus the 10G `eth2`); the **DPU display**
-  path (FetchLayer
+- **v2.x (on `imx95-netc`)** — the EVK's display / HMI / media peripherals on
+  top of v2.0.0: the **second + third ENETC ports** (1G back-to-back EVK ⇄ FRDM
+  traffic, plus the 10G `eth2`); the **DPU display** path (FetchLayer
   scanout + a from-scratch `fsl,imx-irqsteer` driving the FrameGen vblank, so
   the boot logo renders — six Tux at 1920×1200 — and atomic commits complete on
   interrupt); the **usb2 ChipIdea** host (`usb-kbd` HID input, with the VBUS
   PCAL6524 expander modelled); the **audio stack** (eDMA + SAI + MICFIL + a real
-  WM8962 codec, so all three ASoC cards register — `tests/audio/`); and the two
-  **HW JPEG** codecs as V4L2 m2m devices (`tests/jpeg/`). Along the way: backed
-  the PCIe `app`/`atu` windows so an unbacked-register external abort can't wedge
-  the boot.
+  WM8962 codec, so all three ASoC cards register — `tests/audio/`); the
+  **functional HW JPEG** codecs (libjpeg-backed encode + decode, validated
+  model-level by qtest and through the real GStreamer media stack —
+  `tests/gstreamer/`); and a sweep of **functional small peripherals** —
+  RGPIO (`tests/gpio/`), TPM PWM (`tests/pwm/`), the i.MX93 ADC (`tests/adc/`),
+  and real interrupt-driven LPI2C masters with their expander / LED / ADP5585
+  slaves (`tests/i2c/`). Along the way: backed the PCIe `app`/`atu` windows so an
+  unbacked-register external abort can't wedge the boot.
