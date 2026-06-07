@@ -404,9 +404,12 @@ Full diagnoses, including the icount × multi-CPU finding, are in
   (MUA @0x445b0000) and the M33-side mailbox (MUB @0x445c0000) are peer-linked
   over a shared SMT SRAM. Linux's SCMI doorbells on MUA reach the SM via MUB;
   the SM's responses on MUB raise the A55's MU IRQ via MUA.
-- Real device models for the pieces the boot exercises: LPUART, uSDHC, MU, GIC,
-  the system-counter timer, ANATOP PLLs, SRC, GPC, ELE responder, LPI2C +
-  PMICs, and a DPU command-sequencer stub. Everything else is a logging stub.
+- Real device models for the pieces the base boot exercises: LPUART, uSDHC, MU,
+  GIC, the system-counter timer, ANATOP PLLs, SRC, GPC, ELE responder, LPI2C +
+  PMICs, and the DPU display controller (FetchLayer scanout + a
+  `fsl,imx-irqsteer` vblank). The networking, CAN, audio, JPEG and
+  small-peripheral models listed under "What runs today" are likewise real;
+  blocks no driver touches are logging stubs.
 
 All memory-map addresses and IRQ numbers come from the NXP BSP, never guessed:
 the Linux DTS
