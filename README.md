@@ -28,6 +28,12 @@ upstream-mergeable into QEMU mainline.
 **Maintainer:** Kyle Fox ([@kylefoxaustin](https://github.com/kylefoxaustin))
 (see [`MAINTAINERS`](MAINTAINERS) for the canonical entry).
 
+![i.MX 95 booting Linux on the emulated DPU display — six A55 SMP Tux logos](docs/images/dpu-boot-logo.png)
+
+*Real NXP BSP Linux scanned out at 1920×1200 by the emulated DPU (FetchLayer →
+FrameGen), on the stock `imx95-19x19-evk` device tree. Six Tux logos = six
+Cortex-A55 cores.*
+
 ## Quickstart for newcomers
 
 This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
@@ -96,11 +102,13 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-**FlexCAN, networking, display, USB and audio are supported** — the five
-FlexCAN controllers (real Linux driver), all three ENETC Ethernet ports (incl. the 10G), the DPU
-display path (boot logo on screen), the usb2 ChipIdea host (`usb-kbd` input),
-and all three EVK ASoC sound cards bind and run against stock Linux (see "What
-runs today"). Functional A/V datapaths (display compositing beyond scanout,
+**FlexCAN, networking and the DPU display are functional; USB and audio come
+up at the registration bar** — the five FlexCAN controllers (real Linux driver),
+all three ENETC Ethernet ports (incl. the 10G) and the DPU display path (boot
+logo on screen) run end to end, while the usb2 ChipIdea host (`usb-kbd` input)
+and all three EVK ASoC sound cards bind and enumerate against stock Linux (see
+"What runs today" for the per-device **functional** / **brings up** split).
+Functional A/V datapaths (display compositing beyond scanout,
 audio playback/capture, JPEG/VPU decode) and other customer-specific real-time
 peripherals (TSN, DSP) remain further out. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
@@ -167,13 +175,13 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
-**Display, input, audio & media — supported.** The EVK's output and HMI
-peripherals bind and enumerate against stock Linux; the JPEG codecs, GPIO, TPM
-PWM, ADC, and I²C buses are functional end to end, while the display, USB and
-audio paths sit at the registration bar (drivers bind, devices enumerate, and
-the display additionally renders pixels):
+**Display, input, audio & media.** The EVK's output and HMI peripherals run
+against stock Linux. Each device below is tagged **functional** (the host
+driver's data path runs end to end — data actually moves) or **brings up** (the
+driver binds and the device registers / enumerates — the registration bar, no
+working host data path yet):
 
-- **DPU display — pixels on screen.** The i.MX 95 DPU scans the primary-plane
+- **DPU display — functional.** The i.MX 95 DPU scans the primary-plane
   FetchLayer framebuffer out of guest DRAM to a QEMU console
   (`hw/misc/imx95_dpu.c`); stock `dpu95` binds, fbcon comes up, and the
   **kernel boot logo renders** — six Tux penguins, one per A55 — at 1920×1200
@@ -181,17 +189,17 @@ the display additionally renders pixels):
   interrupts are wired through a from-scratch `fsl,imx-irqsteer`
   (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
   `flip_done` timeouts) and the logo flushes through the normal page-flip.
-- **USB keyboard — interactive input.** The usb2 **ChipIdea** host is modelled,
+- **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
   PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
-- **Audio — all three ASoC cards register.** `/proc/asound/cards` lists
+- **Audio — brings up.** `/proc/asound/cards` lists all three ASoC cards:
   `wm8962-audio` (SAI3 ↔ a real **WM8962** codec on lpi2c4, reading device-id
   0x6243), `micfil-audio` (PDM mic), and `bt-sco-audio`. Backed by register-file
   **eDMA / SAI / MICFIL** models (`hw/dma/imx95_edma.c`, `hw/audio/`) so the
   `fsl-edma`/`fsl-sai`/`fsl-micfil` drivers probe and allocate DMA channels
   (`tests/audio/`).
-- **HW JPEG codecs — functional encode and decode.** The two dedicated CAST
+- **HW JPEG codecs — functional.** Encode and decode. The two dedicated CAST
   `mxc-jpeg` blocks (separate from the Wave6 VPU) are modelled as real
   descriptor-chain engines (`hw/misc/imx95_jpeg.c`): `/dev/video2` decodes a
   JPEG to a raw frame and `/dev/video3` encodes a raw frame to JPEG, both via
@@ -228,7 +236,7 @@ compositing; functional audio playback / capture would need the SAI/MICFIL FIFO
 datapaths and is tracked in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
-**CAN — supported.** All five **FlexCAN** controllers are modelled
+**CAN — functional.** All five **FlexCAN** controllers are modelled
 (`hw/net/can/flexcan.c`) on QEMU's CAN bus subsystem — real frame TX/RX, the
 Linux-driver MCR handshake, individual RX mailboxes and CAN-FD geometry.
 **Validated end-to-end with the real Linux `flexcan` driver:** the
@@ -244,7 +252,7 @@ the node you want):
 -machine imx95-19x19-evk,canbus0=canbus0
 ```
 
-**Networking — supported (v2.0.0).** The i.MX 95 NETC block is modelled end to
+**Networking — functional (v2.0.0).** The i.MX 95 NETC block is modelled end to
 end: a functional GICv3 ITS, an integrated-ECAM PCIe host, and a from-scratch
 **ENETC v4 Ethernet PF** (`hw/net/fsl_enetc.c`, PCI `1131:e101`) with a BD-ring
 DMA engine and MSI-X routed through the ITS. The stock Linux `nxp_enetc4`
@@ -592,3 +600,16 @@ working artifacts — they are not committed to the repo (the directory is
   (`hw/ssi/imx_fspi.c`, a 64 MiB `mtd0` with read + write/read-back —
   `tests/flexspi/`). Along the way: backed the PCIe `app`/`atu` windows so an
   unbacked-register external abort can't wedge the boot.
+
+## License & credits
+
+GPL-2.0-or-later, same as QEMU. Based on upstream QEMU; see
+[`README.rst`](README.rst) and `LICENSE` for QEMU's own authorship and
+licensing.
+
+---
+
+**Created and maintained by Kyle Fox — [@kylefoxaustin](https://github.com/kylefoxaustin).**
+The first-ever QEMU port of the NXP i.MX 95 — the full CPU complement
+(6× Cortex-A55 + the Cortex-M33 System Manager + the Cortex-M7), booting real
+Linux on the real NXP System Manager firmware.
