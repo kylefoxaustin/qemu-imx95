@@ -202,13 +202,15 @@ working host data path yet):
   display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
   decoded and the configured operation run — same-format **copy**,
-  constant-colour **fill**, and Porter-Duff **alpha-blend** (BlitBlend9) — with
-  the completion fence signalled through a ComCtrl SW interrupt. Proven through
-  the real NXP **G2D** stack: stock `g2d_basic_test` drives `libg2d-dpu` over
-  `/dev/dri/renderD128` and its `g2d_copy`, `g2d_cache_op` and Porter-Duff
-  clear-mode self-checks all pass (`tests/blit/`, plus a kernel-free
-  `tests/qtest/imx95-blit-test.c`). Scaling, rotation and format conversion are
-  not modelled yet.
+  constant-colour **fill**, Porter-Duff **alpha-blend** (BlitBlend9), and
+  **scaling** (HScaler9/VScaler9) — with the completion fence signalled through
+  a ComCtrl SW interrupt. Proven through the real NXP **G2D** stack: stock
+  `g2d_basic_test` drives `libg2d-dpu` over `/dev/dri/renderD128` and its
+  `g2d_copy`, `g2d_cache_op` and Porter-Duff clear-mode self-checks all pass
+  (`tests/blit/run.sh`); a small g2d exerciser validates a 2× upscale
+  (`tests/blit/run-xform.sh`); and a kernel-free `tests/qtest/imx95-blit-test.c`
+  drives a synthetic cmdlist. Rotation (libg2d's tiled FetchRot9 strips) and
+  format conversion are not modelled yet.
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
