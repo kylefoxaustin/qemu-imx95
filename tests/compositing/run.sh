@@ -171,11 +171,11 @@ CRTC=$(awk '/^CRTCs:/{c=1;next} /^Planes:/{c=0} c&&/^[0-9]/{print $1;exit}' /tmp
 # 2nd plane line (col-0 digit) = first overlay; the 1st is the primary.
 OVL=$(awk '/^Planes:/{c=1;next} c&&/^[0-9]/{n++; if(n==2){print $1;exit}}' /tmp/m.txt)
 echo "CONN=$CONN MODE=$MODE CRTC=$CRTC OVL=$OVL"
-# Primary full-screen + a 320x240 overlay at (200,150); hold the display.
-/modetest -M imx95-dpu -s "$CONN:$MODE" -P "$OVL@$CRTC:320x240+200+150" -v \
-    > /tmp/mt.log 2>&1 &
+# Atomic commit: primary full-screen + a 320x240 overlay at (200,150); hold it.
+/modetest -M imx95-dpu -a -s "$CONN@$CRTC:$MODE" \
+    -P "$OVL@$CRTC:320x240+200+150" -v > /tmp/mt.log 2>&1 &
 sleep 3
-echo "modetest: $(grep -iE 'setting|failed|error|atomic' /tmp/mt.log | head -4 | tr '\n' '|')"
+echo "--- modetest log ---"; cat /tmp/mt.log 2>/dev/null | head -20
 echo "=== COMPOSITE-READY ==="
 sleep 20
 /bin/busybox poweroff -f
