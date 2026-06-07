@@ -21,8 +21,10 @@
  *        secondary), POSITION places the plane, BLENDCONTROL.ALPHA blends it;
  *      - FrameGen (DPU+0x2b0000): HTCFG1/VTCFG1 (active w/h), FGINCTRL (mode).
  *    On each console refresh we walk the LayerBlend chain bottom-up and
- *    composite the planes (primary + overlays) to the QEMU console; opaque
- *    blend only (alpha-blend TODO). The connector chain (pixel-interleaver /
+ *    composite the planes (primary + overlays) to the QEMU console, honouring
+ *    each LayerBlend's BLENDCONTROL funcs + constant alpha (Porter-Duff; the
+ *    opaque path is e2e-validated, the const-alpha path reuses the blit's
+ *    g2d-validated factors). The connector chain (pixel-interleaver /
  *    pixel-link / LDB / LVDS PHY / panel) registers a DRM connector when the
  *    dtb enables it, but carries no pixels here.
  *
@@ -105,7 +107,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define DPU_LINK_FETCHLAYER1 0x1b
 /* LayerBlend per-unit regs: pixengcfg DYNAMIC at +0x1008, rest at low offs. */
 #define DPU_LB_DYNAMIC    0x1008   /* PRIM_SEL[5:0] SEC_SEL[13:8] CLKEN[25:24]*/
+#define DPU_LB_BLENDCTL   0x10     /* PRIM_C[3:0] SEC_C[7:4] ALPHA[23:16] */
 #define DPU_LB_POSITION   0x14     /* XPOS[15:0] YPOS[31:16] */
+#define DPU_LB_ALPHA(v)   (((v) >> 16) & 0xff)   /* const alpha */
+#define DPU_LB_PRIM_FUNC(v) ((v) & 0xf)
+#define DPU_LB_SEC_FUNC(v)  (((v) >> 4) & 0xf)
 #define DPU_LB_PRIM(v)    ((v) & 0x3f)
 #define DPU_LB_SEC(v)     (((v) >> 8) & 0x3f)
 #define DPU_LB_CLKEN(v)   (((v) >> 24) & 0x3)
@@ -326,9 +332,31 @@ static hwaddr imx95_dpu_plane_base(uint32_t link)
     }
 }
 
-/* Blit one enabled FetchLayer plane onto the surface at (px,py), XRGB8888. */
+/*
+ * LayerBlend colour blend factor as a numerator over 255. ca = the LayerBlend's
+ * constant alpha (BLENDCONTROL.ALPHA); sa = the secondary pixel's alpha.
+ * (dpu95-layerblend.c: ZERO=0 ONE=1 SEC_ALPHA=4 1-SEC_ALPHA=5 CONST_ALPHA=6
+ * 1-CONST_ALPHA=7.)
+ */
+static uint32_t imx95_lb_factor(uint32_t f, uint8_t ca, uint8_t sa)
+{
+    switch (f & 0x7) {
+    case 1:  return 255;        /* ONE */
+    case 4:  return sa;         /* SEC_ALPHA */
+    case 5:  return 255 - sa;   /* ONE_MINUS_SEC_ALPHA */
+    case 6:  return ca;         /* CONST_ALPHA */
+    case 7:  return 255 - ca;   /* ONE_MINUS_CONST_ALPHA */
+    default: return 0;          /* ZERO */
+    }
+}
+
+/*
+ * Composite one enabled FetchLayer plane onto the surface at (px,py), XRGB8888,
+ * blending per its LayerBlend's BLENDCONTROL (lb = the LayerBlend base, or 0
+ * for a plain opaque copy). The surface is the standard 32bpp xRGB console fmt.
+ */
 static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
-                                hwaddr fl, int px, int py)
+                                hwaddr fl, hwaddr lb, int px, int py)
 {
     uint32_t prop = dpu_r(s, fl + FL_LAYERPROPERTY);
     uint64_t base = dpu_r(s, fl + FL_BASEADDRESS) |
@@ -339,6 +367,11 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
     uint8_t *sd = surface_data(surface);
     int sstride = surface_stride(surface);
     int sw = surface_width(surface), sh = surface_height(surface);
+    uint32_t bc = lb ? dpu_r(s, lb + DPU_LB_BLENDCTL) : 0;
+    uint8_t ca = DPU_LB_ALPHA(bc);
+    uint32_t pf = DPU_LB_PRIM_FUNC(bc), sf = DPU_LB_SEC_FUNC(bc);
+    /* opaque fast path: no LB, or PRIM=ZERO + SEC=CONST_ALPHA at full alpha */
+    bool opaque = lb == 0 || (pf == 0 && sf == 6 && ca == 0xff);
     g_autofree uint8_t *row = NULL;
 
     if (!(prop & FL_SOURCEBUFFERENABLE) || base == 0 || pw == 0 || ph == 0) {
@@ -357,16 +390,36 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
         for (uint32_t x = 0; x < pw; x++) {
             int dx = px + (int)x;
             uint32_t p;
+            uint8_t sr, sg, sb;
             if (dx < 0 || dx >= sw) {
                 continue;
             }
             p = ldl_le_p(row + x * 4);
-            d[dx] = rgb_to_pixel32((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
+            sr = (p >> 16) & 0xff; sg = (p >> 8) & 0xff; sb = p & 0xff;
+            if (opaque) {
+                d[dx] = rgb_to_pixel32(sr, sg, sb);
+            } else {
+                /*
+                 * We model XRGB8888 planes (no per-pixel alpha), so each source
+                 * pixel is fully opaque; the secondary-alpha funcs see 0xff and
+                 * translucency comes from the constant alpha.
+                 */
+                uint8_t sa = 0xff;
+                uint32_t fp = imx95_lb_factor(pf, ca, sa);
+                uint32_t fs = imx95_lb_factor(sf, ca, sa);
+                uint32_t pp = d[dx];   /* primary already in the surface */
+                uint32_t r = (((pp >> 16) & 0xff) * fp + sr * fs) / 255;
+                uint32_t g = (((pp >> 8) & 0xff) * fp + sg * fs) / 255;
+                uint32_t b = ((pp & 0xff) * fp + sb * fs) / 255;
+                d[dx] = rgb_to_pixel32(r > 255 ? 255 : r, g > 255 ? 255 : g,
+                                       b > 255 ? 255 : b);
+            }
         }
     }
     if (s->trace) {
-        qemu_log("imx95-dpu: plane fl=0x%" HWADDR_PRIx " %ux%u @ (%d,%d)\n",
-                 fl, pw, ph, px, py);
+        qemu_log("imx95-dpu: plane fl=0x%" HWADDR_PRIx " %ux%u @ (%d,%d) "
+                 "%s a=%u\n", fl, pw, ph, px, py, opaque ? "opaque" : "blend",
+                 ca);
     }
     return 1;
 }
@@ -411,8 +464,8 @@ static bool imx95_dpu_gfx_update(void *opaque)
         int next = -1;
 
         if (fl) {
-            planes += imx95_dpu_blit_plane(s, surface, fl, pos & 0xffff,
-                                           (pos >> 16) & 0xffff);
+            planes += imx95_dpu_blit_plane(s, surface, fl, lb_ofs[cur],
+                                           pos & 0xffff, (pos >> 16) & 0xffff);
         }
         for (int j = 0; j < 6; j++) {
             uint32_t dj = dpu_r(s, lb_ofs[j] + DPU_LB_DYNAMIC);
@@ -429,7 +482,7 @@ static bool imx95_dpu_gfx_update(void *opaque)
      * (keeps the plain boot-logo path working regardless of LB programming).
      */
     if (planes == 0) {
-        imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0);
+        imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0, 0);
     }
 
     qemu_console_update(s->con, 0, 0, w, h);

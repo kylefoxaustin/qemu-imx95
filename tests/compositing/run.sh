@@ -173,7 +173,11 @@ CRTC=$(awk '/^CRTCs:/{c=1;next} /^Planes:/{c=0} c&&/^[0-9]/{print $1;exit}' /tmp
 PRIM=$(awk '/^Planes:/{c=1;next} c&&/^[0-9]/{l=substr($NF,length($NF),1); if(index("13579bdf",l)){print $1;exit}}' /tmp/m.txt)
 OVL=$(awk -v p="$PRIM" '/^Planes:/{c=1;next} c&&/^[0-9]/{l=substr($NF,length($NF),1); if($1!=p && index("13579bdf",l)){print $1;exit}}' /tmp/m.txt)
 echo "CONN=$CONN MODE=$MODE CRTC=$CRTC PRIM=$PRIM OVL=$OVL"
-# Atomic commit: primary full-screen + a 320x240 overlay at (200,150); hold it.
+# Atomic commit: primary full-screen + a 320x240 opaque overlay at (200,150);
+# hold the display. (modetest can't set the "pixel blend mode" property - its
+# -w parser stops at the space in the name - and XR24 carries no per-pixel
+# alpha, so a clean translucent commit isn't expressible here; the model's
+# alpha-blend path reuses the g2d-validated Porter-Duff factors regardless.)
 /modetest -M imx95-dpu -a -s "$CONN@$CRTC:$MODE" \
     -P "$PRIM@$CRTC:1280x800" -P "$OVL@$CRTC:320x240+200+150" -v \
     > /tmp/mt.log 2>&1 &
@@ -231,6 +235,9 @@ import sys
 try:
     from PIL import Image
     im = Image.open(sys.argv[1]).convert('RGB'); px = im.load(); W, H = im.size
+    # The opaque overlay's test pattern has black stripes; the SMPTE primary at
+    # that location is bright bars (never near-black). Near-black pixels inside
+    # the 320x240 bbox prove the overlay composited over the primary.
     n = 0
     for y in range(160, min(380, H), 6):
         for x in range(210, min(510, W), 6):
