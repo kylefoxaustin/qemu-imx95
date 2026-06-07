@@ -529,6 +529,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
      */
     {
         static const int dpu_irqsteer_line[4] = { 64, 70, 73, 74 };
+        /* 2D blit completion: ComCtrl SW0..3 -> irqsteer lines 1..4 (dtsi). */
+        static const int blit_irqsteer_line[4] = { 1, 2, 3, 4 };
         DeviceState *dpu = qdev_new("imx95.dpu");
         int i;
 
@@ -539,6 +541,10 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         for (i = 0; i < 4; i++) {
             sysbus_connect_irq(SYS_BUS_DEVICE(dpu), i,
                                qdev_get_gpio_in(irqsteer, dpu_irqsteer_line[i]));
+        }
+        for (i = 0; i < 4; i++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(dpu), 4 + i,
+                qdev_get_gpio_in(irqsteer, blit_irqsteer_line[i]));
         }
     }
 

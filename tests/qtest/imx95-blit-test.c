@@ -43,9 +43,14 @@
 #define BYTESPP  (BPP / 8)
 #define STRIDE   (W * BYTESPP)
 
-/* DPU field encodings: stride-1 | bpp<<16; and (w-1) | (h-1)<<16 */
-#define ATTR(stride, bpp)  (((stride) - 1) | ((bpp) << 16))
-#define DIM(w, h)          (((w) - 1) | (((h) - 1) << 16))
+/*
+ * DPU field encodings. STRIDE is bytes-1 [15:0] in both units; BITSPERPIXEL is
+ * at [21:16] for the FetchDecode9 source but [31:24] for the Store9 dest.
+ * Dimension is (w-1) | (h-1)<<16.
+ */
+#define ATTR_SRC(stride, bpp)  (((stride) - 1) | ((bpp) << 16))
+#define ATTR_DST(stride, bpp)  (((stride) - 1) | ((bpp) << 24))
+#define DIM(w, h)              (((w) - 1) | (((h) - 1) << 16))
 
 static void hif(QTestState *qts, uint32_t word)
 {
@@ -84,7 +89,7 @@ static void test_blit_fill(void)
 
     /* Configure Store9 dest, set fill colour, trigger, signal done. */
     hif_w2(qts, STORE9_BASEADDR0, (uint32_t)DST_GPA, (uint32_t)(DST_GPA >> 32));
-    hif_w1(qts, STORE9_DSTATTR0, ATTR(STRIDE, BPP));
+    hif_w1(qts, STORE9_DSTATTR0, ATTR_DST(STRIDE, BPP));
     hif_w1(qts, STORE9_DSTDIM, DIM(W, H));
     hif_w1(qts, FD9_CONSTCOLOR0, color);
     hif_w1(qts, FD9_LAYERPROP0, 0);             /* source disabled => fill */
@@ -126,11 +131,11 @@ static void test_blit_copy(void)
 
     /* Configure FetchDecode9 source (enabled) + Store9 dest, then trigger. */
     hif_w2(qts, FD9_BASEADDRESS0, (uint32_t)SRC_GPA, (uint32_t)(SRC_GPA >> 32));
-    hif_w1(qts, FD9_SRCBUFATTR0, ATTR(STRIDE, BPP));
+    hif_w1(qts, FD9_SRCBUFATTR0, ATTR_SRC(STRIDE, BPP));
     hif_w1(qts, FD9_SRCBUFDIM0, DIM(W, H));
     hif_w1(qts, FD9_LAYERPROP0, SRCBUF_ENABLE);
     hif_w2(qts, STORE9_BASEADDR0, (uint32_t)DST_GPA, (uint32_t)(DST_GPA >> 32));
-    hif_w1(qts, STORE9_DSTATTR0, ATTR(STRIDE, BPP));
+    hif_w1(qts, STORE9_DSTATTR0, ATTR_DST(STRIDE, BPP));
     hif_w1(qts, STORE9_DSTDIM, DIM(W, H));
     hif_w1(qts, STORE9_TRIGGER, 0x10);
 

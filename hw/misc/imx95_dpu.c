@@ -142,6 +142,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_COMCTRL_INTCLEAR1   0x1024
 #define BLIT_COMCTRL_INTSTATUS0  0x102c
 #define BLIT_COMCTRL_INTSTATUS1  0x1030
+/*
+ * ComCtrl SW interrupts SW0..3 are DPU internal IRQs 54..57 (dpu95.h); in the
+ * second 32-bit status word (STATUS1) they are bits 54&0x1f..57&0x1f = 22..25.
+ * The cmdseq fires one (INTERRUPTPRESET1) when a blit completes; the dpu95-blit
+ * ISR signals the driver's fence. Each maps to a displaymix-irqsteer input line
+ * (dtsi dpu interrupts: comctrl_sw0..3 -> lines 1..4).
+ */
+#define BLIT_SW0_BIT             22
+#define DPU_NUM_BLIT_IRQ         4
 
 /* FetchDecode9 — blit source 0 (sub-block 0x90000) */
 #define BLIT_FD9_BASEADDRESS0    0x90028
@@ -159,8 +168,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_STORE9_TRIGGER         0xe1014   /* PIXENGCFG_STORE9_TRIGGER */
 
 #define BLIT_SRCBUF_ENABLE       (1u << 31)
-#define BLIT_ATTR_STRIDE(v)      (((v) & 0xffff) + 1)        /* bytes */
-#define BLIT_ATTR_BPP(v)         (((v) >> 16) & 0x3f)        /* bits per pixel */
+#define BLIT_ATTR_STRIDE(v)      (((v) & 0xffff) + 1)        /* bytes (n-1) */
+/*
+ * BITSPERPIXEL lives at different bit positions in the two units: the
+ * FetchDecode9 source (fetchunit layout, dpu95-fetchunit.h) puts it at [21:16];
+ * the Store9 destination puts it at [31:24] (observed against live libg2d-dpu
+ * cmdlists). Same STRIDE [15:0] = bytes-1 in both.
+ */
+#define BLIT_FETCH_BPP(v)        (((v) >> 16) & 0x3f)        /* source */
+#define BLIT_STORE_BPP(v)        (((v) >> 24) & 0xff)        /* destination */
 #define BLIT_DIM_W(v)            (((v) & 0x3fff) + 1)
 #define BLIT_DIM_H(v)            ((((v) >> 16) & 0x3fff) + 1)
 
@@ -189,6 +205,7 @@ struct IMX95DPUState {
     bool     hif_have_off;      /* next HIF word is the target offset */
     uint32_t comctrl_status0;
     uint32_t comctrl_status1;   /* SW interrupts (blit completion) live here */
+    qemu_irq comctrl_irq[DPU_NUM_BLIT_IRQ];   /* -> irqsteer lines 1..4 */
 };
 
 /* Drive each modelled source's irqsteer line from (status & enable). */
@@ -366,15 +383,17 @@ static void imx95_blit_run(IMX95DPUState *s)
     uint64_t dbase = dpu_r(s, BLIT_STORE9_BASEADDRESS0) |
                      ((uint64_t)dpu_r(s, BLIT_STORE9_BASEADDRESSMSB0) << 32);
     uint32_t dstride = BLIT_ATTR_STRIDE(dattr);
-    uint32_t dbpp = BLIT_ATTR_BPP(dattr) ? BLIT_ATTR_BPP(dattr) : 32;
+    uint32_t dbpp = BLIT_STORE_BPP(dattr) ? BLIT_STORE_BPP(dattr) : 32;
     uint32_t dbytes = dbpp / 8;
     uint32_t w = BLIT_DIM_W(ddim);
     uint32_t h = BLIT_DIM_H(ddim);
 
+    uint32_t sattr = dpu_r(s, BLIT_FD9_SRCBUFATTR0);
+    uint32_t sdim  = dpu_r(s, BLIT_FD9_SRCBUFDIM0);
     uint32_t sprop = dpu_r(s, BLIT_FD9_LAYERPROPERTY0);
     uint64_t sbase = dpu_r(s, BLIT_FD9_BASEADDRESS0) |
                      ((uint64_t)dpu_r(s, BLIT_FD9_BASEADDRESSMSB0) << 32);
-    uint32_t sstride = BLIT_ATTR_STRIDE(dpu_r(s, BLIT_FD9_SRCBUFATTR0));
+    uint32_t sstride = BLIT_ATTR_STRIDE(sattr);
     bool copy = (sprop & BLIT_SRCBUF_ENABLE) && sbase != 0;
 
     if (dbase == 0 || w == 0 || h == 0 || dbytes == 0 || dbytes > 4) {
@@ -386,6 +405,21 @@ static void imx95_blit_run(IMX95DPUState *s)
     }
 
     if (copy) {
+        /*
+         * First cut: only a 1:1 same-geometry copy. Scaling, rotation and
+         * format conversion (src/dst dimensions or bpp differ) are not modelled
+         * yet — skip them rather than corrupt the destination.
+         */
+        if (BLIT_DIM_W(sdim) != w || BLIT_DIM_H(sdim) != h ||
+            BLIT_FETCH_BPP(sattr) != dbpp) {
+            if (s->trace) {
+                qemu_log("imx95-dpu: blit unsupported transform "
+                         "(src %ux%u/%ubpp -> dst %ux%u/%ubpp)\n",
+                         BLIT_DIM_W(sdim), BLIT_DIM_H(sdim),
+                         BLIT_FETCH_BPP(sattr), w, h, dbpp);
+            }
+            return;
+        }
         g_autofree uint8_t *row = g_malloc(w * dbytes);
         for (uint32_t y = 0; y < h; y++) {
             cpu_physical_memory_read(sbase + (uint64_t)y * sstride, row,
@@ -416,6 +450,15 @@ static void imx95_blit_run(IMX95DPUState *s)
     }
 }
 
+/* Drive the four ComCtrl SW-interrupt irqsteer lines from STATUS1. */
+static void imx95_blit_update_irq(IMX95DPUState *s)
+{
+    for (int i = 0; i < DPU_NUM_BLIT_IRQ; i++) {
+        qemu_set_irq(s->comctrl_irq[i],
+                     !!(s->comctrl_status1 & (1u << (BLIT_SW0_BIT + i))));
+    }
+}
+
 /*
  * Write one blit register, applying side effects: STORE9_TRIGGER runs the blit,
  * and the ComCtrl interrupt PRESET/CLEAR registers maintain the completion
@@ -429,12 +472,14 @@ static void imx95_blit_reg_write(IMX95DPUState *s, hwaddr off, uint32_t val)
         return;
     case BLIT_COMCTRL_INTPRESET1:
         s->comctrl_status1 |= val;   /* blit done: SW interrupt asserted */
+        imx95_blit_update_irq(s);
         return;
     case BLIT_COMCTRL_INTCLEAR0:
         s->comctrl_status0 &= ~val;
         return;
     case BLIT_COMCTRL_INTCLEAR1:
-        s->comctrl_status1 &= ~val;
+        s->comctrl_status1 &= ~val;   /* driver ack lowers the line */
+        imx95_blit_update_irq(s);
         return;
     default:
         break;
@@ -455,6 +500,9 @@ static void imx95_blit_hif_word(IMX95DPUState *s, uint32_t word)
 {
     if (s->hif_count == 0 && !s->hif_have_off) {
         uint32_t op = word >> 24;
+        if (s->trace) {
+            qemu_log("imx95-dpu: HIF op 0x%08x\n", word);
+        }
         if (op == BLIT_HIF_OP_WRITE) {
             s->hif_count = word & 0xffff;   /* N values follow the offset */
             s->hif_have_off = true;
@@ -470,6 +518,10 @@ static void imx95_blit_hif_word(IMX95DPUState *s, uint32_t word)
         return;
     }
 
+    if (s->trace) {
+        qemu_log("imx95-dpu: HIF wr [0x%05x] = 0x%08x\n",
+                 (unsigned)s->hif_off, word);
+    }
     imx95_blit_reg_write(s, s->hif_off, word);
     s->hif_off += 4;
     s->hif_count--;
@@ -591,6 +643,7 @@ static void imx95_dpu_reset(DeviceState *dev)
     s->comctrl_status0 = 0;
     s->comctrl_status1 = 0;
     imx95_dpu_update_irq(s);
+    imx95_blit_update_irq(s);
     if (s->vblank_timer) {
         timer_del(s->vblank_timer);   /* armed lazily when a source is enabled */
     }
@@ -609,6 +662,9 @@ static void imx95_dpu_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
     for (int i = 0; i < DPU_NUM_IRQ_OUT; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq_out[i]);
+    }
+    for (int i = 0; i < DPU_NUM_BLIT_IRQ; i++) {
+        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->comctrl_irq[i]);
     }
     s->vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_dpu_vblank_tick, s);
     s->con = qemu_graphic_console_create(dev, 0, &imx95_dpu_gfx_ops, s);
