@@ -300,6 +300,13 @@ static void imx95_gpio_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &imx95_gpio_ops, s,
                           TYPE_IMX95_GPIO, IMX95_GPIO_MMIO);
     sysbus_init_mmio(sbd, &s->iomem);
+    /*
+     * Undriven inputs idle HIGH: on-board interrupt lines (i2c-expander INT
+     * pins, buttons) are active-low with pull-ups, so an unwired pin must read
+     * deasserted - otherwise a driver that configures it level-low (e.g.
+     * gpio-pca953x for an expander INT) takes a spurious, unending interrupt.
+     */
+    s->in_level = 0xffffffff;
     qdev_init_gpio_in(DEVICE(obj), imx95_gpio_set_input, IMX95_GPIO_PINS);
     qdev_init_gpio_out(DEVICE(obj), s->out, IMX95_GPIO_PINS);
     sysbus_init_irq(sbd, &s->irq[0]);

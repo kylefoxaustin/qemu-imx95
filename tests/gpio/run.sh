@@ -46,12 +46,14 @@ echo "-- gpiochips --"
 cat /sys/kernel/debug/gpio 2>/dev/null | grep -E '4381|4382|4384|4385' 
 # GPIO2 @ 0x43810000, data block at +0x40: PDOR .40 PSOR .44 PCOR .48 PDIR .50 PDDR .54
 echo "-- devmem loopback (pin28) --"
+# Mask to pin28: undriven input pins idle high, so only the driven output
+# bit is deterministic in PDIR.
 devmem 0x43810054 32 0x10000000          # PDDR: pin28 output
 devmem 0x43810044 32 0x10000000          # PSOR: set
-s1=$(devmem 0x43810050 32)               # PDIR read
+s1=$(( $(devmem 0x43810050 32) & 0x10000000 ))   # PDIR, pin28 bit
 devmem 0x43810048 32 0x10000000          # PCOR: clear
-s0=$(devmem 0x43810050 32)               # PDIR read
-echo "set->PDIR=$s1 clear->PDIR=$s0"
+s0=$(( $(devmem 0x43810050 32) & 0x10000000 ))   # PDIR, pin28 bit
+echo "set->bit28=$s1 clear->bit28=$s0"
 echo "=== GPIO-TEST-DONE ==="
 /bin/busybox poweroff -f
 INIT
@@ -70,7 +72,7 @@ sed -n '/GPIO-TEST ===/,/GPIO-TEST-DONE/p' "$LOG" | grep -vE 'GPIO-TEST ==='
 pass=1
 nchips=$(grep -acE '438[1245]0000.gpio' "$LOG")
 [ "$nchips" -ge 4 ] && echo "  ok   4 SoC gpiochips bound ($nchips)" || { echo "  MISS gpiochips ($nchips/4)"; pass=0; }
-grep -qa 'set->PDIR=0x10000000 clear->PDIR=0x00000000' "$LOG" \
+grep -qa 'set->bit28=268435456 clear->bit28=0' "$LOG" \
     && echo "  ok   devmem loopback functional (PDIR tracks PDOR&PDDR)" \
     || { echo "  MISS devmem loopback (stub?)"; pass=0; }
 for p in 'external abort' 'Unhandled fault' 'Oops:' 'Kernel panic'; do
