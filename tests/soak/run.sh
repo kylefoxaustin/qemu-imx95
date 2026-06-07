@@ -178,7 +178,7 @@ SCR_EVER_LOW=0
 RSS_MIN=
 RSS_MAX=
 RSS_LAST=
-END_AT=$(( $(date +%s) + SOAK_HOURS * 3600 ))
+END_AT=$(( $(date +%s) + ${SOAK_SECONDS:-$((SOAK_HOURS * 3600))} ))
 
 while [ "$(date +%s)" -lt "$END_AT" ]; do
     if ! kill -0 "$QPID" 2>/dev/null; then
