@@ -53,6 +53,7 @@
 #include "hw/misc/unimp.h"
 #include "hw/net/flexcan.h"
 #include "hw/sd/sdhci.h"
+#include "hw/sd/sd.h"
 #include "hw/ssi/ssi.h"
 #include "system/blockdev.h"
 #include "system/kvm.h"
@@ -1563,6 +1564,28 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                             fsl_imx95_memmap[usdhc_table[i].region].addr);
             sysbus_connect_irq(sbd, 0,
                 qdev_get_gpio_in(gicdev, usdhc_table[i].irq));
+        }
+
+        /*
+         * Wire the board's removable SD slot (uSDHC2, 0x42860000 - the EVK's
+         * "no-1-8-v" SD card socket; uSDHC1 is the soldered eMMC). A user
+         * plugs a card in with `-drive if=sd,file=<img>,format=raw`, which the
+         * board attaches as an sd-card on uSDHC2's bus. (uSDHC1 is `no-sd` in
+         * the DT, so a bare `-device emmc,drive=...` correctly lands on it for
+         * eMMC; the three sd-bus children share a name and can't be targeted
+         * by `-device ...,bus=` directly, hence the board-side wiring here.)
+         */
+        {
+            DriveInfo *di = drive_get(IF_SD, 0, 0);
+            if (di) {
+                DeviceState *card = qdev_new(TYPE_SD_CARD);
+                BusState *sdbus = qdev_get_child_bus(DEVICE(&s->usdhc[1]),
+                                                     "sd-bus");
+
+                qdev_prop_set_drive_err(card, "drive",
+                                        blk_by_legacy_dinfo(di), &error_fatal);
+                qdev_realize_and_unref(card, sdbus, &error_fatal);
+            }
         }
     }
 
