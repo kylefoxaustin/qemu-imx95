@@ -77,8 +77,16 @@ assert n == 1, "reserved-memory block not found"
 t, n = re.subn(r'(imx95-neutron@4ab00004 \{\n)',
                r'\1\t\t\tmemory-region = <&neutron_test_mem>;\n', t, count=1)
 assert n == 1, "neutron node not found"
+# Drop the SMMU/iommu dependency. QEMU does not model the arm-smmu-v3 at
+# 0x490d0000 (its ID registers read 0 -> the driver logs "no translation
+# support!" and fails to probe), so the neutron compute device - the only NPU
+# node with an iommus phandle (stream id 0x0d) - can never bind, with no
+# /dev/neutron0. The NPU DMAs directly under emulation (identity-mapped), so
+# strip the iommus property and the device probes.
+t, n = re.subn(r'\n\t+iommus = <0x[0-9a-f]+ 0x0?d>;', '', t, count=1)
+assert n == 1, "neutron iommus not found"
 open(dst, "w").write(t)
-print("dtb patched: carveout + memory-region")
+print("dtb patched: carveout + memory-region + iommus dropped")
 PY
 "$DTC" -I dts -O dtb -o "$WORK/neutron.dtb" "$WORK/neutron.dts" 2>/dev/null
 
@@ -170,22 +178,23 @@ timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 4G -display none \
 echo "=== neutron bring-up e2e report ==="
 sed -n '/NEUTRON-E2E ===/,/NEUTRON-E2E-DONE/p' "$LOG" | grep -vE '^\[ *[0-9].*\]'
 
-# The model's rproc + mailbox responder is validated by the qtest. This e2e is
-# the full-stack check; it is currently gated on an SM/SCMI follow-on: the
-# neutron device probe calls pm_runtime_resume_and_get(), which powers the NPU
-# on through its SCMI power-domain (IMX95_PD_NPU). The real SM firmware does not
-# complete that power-on for the NPU domain, so the device driver never binds
-# (no /dev/neutron0) and the LiteRT delegate cannot apply. The firmware carveout
-# maps and the remoteproc registers, so the harness itself is sound.
+# Full-stack bring-up: the neutron remoteproc registers, the compute device
+# binds (the dtb patch drops its iommus phandle - QEMU has no arm-smmu-v3 model,
+# so it logs "no translation support!" and a device needing the IOMMU can't
+# bind), NeutronFirmware.elf loads into the model's DTCM/ITCM, and the LiteRT
+# delegate opens /dev/neutron0 and runs benchmark_model. The NPU does not
+# actually compute (the delegate offloads 0 nodes and inference falls back to
+# CPU, which keeps results correct) - that proprietary-firmware compute is the
+# model's fidelity ceiling; the entire driver/firmware/delegate path is what is
+# validated here, with the mailbox responder also covered by the qtest.
 if grep -qa '/dev/neutron' "$LOG" && grep -qa 'benchmark rc=0' "$LOG"; then
-    echo "PASS: Neutron NPU stack brings up (driver + firmware + delegate)"
+    echo "PASS: Neutron NPU stack brings up end to end" \
+         "(driver + firmware load + delegate + benchmark_model)"
     exit 0
 fi
 if grep -qa 'neutron-rproc is available' "$LOG"; then
-    echo "SKIP: neutron remoteproc + firmware carveout up, but the device probe"
-    echo "      is blocked on the SCMI NPU power-domain (IMX95_PD_NPU) not being"
-    echo "      completed by the SM -> no /dev/neutron0. Mailbox model + qtest"
-    echo "      validate the bring-up; full delegate e2e pends an SM/SCMI fix."
+    echo "SKIP: neutron remoteproc + firmware carveout up, but /dev/neutron0 or"
+    echo "      the benchmark did not complete (see report above)."
     exit 0
 fi
 echo "FAIL: neutron remoteproc did not register"; exit 1

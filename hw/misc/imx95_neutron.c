@@ -31,12 +31,21 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qapi/error.h"
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "qom/object.h"
 
 #define TYPE_IMX95_NEUTRON "imx95.neutron"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
+
+/*
+ * NPU-internal tightly-coupled memory the remoteproc loads NeutronFirmware.elf
+ * into (imx_neutron_rproc att table): DTCM @0x4ab08000 (32K), ITCM @0x4ab10000
+ * (64K). Backed as RAM so rproc_elf_load_segments' memcpy_toio does not abort.
+ */
+#define NEUTRON_DTCM_SIZE     0x8000
+#define NEUTRON_ITCM_SIZE     0x10000
 
 /* RESETCTRL (remoteproc reg @0x4ab00000): clock gates. */
 #define RESETCTRL_SIZE        0x4
@@ -75,6 +84,8 @@ struct IMX95NeutronState {
     SysBusDevice parent_obj;
     MemoryRegion rctl_iomem;        /* RESETCTRL @0x4ab00000 */
     MemoryRegion dev_iomem;         /* device regs @0x4ab00004 */
+    MemoryRegion dtcm;              /* DTCM @0x4ab08000 (firmware data) */
+    MemoryRegion itcm;              /* ITCM @0x4ab10000 (firmware code) */
     qemu_irq irq;                   /* GIC SPI 318 */
 
     uint32_t resetctrl;
@@ -231,8 +242,14 @@ static void neutron_realize(DeviceState *dev, Error **errp)
                           "imx95.neutron.resetctrl", RESETCTRL_SIZE);
     memory_region_init_io(&s->dev_iomem, OBJECT(dev), &neutron_dev_ops, s,
                           TYPE_IMX95_NEUTRON, NEUTRON_DEV_SIZE);
+    memory_region_init_ram(&s->dtcm, OBJECT(dev), "imx95.neutron.dtcm",
+                           NEUTRON_DTCM_SIZE, &error_fatal);
+    memory_region_init_ram(&s->itcm, OBJECT(dev), "imx95.neutron.itcm",
+                           NEUTRON_ITCM_SIZE, &error_fatal);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->rctl_iomem);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->dev_iomem);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->dtcm);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->itcm);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
 }
 

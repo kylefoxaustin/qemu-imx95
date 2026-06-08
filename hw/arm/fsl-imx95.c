@@ -577,6 +577,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         }
         sysbus_mmio_map(SYS_BUS_DEVICE(npu), 0, 0x4ab00000);  /* RESETCTRL */
         sysbus_mmio_map(SYS_BUS_DEVICE(npu), 1, 0x4ab00004);  /* dev/mailbox */
+        sysbus_mmio_map(SYS_BUS_DEVICE(npu), 2, 0x4ab08000);  /* DTCM fw data */
+        sysbus_mmio_map(SYS_BUS_DEVICE(npu), 3, 0x4ab10000);  /* ITCM fw code */
         sysbus_connect_irq(SYS_BUS_DEVICE(npu), 0,
                            qdev_get_gpio_in(gicdev, 318));
     }

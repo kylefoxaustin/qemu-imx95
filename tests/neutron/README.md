@@ -25,13 +25,26 @@ delegate + their `.so` closure are harvested (readelf) from the BSP rootfs.
 
 The kernel-free `tests/qtest/imx95-neutron-test.c` validates the model's
 remoteproc + mailbox responder (RESETCTRL clock-on → startup handshake →
-doorbell → DONE). This full-stack e2e currently **SKIPs** at a known SM/SCMI
-follow-on: the neutron device probe calls `pm_runtime_resume_and_get()`, which
-powers the NPU on through its SCMI power-domain (`IMX95_PD_NPU`); the real SM
-firmware does not complete that power-on, so the device driver never binds
-(`/dev/neutron0` is absent) and the LiteRT delegate cannot apply. The firmware
-carveout maps and the remoteproc registers, confirming the harness is sound — the
-remaining work is SM/SCMI NPU power-domain + clock support, not the NPU model.
+doorbell → DONE). This full-stack e2e **PASSES**: the remoteproc registers, the
+compute device binds, `NeutronFirmware.elf` loads into the model's DTCM/ITCM, and
+`benchmark_model` runs through the LiteRT Neutron delegate.
+
+Two things the dtb patch / model handle to get there (the earlier "blocked on the
+SCMI `IMX95_PD_NPU` power-domain" hypothesis was wrong — the rproc acquires that
+domain fine):
+
+- **IOMMU**: the compute node (`imx95-neutron@4ab00004`) has `iommus = <&smmu>`,
+  but QEMU has no `arm-smmu-v3` model — the driver logs *"no translation
+  support!"* and a device needing the IOMMU can't bind. The patch drops the
+  `iommus` phandle so the NPU DMAs directly (identity-mapped under emulation).
+- **TCM**: `rproc_elf_load_segments` copies the firmware into the NPU's DTCM
+  (`0x4ab08000`, 32K) and ITCM (`0x4ab10000`, 64K); the model now backs both as
+  RAM so the `memcpy_toio` does not external-abort.
+
+The NPU does **not** actually compute: the delegate offloads 0 nodes and inference
+falls back to CPU (which keeps results correct). That proprietary-firmware compute
+is the model's fidelity ceiling; what this validates is the whole
+driver → firmware-load → delegate → benchmark path.
 
 ## Running
 
