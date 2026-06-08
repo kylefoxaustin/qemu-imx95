@@ -22,9 +22,18 @@ clean run proves the copy datapath end to end (the kernel-free
 - the Porter-Duff **clear-mode blend** zeroes every pixel (`blend_clear_warn=0`)
   — g2d verifies this, so it validates the alpha-blend (BlitBlend9) math.
 
-Format conversion is not modelled; `g2d_basic_test` exercises it too (as
-performance runs g2d does not self-verify), so the model skips those rather than
-corrupt the destination.
+## Colour conversion — `run-convert.sh`
+
+`run-convert.sh` validates the blit **colour-space converter** with the
+`g2d_convert.c` exerciser: it drives an `RGBA8888 -> YUYV` blit and back
+(`YUYV -> RGBA8888`) and checks the round trip reproduces the four quadrant
+colours (4:2:2 chroma subsampling is lossless in the flat interiors). A
+conversion routes the source through FetchDecode9 with the Store9 source-select
+reading the colour-space-converter output (`0xe100c == 0x06`); the model does the
+RGBA<->YUYV BT.601 conversion (`SRC + DST bpp == 48`, i.e. a 32<->16 pair).
+`g2d_basic_test`'s own `YUY2->NV12` self-check is `#if G2D_OPENCL` and so is
+compiled out of the DPU build, which is why this needs its own exerciser. NV12
+and the other YUV formats are not modelled.
 
 ## Scaling — `run-xform.sh`
 

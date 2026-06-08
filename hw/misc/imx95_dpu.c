@@ -264,6 +264,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
  */
 #define BLIT_STORE9_SRCSEL        0xe100c
 #define BLIT_STORE9_SRC_FETCHROT9 0x05
+#define BLIT_STORE9_SRC_CSC       0x06   /* colour-space converter output */
 #define BLIT_FR9_BASEADDRESS0     0x80020
 #define BLIT_FR9_BASEADDRESSMSB0  0x80024
 #define BLIT_FR9_SRCBUFATTR0      0x80030   /* [15:0] stride-1; [21:16] bpp */
@@ -529,6 +530,15 @@ static inline void imx95_yuv601_to_rgb(int y, int u, int v,
     *r = rr < 0 ? 0 : rr > 255 ? 255 : rr;
     *g = gg < 0 ? 0 : gg > 255 ? 255 : gg;
     *b = bb < 0 ? 0 : bb > 255 ? 255 : bb;
+}
+
+/* BT.601 limited-range RGB -> YUV for one pixel (inverse of the above). */
+static inline void imx95_rgb_to_yuv601(int r, int g, int b,
+                                       uint8_t *y, uint8_t *u, uint8_t *v)
+{
+    *y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+    *u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+    *v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
 }
 
 /*
@@ -804,6 +814,86 @@ static void imx95_blit_rotate(IMX95DPUState *s)
     }
 }
 
+/*
+ * CSC path (Store9 fed by the colour-space converter, src-select 0x06): a full
+ * RGBA8888 <-> YUYV (4:2:2 packed, bytes Y0 U Y1 V) using BT.601. The source is
+ * read from FetchDecode9 (same as a copy), only the format differs.
+ */
+static void imx95_blit_convert(IMX95DPUState *s)
+{
+    uint32_t sattr = dpu_r(s, BLIT_FD9_SRCBUFATTR0);
+    uint32_t ddim  = dpu_r(s, BLIT_STORE9_DSTBUFDIM);
+    uint32_t dattr = dpu_r(s, BLIT_STORE9_DSTBUFATTR0);
+    uint64_t sbase = dpu_r(s, BLIT_FD9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_FD9_BASEADDRESSMSB0) << 32);
+    uint64_t dbase = dpu_r(s, BLIT_STORE9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_STORE9_BASEADDRESSMSB0) << 32);
+    uint32_t sstride = BLIT_ATTR_STRIDE(sattr);
+    uint32_t dstride = BLIT_ATTR_STRIDE(dattr);
+    uint32_t sbpp = BLIT_FETCH_BPP(sattr);
+    uint32_t dbpp = BLIT_STORE_BPP(dattr) ? BLIT_STORE_BPP(dattr) : 32;
+    uint32_t w = BLIT_DIM_W(ddim), h = BLIT_DIM_H(ddim);
+    g_autofree uint8_t *srow = NULL;
+    g_autofree uint8_t *drow = NULL;
+
+    if (sbase == 0 || dbase == 0 || w < 2 || h == 0) {
+        return;
+    }
+    if (sbpp == 32 && dbpp == 16) {                 /* RGBA8888 -> YUYV */
+        srow = g_malloc((size_t)w * 4);
+        drow = g_malloc((size_t)w * 2);
+        for (uint32_t y = 0; y < h; y++) {
+            cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                     (size_t)w * 4);
+            for (uint32_t x = 0; x + 1 < w; x += 2) {
+                uint32_t p0 = ldl_le_p(srow + x * 4);
+                uint32_t p1 = ldl_le_p(srow + (x + 1) * 4);
+                uint8_t y0, u0, v0, y1, u1, v1;
+                /* G2D_RGBA8888 = bytes R,G,B,A: R is the low byte. */
+                imx95_rgb_to_yuv601(p0 & 0xff, (p0 >> 8) & 0xff,
+                                    (p0 >> 16) & 0xff, &y0, &u0, &v0);
+                imx95_rgb_to_yuv601(p1 & 0xff, (p1 >> 8) & 0xff,
+                                    (p1 >> 16) & 0xff, &y1, &u1, &v1);
+                drow[x * 2 + 0] = y0;
+                drow[x * 2 + 1] = (u0 + u1) / 2;
+                drow[x * 2 + 2] = y1;
+                drow[x * 2 + 3] = (v0 + v1) / 2;
+            }
+            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                      (size_t)w * 2);
+        }
+        if (s->trace) {
+            qemu_log("imx95-dpu: blit CONVERT RGBA->YUYV %ux%u dst=0x%" PRIx64
+                     "\n", w, h, dbase);
+        }
+    } else if (sbpp == 16 && dbpp == 32) {          /* YUYV -> RGBA8888 */
+        srow = g_malloc((size_t)w * 2);
+        drow = g_malloc((size_t)w * 4);
+        for (uint32_t y = 0; y < h; y++) {
+            cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                     (size_t)w * 2);
+            for (uint32_t x = 0; x + 1 < w; x += 2) {
+                uint8_t y0 = srow[x * 2 + 0], u = srow[x * 2 + 1];
+                uint8_t y1 = srow[x * 2 + 2], v = srow[x * 2 + 3];
+                uint8_t r, g, b;
+                /* G2D_RGBA8888 = bytes R,G,B,A (little-endian word below). */
+                imx95_yuv601_to_rgb(y0, u, v, &r, &g, &b);
+                stl_le_p(drow + x * 4,
+                         r | (g << 8) | (b << 16) | 0xff000000u);
+                imx95_yuv601_to_rgb(y1, u, v, &r, &g, &b);
+                stl_le_p(drow + (x + 1) * 4,
+                         r | (g << 8) | (b << 16) | 0xff000000u);
+            }
+            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                      (size_t)w * 4);
+        }
+        if (s->trace) {
+            qemu_log("imx95-dpu: blit CONVERT YUYV->RGBA %ux%u dst=0x%" PRIx64
+                     "\n", w, h, dbase);
+        }
+    }
+}
+
 static void imx95_blit_run(IMX95DPUState *s)
 {
     uint32_t store_src = dpu_r(s, BLIT_STORE9_SRCSEL) & 0x3f;
@@ -848,6 +938,12 @@ static void imx95_blit_run(IMX95DPUState *s)
             qemu_log("imx95-dpu: blit FetchRot9 convert (src!=dst fmt) not "
                      "modelled — skipped\n");
         }
+        return;
+    }
+    /* a 32<->16 (RGBA<->YUYV) pair through the CSC unit => colour convert */
+    if (store_src == BLIT_STORE9_SRC_CSC &&
+        BLIT_FETCH_BPP(sattr) + dbpp == 48) {
+        imx95_blit_convert(s);   /* BT.601; only on a real format change */
         return;
     }
 
