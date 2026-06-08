@@ -27,6 +27,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "hw/i2c/i2c.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 
 #define TYPE_IMX_LPI2C "imx.lpi2c"
@@ -79,6 +80,7 @@ struct IMXLPI2CState {
     MemoryRegion    iomem;
     qemu_irq        irq;
     I2CBus         *bus;
+    char           *bus_name;   /* qbus name for -device foo,bus=<name> */
 
     uint32_t        mcr;
     uint32_t        msr;       /* sticky status bits (SDF/NDF/MBF/BBF/...) */
@@ -269,8 +271,24 @@ static void imx_lpi2c_init(Object *obj)
                           TYPE_IMX_LPI2C, IMX_LPI2C_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
-    s->bus = i2c_init_bus(DEVICE(obj), "i2c");
 }
+
+/*
+ * The I2C bus is created at realize (not instance_init) so it can adopt the
+ * "bus-name" property: a unique, predictable qbus name (e.g. "lpi2c4") lets a
+ * user hang slaves on it from the command line - `-device tmp105,bus=lpi2c4`.
+ * Defaults to "i2c" when unset so a bare instance keeps the old child-bus name.
+ */
+static void imx_lpi2c_realize(DeviceState *dev, Error **errp)
+{
+    IMXLPI2CState *s = IMX_LPI2C(dev);
+
+    s->bus = i2c_init_bus(dev, s->bus_name ? s->bus_name : "i2c");
+}
+
+static const Property imx_lpi2c_properties[] = {
+    DEFINE_PROP_STRING("bus-name", IMXLPI2CState, bus_name),
+};
 
 static const VMStateDescription vmstate_imx_lpi2c = {
     .name = TYPE_IMX_LPI2C,
@@ -292,6 +310,8 @@ static void imx_lpi2c_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    dc->realize = imx_lpi2c_realize;
+    device_class_set_props(dc, imx_lpi2c_properties);
     dc->vmsd = &vmstate_imx_lpi2c;
     device_class_set_legacy_reset(dc, imx_lpi2c_reset);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);

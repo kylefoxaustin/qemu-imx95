@@ -278,14 +278,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         /* GPIO1..5 are real RGPIO models (imx95.gpio) below. */
         FSL_IMX95_SMMU,
         /*
-         * LPI2C1/2/3/4 (0x42530000/42540000/426b0000/426c0000 = Linux
-         * i2c-2/3/4/5) and LPI2C5 (0x426d0000 = Linux i2c-6) are real masters
-         * below.
-         */
-        FSL_IMX95_LPI2C6,
-        /*
-         * LPI2C7 (0x44340000 = Linux i2c-0): the SM's PMIC bus, model below.
-         * LPI2C8 (0x44350000 = Linux i2c-1): real master + adp5585, below.
+         * All eight LPI2C controllers are real masters below (LPI2C1/2/3/4 =
+         * Linux i2c-2/3/4/5, LPI2C5 = i2c-6, LPI2C6 = i2c-7, LPI2C7 = i2c-0
+         * the SM's PMIC bus, LPI2C8 = i2c-1). The on-board slaves are attached
+         * to the buses that carry them; the rest stand ready for runtime attach
+         * via -device <dev>,bus=lpi2cN (SDK controller numbering).
          */
         /* usb2 (0x4c200000) is a real ChipIdea model below. */
         FSL_IMX95_USB_PHY,
@@ -1404,13 +1401,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * (0x53) needs no model - its PCA2131_Init() is a no-op.
      */
     s->lpi2c_pmic = qdev_new("imx.lpi2c");
+    qdev_prop_set_string(s->lpi2c_pmic, "bus-name",
+                         fsl_imx95_memmap[FSL_IMX95_LPI2C7].name);
     if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c_pmic), errp)) {
         return;
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c_pmic), 0,
                     fsl_imx95_memmap[FSL_IMX95_LPI2C7].addr);
     {
-        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c_pmic, "i2c"));
+        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c_pmic,
+                            fsl_imx95_memmap[FSL_IMX95_LPI2C7].name));
         i2c_slave_create_simple(i2c, "pf09-pmic", 0x08);
         i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
         i2c_slave_create_simple(i2c, "pf53-pmic", 0x2a);
@@ -1428,6 +1428,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * 0x50) stay unmodelled and simply NAK.
      */
     s->lpi2c7 = qdev_new("imx.lpi2c");
+    qdev_prop_set_string(s->lpi2c7, "bus-name",
+                         fsl_imx95_memmap[FSL_IMX95_LPI2C5].name);
     if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c7), errp)) {
         return;
     }
@@ -1436,9 +1438,27 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(s->lpi2c7), 0,
                        qdev_get_gpio_in(gicdev, FSL_IMX95_LPI2C7_IRQ));
     {
-        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c7, "i2c"));
+        I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c7,
+                            fsl_imx95_memmap[FSL_IMX95_LPI2C5].name));
         i2c_slave_create_simple(i2c, "pcal6524", 0x22);
     }
+
+    /*
+     * LPI2C6 (0x426e0000 = Linux i2c-7, dtsi lpi2c8, GIC SPI 184). No on-board
+     * slaves are modelled on it, but it's promoted from an UNIMP stub to a real
+     * master so the bus exists and a user can hang i2c devices on it at runtime
+     * (-device <dev>,bus=lpi2c6). Unconditional so it's there beyond the EVK.
+     */
+    s->lpi2c6 = qdev_new("imx.lpi2c");
+    qdev_prop_set_string(s->lpi2c6, "bus-name",
+                         fsl_imx95_memmap[FSL_IMX95_LPI2C6].name);
+    if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c6), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->lpi2c6), 0,
+                    fsl_imx95_memmap[FSL_IMX95_LPI2C6].addr);
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->lpi2c6), 0,
+                       qdev_get_gpio_in(gicdev, 184)); /* dtsi GIC SPI 184 */
 
     /*
      * GPC: the SM polls per-domain CMC_MODE_STAT and uses the sleep/wake
@@ -1754,6 +1774,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             DeviceState *m = qdev_new("imx.lpi2c");
             I2CBus *i2c;
 
+            qdev_prop_set_string(m, "bus-name",
+                                 fsl_imx95_memmap[FSL_IMX95_LPI2C1].name);
             if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
                 return;
             }
@@ -1761,7 +1783,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                             fsl_imx95_memmap[FSL_IMX95_LPI2C1].addr);
             sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
                                qdev_get_gpio_in(gicdev, 58)); /* dtsi SPI 58 */
-            i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+            i2c = I2C_BUS(qdev_get_child_bus(m,
+                            fsl_imx95_memmap[FSL_IMX95_LPI2C1].name));
             i2c_slave_create_simple(i2c, "pcal6408a", 0x20);
             i2c_slave_create_simple(i2c, "pcal6408a", 0x62);
         }
@@ -1776,9 +1799,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             static const struct {
                 hwaddr addr;
                 int irq;            /* dtsi GIC SPI */
+                const char *name;   /* qbus name (SDK controller id) */
             } exp_i2c[] = {
-                { 0x426b0000, 181 },   /* Linux i2c-4 */
-                { 0x426c0000, 182 },   /* Linux i2c-5 */
+                { 0x426b0000, 181, "lpi2c3" },   /* Linux i2c-4 */
+                { 0x426c0000, 182, "lpi2c4" },   /* Linux i2c-5 */
             };
             int k;
 
@@ -1786,13 +1810,14 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 DeviceState *m = qdev_new("imx.lpi2c");
                 I2CBus *i2c;
 
+                qdev_prop_set_string(m, "bus-name", exp_i2c[k].name);
                 if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
                     return;
                 }
                 sysbus_mmio_map(SYS_BUS_DEVICE(m), 0, exp_i2c[k].addr);
                 sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
                                    qdev_get_gpio_in(gicdev, exp_i2c[k].irq));
-                i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+                i2c = I2C_BUS(qdev_get_child_bus(m, exp_i2c[k].name));
                 i2c_slave_create_simple(i2c, "pcal6408a", 0x21);
             }
         }
@@ -1807,6 +1832,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             DeviceState *m = qdev_new("imx.lpi2c");
             I2CBus *i2c;
 
+            qdev_prop_set_string(m, "bus-name",
+                                 fsl_imx95_memmap[FSL_IMX95_LPI2C8].name);
             if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(m), errp)) {
                 return;
             }
@@ -1814,7 +1841,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                             0, fsl_imx95_memmap[FSL_IMX95_LPI2C8].addr);
             sysbus_connect_irq(SYS_BUS_DEVICE(m), 0,
                                qdev_get_gpio_in(gicdev, 14)); /* dtsi SPI 14 */
-            i2c = I2C_BUS(qdev_get_child_bus(m, "i2c"));
+            i2c = I2C_BUS(qdev_get_child_bus(m,
+                            fsl_imx95_memmap[FSL_IMX95_LPI2C8].name));
             i2c_slave_create_simple(i2c, "adp5585", 0x34);
         }
 
@@ -1908,6 +1936,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
          * the codec probes; the fsl-sai card then binds wm8962 as its codec.
          */
         s->lpi2c4 = qdev_new("imx.lpi2c");
+        qdev_prop_set_string(s->lpi2c4, "bus-name",
+                             fsl_imx95_memmap[FSL_IMX95_LPI2C2].name);
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->lpi2c4), errp)) {
             return;
         }
@@ -1915,7 +1945,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(s->lpi2c4), 0,
                            qdev_get_gpio_in(gicdev, FSL_IMX95_LPI2C4_IRQ));
         {
-            I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c4, "i2c"));
+            I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c4,
+                                fsl_imx95_memmap[FSL_IMX95_LPI2C2].name));
 
             i2c_slave_create_simple(i2c, TYPE_WM8962, FSL_IMX95_WM8962_ADDR);
             /*

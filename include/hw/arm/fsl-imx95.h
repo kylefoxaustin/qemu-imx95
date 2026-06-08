@@ -287,6 +287,8 @@ struct FslImx95State {
     DeviceState            *lpi2c_pmic;
     /* Linux lpi2c7 (0x426d0000): real master for the EVK pcal6524 expander. */
     DeviceState            *lpi2c7;
+    /* LPI2C6 (0x426e0000 = Linux i2c-7): slave-less master for runtime attach. */
+    DeviceState            *lpi2c6;
     /* GPC (General Power Controller) - SM power-domain / CPU-mode control. */
     DeviceState            *gpc;
     /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
