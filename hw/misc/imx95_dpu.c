@@ -63,10 +63,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 
 #define IMX95_DPU_REG_SIZE 0x400000
 
-/* sub-block bases within the DPU MMIO (dpu95-core.c offset tables, stream 0) */
+/* sub-block bases within the DPU MMIO (dpu95-core.c offset tables) */
 #define DPU_FETCHLAYER0   0x1d0000   /* primary-plane fetch unit */
-#define DPU_FRAMEGEN0     0x2b0000   /* frame generator */
+#define DPU_FRAMEGEN0     0x2b0000   /* stream-0 frame generator */
+#define DPU_FRAMEGEN1     0x330000   /* stream-1 frame generator (fg_ofss[1]) */
 #define DPU_BLOCK_SIZE    0x1000
+#define DPU_NUM_STREAMS   2
+/* per-stream FrameGen base; stream 1 is the 2nd pixel pipeline / CRTC. */
+#define DPU_FRAMEGEN(st)  ((st) ? DPU_FRAMEGEN1 : DPU_FRAMEGEN0)
+/* a stream's LayerBlend chain roots at its own ConstFrame(s) (dpu95.h ids). */
+#define DPU_LINK_IS_CF_STREAM(l, st) \
+    ((st) ? ((l) == 0x10 || (l) == 0x11) : ((l) == 0x0c || (l) == 0x0d))
 
 /*
  * FetchLayer registers (dpu95-fetchunit.h: reg + sub_id*0x38 + reg_offset1).
@@ -173,6 +180,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define DPU_INT_PRESET0         (DPU_DISP_IRQ0_BASE + 0x14)
 #define DPU_INT_CLEAR0          (DPU_DISP_IRQ0_BASE + 0x20)
 #define DPU_INT_STATUS0         (DPU_DISP_IRQ0_BASE + 0x2c)
+/* stream-1 block (disp_irq2): two registers n=0,1 (ENABLE 0x08+4n, etc.) */
+#define DPU_INT2_ENABLE(n)      (DPU_DISP_IRQ2_BASE + 0x08 + 4 * (n))
+#define DPU_INT2_PRESET(n)      (DPU_DISP_IRQ2_BASE + 0x14 + 4 * (n))
+#define DPU_INT2_CLEAR(n)       (DPU_DISP_IRQ2_BASE + 0x20 + 4 * (n))
+#define DPU_INT2_STATUS(n)      (DPU_DISP_IRQ2_BASE + 0x2c + 4 * (n))
 
 #define DPU_IRQ_EXTDST0_SHDLOAD      (1u << 3)
 #define DPU_IRQ_DOMAINBLEND0_SHDLOAD (1u << 15)
@@ -180,7 +192,30 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define DPU_IRQ_DISENGCFG_FRAMECOMP0 (1u << 19)   /* vblank */
 #define DPU_IRQ_SOURCES (DPU_IRQ_EXTDST0_SHDLOAD | DPU_IRQ_DOMAINBLEND0_SHDLOAD |\
                          DPU_IRQ_DISENGCFG_SHDLOAD0 | DPU_IRQ_DISENGCFG_FRAMECOMP0)
-#define DPU_NUM_IRQ_OUT  4   /* one irqsteer line per modelled source */
+
+/*
+ * Stream-1 display interrupt block (disp_irq2_reg = dpu_base + 0x3a1000), the
+ * 2nd pixel pipeline's. Its sources span two 32-bit registers: register-index n
+ * has ENABLE at 0x08+4n, PRESET 0x14+4n, CLEAR 0x20+4n, STATUS 0x2c+4n
+ * (dpu95.h). The four the CRTC commit waits on (global IRQ ids from dpu95.h):
+ *   n=0: bit 9  EXTDST1_SHDLOAD
+ *   n=1: bit 6  DOMAINBLEND1_SHDLOAD   bit 9  DISENGCFG_SHDLOAD1
+ *        bit 10 DISENGCFG_FRAMECOMPLETE1 (vblank)
+ * Each drives a displaymix-irqsteer line (dpu interrupts: 9->192, 38->198,
+ * 41->201, 42->202), all in irqsteer group 3 -> GIC SPI 217.
+ */
+#define DPU_DISP_IRQ2_BASE   0x3a1000
+#define DPU_IRQ2_EXTDST1_SHDLOAD      (1u << 9)    /* register n=0 */
+#define DPU_IRQ2_DOMAINBLEND1_SHDLOAD (1u << 6)    /* register n=1 */
+#define DPU_IRQ2_DISENGCFG_SHDLOAD1   (1u << 9)    /* register n=1 */
+#define DPU_IRQ2_DISENGCFG_FRAMECOMP1 (1u << 10)   /* register n=1, vblank */
+#define DPU_IRQ2_SOURCES0 (DPU_IRQ2_EXTDST1_SHDLOAD)
+#define DPU_IRQ2_SOURCES1 (DPU_IRQ2_DOMAINBLEND1_SHDLOAD | \
+                           DPU_IRQ2_DISENGCFG_SHDLOAD1 | \
+                           DPU_IRQ2_DISENGCFG_FRAMECOMP1)
+
+#define DPU_NUM_IRQ_OUT  4   /* one irqsteer line per stream-0 source */
+#define DPU_NUM_IRQ_OUT2 4   /* stream-1 sources (lines 192/198/201/202) */
 
 /* ~60 Hz frame tick that drives the shadow-load + frame-complete interrupts. */
 #define DPU_VBLANK_PERIOD_NS  16666667
@@ -291,11 +326,20 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_DIM_W(v)            (((v) & 0x3fff) + 1)
 #define BLIT_DIM_H(v)            ((((v) >> 16) & 0x3fff) + 1)
 
+/* per-console scanout context so one gfx_ops can serve both pixel pipelines */
+typedef struct {
+    IMX95DPUState *s;
+    int stream;
+} DPUConsoleCtx;
+
 struct IMX95DPUState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
-    qemu_irq irq_out[DPU_NUM_IRQ_OUT];  /* -> displaymix irqsteer input lines */
-    QemuConsole *con;
+    qemu_irq irq_out[DPU_NUM_IRQ_OUT];   /* stream-0 -> irqsteer input lines */
+    qemu_irq irq_out2[DPU_NUM_IRQ_OUT2]; /* stream-1 -> irqsteer input lines */
+    QemuConsole *con;                    /* stream-0 (CRTC 0) scanout */
+    QemuConsole *con1;                   /* stream-1 (CRTC 1) scanout */
+    DPUConsoleCtx ctx[DPU_NUM_STREAMS];  /* per-console gfx_ops opaque */
     uint32_t *regs;                 /* full 4 MiB register-file backing */
     MemoryRegionSection fbsection;
     bool invalidate;
@@ -308,6 +352,9 @@ struct IMX95DPUState {
     /* stream-0 display interrupt block (n=0) + the frame tick */
     uint32_t int_status;
     uint32_t int_enable;
+    /* stream-1 display interrupt block (disp_irq2), registers n=0 and n=1 */
+    uint32_t int_status2[2];
+    uint32_t int_enable2[2];
     uint32_t frame_index;       /* HW vblank counter (FGTIMESTAMP) */
     QEMUTimer *vblank_timer;
 
@@ -324,11 +371,19 @@ struct IMX95DPUState {
 static void imx95_dpu_update_irq(IMX95DPUState *s)
 {
     uint32_t active = s->int_status & s->int_enable;
+    uint32_t a0 = s->int_status2[0] & s->int_enable2[0];
+    uint32_t a1 = s->int_status2[1] & s->int_enable2[1];
 
     qemu_set_irq(s->irq_out[0], !!(active & DPU_IRQ_EXTDST0_SHDLOAD));
     qemu_set_irq(s->irq_out[1], !!(active & DPU_IRQ_DOMAINBLEND0_SHDLOAD));
     qemu_set_irq(s->irq_out[2], !!(active & DPU_IRQ_DISENGCFG_SHDLOAD0));
     qemu_set_irq(s->irq_out[3], !!(active & DPU_IRQ_DISENGCFG_FRAMECOMP0));
+
+    /* stream 1: EXTDST1 in register n=0; the others in register n=1 */
+    qemu_set_irq(s->irq_out2[0], !!(a0 & DPU_IRQ2_EXTDST1_SHDLOAD));
+    qemu_set_irq(s->irq_out2[1], !!(a1 & DPU_IRQ2_DOMAINBLEND1_SHDLOAD));
+    qemu_set_irq(s->irq_out2[2], !!(a1 & DPU_IRQ2_DISENGCFG_SHDLOAD1));
+    qemu_set_irq(s->irq_out2[3], !!(a1 & DPU_IRQ2_DISENGCFG_FRAMECOMP1));
 }
 
 /*
@@ -339,7 +394,11 @@ static void imx95_dpu_update_irq(IMX95DPUState *s)
  */
 static void imx95_dpu_arm_vblank(IMX95DPUState *s)
 {
-    if (s->int_enable & DPU_IRQ_SOURCES) {
+    bool want = (s->int_enable & DPU_IRQ_SOURCES) ||
+                (s->int_enable2[0] & DPU_IRQ2_SOURCES0) ||
+                (s->int_enable2[1] & DPU_IRQ2_SOURCES1);
+
+    if (want) {
         timer_mod(s->vblank_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DPU_VBLANK_PERIOD_NS);
     } else {
@@ -360,7 +419,21 @@ static void imx95_dpu_vblank_tick(void *opaque)
 
     s->frame_index++;   /* advance the HW vblank counter (FGTIMESTAMP) */
     s->int_status |= s->int_enable & DPU_IRQ_SOURCES;
+    s->int_status2[0] |= s->int_enable2[0] & DPU_IRQ2_SOURCES0;
+    s->int_status2[1] |= s->int_enable2[1] & DPU_IRQ2_SOURCES1;
     imx95_dpu_update_irq(s);
+    /*
+     * Drive scanout from the frame tick: with -display none there is no UI
+     * refresh loop, so re-composite each active stream's console here while its
+     * vblank is enabled (the tick only runs then) — this keeps both pixel
+     * pipelines' surfaces current for a QMP screendump of either head.
+     */
+    if (s->int_enable & DPU_IRQ_DISENGCFG_FRAMECOMP0) {
+        qemu_console_hw_update(s->con);
+    }
+    if (s->int_enable2[1] & DPU_IRQ2_DISENGCFG_FRAMECOMP1) {
+        qemu_console_hw_update(s->con1);
+    }
     imx95_dpu_arm_vblank(s);
 }
 
@@ -374,13 +447,14 @@ static inline bool in_block(hwaddr off, hwaddr base)
     return off >= base && off < base + DPU_BLOCK_SIZE;
 }
 
-/* Output geometry from the FrameGen (the display-timing active area). */
-static bool imx95_dpu_display_on(IMX95DPUState *s, uint32_t *w, uint32_t *h)
+/* Output geometry from a stream's FrameGen (the display-timing active area). */
+static bool imx95_dpu_display_on(IMX95DPUState *s, hwaddr fg, uint32_t *w,
+                                 uint32_t *h)
 {
-    uint32_t fgdm = dpu_r(s, DPU_FRAMEGEN0 + FG_FGINCTRL) & 0x7;
+    uint32_t fgdm = dpu_r(s, fg + FG_FGINCTRL) & 0x7;
 
-    *w = dpu_r(s, DPU_FRAMEGEN0 + FG_HTCFG1) & 0x3fff;
-    *h = dpu_r(s, DPU_FRAMEGEN0 + FG_VTCFG1) & 0x3fff;
+    *w = dpu_r(s, fg + FG_HTCFG1) & 0x3fff;
+    *h = dpu_r(s, fg + FG_VTCFG1) & 0x3fff;
     return fgdm != 0 && *w != 0 && *h != 0;
 }
 
@@ -664,33 +738,39 @@ static uint32_t imx95_dpu_resolve_chain(IMX95DPUState *s, uint32_t sec,
 
 static bool imx95_dpu_gfx_update(void *opaque)
 {
-    IMX95DPUState *s = opaque;
-    DisplaySurface *surface = qemu_console_surface(s->con);
+    DPUConsoleCtx *ctx = opaque;
+    IMX95DPUState *s = ctx->s;
+    int st = ctx->stream;
+    QemuConsole *con = st ? s->con1 : s->con;
+    DisplaySurface *surface = qemu_console_surface(con);
+    hwaddr fg = DPU_FRAMEGEN(st);
     static const hwaddr lb_ofs[6] = { 0x170000, 0x180000, 0x190000,
                                       0x1a0000, 0x1b0000, 0x1c0000 };
     uint32_t w, h;
     int cur, guard, planes = 0;
 
-    if (!imx95_dpu_display_on(s, &w, &h)) {
-        return true;   /* no active CRTC yet */
+    if (!imx95_dpu_display_on(s, fg, &w, &h)) {
+        return true;   /* this CRTC not driving a display yet */
     }
     if (surface_width(surface) != (int)w || surface_height(surface) != (int)h) {
-        qemu_console_resize(s->con, w, h);
-        surface = qemu_console_surface(s->con);
+        qemu_console_resize(con, w, h);
+        surface = qemu_console_surface(con);
     }
     /* Background (ConstFrame): clear to black; opaque planes paint over it. */
     memset(surface_data(surface), 0, (size_t)surface_stride(surface) * h);
 
     /*
-     * Composite the LayerBlend chain bottom-up: the bottom LayerBlend takes a
-     * ConstFrame as its primary input and the primary plane as secondary; each
-     * one above takes the previous LayerBlend's output as primary and another
-     * plane as secondary. Blit each secondary plane at its POSITION.
+     * Composite this stream's LayerBlend chain bottom-up: the bottom LayerBlend
+     * takes a ConstFrame as its primary input and the primary plane as
+     * secondary; each one above takes the previous LayerBlend's output as
+     * primary and another plane as secondary. Each stream roots at its own
+     * ConstFrame(s), so the chains for the two pixel pipelines stay separate.
      */
     cur = -1;
     for (int i = 0; i < 6; i++) {
         uint32_t dyn = dpu_r(s, lb_ofs[i] + DPU_LB_DYNAMIC);
-        if (DPU_LB_CLKEN(dyn) && DPU_LINK_IS_CONSTFRAME(DPU_LB_PRIM(dyn))) {
+        if (DPU_LB_CLKEN(dyn) &&
+            DPU_LINK_IS_CF_STREAM(DPU_LB_PRIM(dyn), st)) {
             cur = i;
             break;
         }
@@ -723,22 +803,24 @@ static bool imx95_dpu_gfx_update(void *opaque)
     }
 
     /*
-     * Fallback: if no LayerBlend chain was active, scan the primary directly
-     * (keeps the plain boot-logo path working regardless of LB programming).
+     * Fallback (stream 0 only): if no LayerBlend chain was active, scan the
+     * primary directly (keeps the plain boot-logo path working regardless of LB
+     * programming). Stream 1 has no boot-logo path — it stays blank until its
+     * chain is programmed.
      */
-    if (planes == 0) {
+    if (planes == 0 && st == 0) {
         imx95_dpu_blit_plane(s, surface, DPU_FETCHLAYER0, 0, 0, 0, 0, 0);
     }
 
-    qemu_console_update(s->con, 0, 0, w, h);
+    qemu_console_update(con, 0, 0, w, h);
     return true;
 }
 
 static void imx95_dpu_invalidate(void *opaque)
 {
-    IMX95DPUState *s = opaque;
+    DPUConsoleCtx *ctx = opaque;
 
-    s->invalidate = true;
+    ctx->s->invalidate = true;
 }
 
 static const GraphicHwOps imx95_dpu_gfx_ops = {
@@ -1170,17 +1252,31 @@ static uint64_t imx95_dpu_read(void *opaque, hwaddr off, unsigned size)
     if (off == DPU_INT_ENABLE0) {
         return s->int_enable;
     }
-    if (off == DPU_FRAMEGEN0 + FG_FGCHSTAT) {
+    if (off == DPU_INT2_STATUS(0)) {
+        return s->int_status2[0];
+    }
+    if (off == DPU_INT2_STATUS(1)) {
+        return s->int_status2[1];
+    }
+    if (off == DPU_INT2_ENABLE(0)) {
+        return s->int_enable2[0];
+    }
+    if (off == DPU_INT2_ENABLE(1)) {
+        return s->int_enable2[1];
+    }
+    if (off == DPU_FRAMEGEN0 + FG_FGCHSTAT ||
+        off == DPU_FRAMEGEN1 + FG_FGCHSTAT) {
         /*
          * Primary channel "synced up" once the FrameGen is enabled. The CRTC
          * enable path polls this (readl_poll_timeout) and would otherwise log
          * "FrameGen primary channel isn't syncup" and abort the modeset. Leave
          * P/S-FIFOEMPTY clear so the FIFO-empty warning path stays quiet.
          */
-        return (dpu_r(s, DPU_FRAMEGEN0 + FG_FGENABLE) & FG_FGEN)
-               ? FG_PRIMSYNCSTAT : 0;
+        hwaddr fg = (off & ~0xffful);
+        return (dpu_r(s, fg + FG_FGENABLE) & FG_FGEN) ? FG_PRIMSYNCSTAT : 0;
     }
-    if (off == DPU_FRAMEGEN0 + FG_FGTIMESTAMP) {
+    if (off == DPU_FRAMEGEN0 + FG_FGTIMESTAMP ||
+        off == DPU_FRAMEGEN1 + FG_FGTIMESTAMP) {
         /* HW vblank counter: drm_crtc diffs the frame index across vblanks. */
         return s->frame_index << FG_FRAMEINDEX_SHIFT;
     }
@@ -1192,9 +1288,10 @@ static void imx95_dpu_write(void *opaque, hwaddr off, uint64_t val,
 {
     IMX95DPUState *s = opaque;
     bool scanout_reg = in_block(off, DPU_FETCHLAYER0) ||
-                       in_block(off, DPU_FRAMEGEN0);
+                       in_block(off, DPU_FRAMEGEN0) ||
+                       in_block(off, DPU_FRAMEGEN1);
 
-    /* stream-0 display interrupt block (n=0): enable / ack / preset */
+    /* display interrupt blocks: stream-0 (n=0) + stream-1 (disp_irq2, n=0,1) */
     switch (off) {
     case DPU_INT_ENABLE0:
         s->int_enable = val;
@@ -1207,6 +1304,32 @@ static void imx95_dpu_write(void *opaque, hwaddr off, uint64_t val,
         return;
     case DPU_INT_PRESET0:
         s->int_status |= (uint32_t)val;    /* software trigger */
+        imx95_dpu_update_irq(s);
+        return;
+    case DPU_INT2_ENABLE(0):
+        s->int_enable2[0] = val;
+        imx95_dpu_update_irq(s);
+        imx95_dpu_arm_vblank(s);
+        return;
+    case DPU_INT2_ENABLE(1):
+        s->int_enable2[1] = val;
+        imx95_dpu_update_irq(s);
+        imx95_dpu_arm_vblank(s);
+        return;
+    case DPU_INT2_CLEAR(0):
+        s->int_status2[0] &= ~(uint32_t)val;
+        imx95_dpu_update_irq(s);
+        return;
+    case DPU_INT2_CLEAR(1):
+        s->int_status2[1] &= ~(uint32_t)val;
+        imx95_dpu_update_irq(s);
+        return;
+    case DPU_INT2_PRESET(0):
+        s->int_status2[0] |= (uint32_t)val;
+        imx95_dpu_update_irq(s);
+        return;
+    case DPU_INT2_PRESET(1):
+        s->int_status2[1] |= (uint32_t)val;
         imx95_dpu_update_irq(s);
         return;
     case BLIT_CMDSEQ_HIF:
@@ -1265,6 +1388,8 @@ static void imx95_dpu_reset(DeviceState *dev)
     s->invalidate = true;
     s->int_status = 0;
     s->int_enable = 0;
+    s->int_status2[0] = s->int_status2[1] = 0;
+    s->int_enable2[0] = s->int_enable2[1] = 0;
     s->frame_index = 0;
     s->hif_count = 0;
     s->hif_off = 0;
@@ -1296,8 +1421,18 @@ static void imx95_dpu_realize(DeviceState *dev, Error **errp)
     for (int i = 0; i < DPU_NUM_BLIT_IRQ; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->comctrl_irq[i]);
     }
+    for (int i = 0; i < DPU_NUM_IRQ_OUT2; i++) {
+        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq_out2[i]);
+    }
     s->vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_dpu_vblank_tick, s);
-    s->con = qemu_graphic_console_create(dev, 0, &imx95_dpu_gfx_ops, s);
+    for (int st = 0; st < DPU_NUM_STREAMS; st++) {
+        s->ctx[st].s = s;
+        s->ctx[st].stream = st;
+    }
+    s->con = qemu_graphic_console_create(dev, 0, &imx95_dpu_gfx_ops,
+                                         &s->ctx[0]);
+    s->con1 = qemu_graphic_console_create(dev, 1, &imx95_dpu_gfx_ops,
+                                          &s->ctx[1]);
 }
 
 static void imx95_dpu_class_init(ObjectClass *klass, const void *data)

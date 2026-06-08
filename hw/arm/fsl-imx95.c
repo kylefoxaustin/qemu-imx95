@@ -525,15 +525,22 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
      * through dpu95's ~10 s flip_done/SHDLD timeouts. The four modelled
      * sources map to irqsteer input lines (dtsi dpu interrupts): EXTDST0_SHDLOAD
      * ->64, DOMAINBLEND0_SHDLOAD ->70, DISENGCFG_SHDLOAD0 ->73, vblank ->74.
-     * The downstream pixel-link/LDB/DSI bridge blocks carry no pixels.
+     * The 2nd pixel pipeline (stream 1 / CRTC 1) has its own sources on the
+     * disp_irq2 block -> irqsteer lines EXTDST1_SHDLOAD ->192,
+     * DOMAINBLEND1_SHDLOAD ->198, DISENGCFG_SHDLOAD1 ->201, vblank ->202 (all
+     * in irqsteer group 3 -> GIC SPI 217). The downstream pixel-link / LDB /
+     * DSI bridge blocks carry no pixels.
      */
     {
         static const int dpu_irqsteer_line[4] = { 64, 70, 73, 74 };
+        static const int dpu_irqsteer_line2[4] = { 192, 198, 201, 202 };
         /* 2D blit completion: ComCtrl SW0..3 -> irqsteer lines 1..4 (dtsi). */
         static const int blit_irqsteer_line[4] = { 1, 2, 3, 4 };
         DeviceState *dpu = qdev_new("imx95.dpu");
         int i;
 
+        /* id so QMP screendump can target the 2nd pipeline (device=dpu) */
+        dpu->id = g_strdup("dpu");
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(dpu), errp)) {
             return false;
         }
@@ -545,6 +552,10 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         for (i = 0; i < 4; i++) {
             sysbus_connect_irq(SYS_BUS_DEVICE(dpu), 4 + i,
                 qdev_get_gpio_in(irqsteer, blit_irqsteer_line[i]));
+        }
+        for (i = 0; i < 4; i++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(dpu), 8 + i,
+                qdev_get_gpio_in(irqsteer, dpu_irqsteer_line2[i]));
         }
     }
 
