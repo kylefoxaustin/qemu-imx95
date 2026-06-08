@@ -261,6 +261,13 @@ working host data path yet):
   `filesrc ! jpegparse ! v4l2jpegdec ! videoconvert ! filesink` pipeline runs
   end-to-end on the real `mxc-jpeg` V4L2 mem2mem driver and produces a correct
   NV12 frame.
+- **Neutron NPU — brings up.** The NXP Neutron NPU comes up end to end:
+  `remoteproc` loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the
+  compute driver binds (`/dev/neutron0`), and the **LiteRT Neutron delegate runs
+  `benchmark_model`** against it (`tests/neutron/`). The proprietary on-NPU
+  compute is out of scope — the delegate offloads 0 nodes and inference falls
+  back to the CPU — but the full firmware / remoteproc / driver / delegate stack
+  is exercised, not a probe-time stub.
 - **GPIO — functional.** The five SoC RGPIO controllers (`hw/gpio/imx95_gpio.c`,
   `fsl,imx95-gpio`) bind under `gpio-vf610`; output drives and input reads round
   trip (PDOR/PDDR ↔ PDIR), exercised by a devmem loopback in `tests/gpio/`.
@@ -324,7 +331,8 @@ the same ENETC v4 PF brought up via a fixed-link `10gbase-r` node, so
 See [`tests/netc/`](tests/netc/) for the bring-up, two-port, 10G, and soak
 recipes.
 
-Other Tier-3 limitations (no Linux block storage, GPU/VPU/NPU stub-only) are
+Other Tier-3 limitations (no Linux block storage, GPU/VPU stub-only, the Neutron
+NPU brings up but does not compute) are
 characterized with precise failure points — see
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
@@ -344,7 +352,9 @@ controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
 host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
 JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
 functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
-under "What runs today" above. What remains is forward-looking:
+under "What runs today" above. The **Neutron NPU** also comes up end to end
+(`remoteproc` + driver + LiteRT delegate running `benchmark_model`); only its
+proprietary on-NPU compute is deferred. What remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
@@ -632,8 +642,11 @@ working artifacts — they are not committed to the repo (the directory is
   real interrupt-driven LPI2C masters with their expander / LED / ADP5585
   slaves (`tests/i2c/`), and a LUT-driven **FlexSPI** controller + serial NOR
   (`hw/ssi/imx_fspi.c`, a 64 MiB `mtd0` with read + write/read-back —
-  `tests/flexspi/`). Along the way: backed the PCIe `app`/`atu` windows so an
-  unbacked-register external abort can't wedge the boot.
+  `tests/flexspi/`); and the **Neutron NPU** brought up end to end (`remoteproc`
+  loads `NeutronFirmware.elf`, the compute driver binds `/dev/neutron0`, and the
+  LiteRT Neutron delegate runs `benchmark_model` — `tests/neutron/`; the
+  proprietary on-NPU compute stays out of scope). Along the way: backed the PCIe
+  `app`/`atu` windows so an unbacked-register external abort can't wedge the boot.
 
 ## License & credits
 
