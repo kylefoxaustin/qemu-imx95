@@ -197,7 +197,11 @@ working host data path yet):
   (`hw/intc/imx_irqsteer.c`), so atomic commits **complete on interrupt** (no
   `flip_done` timeouts). The display-output connector chain (pixel-interleaver →
   pixel-link → LDB → LVDS-PHY → panel) registers a DRM connector once enabled in
-  the dtb. The second pixel pipeline (CRTC 51 / FrameGen1) is not modelled yet.
+  the dtb. **Both pixel pipelines** are modelled — a second stream (FrameGen1 /
+  CRTC 1) with its own console, LayerBlend chain and display-interrupt block
+  (disp_irq2): with both LVDS channels + panels enabled, dpu95 brings up LVDS-1
+  (CRTC 0) and LVDS-2 (CRTC 1) and a `modetest` atomic commit completes on CRTC 1
+  (`tests/dual-pipe/`).
 - **2D blit engine — functional.** The DPU's 2D blit block (the Socionext
   display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
@@ -319,7 +323,7 @@ under "What runs today" above. What remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
-| **Functional display** | The second pixel pipeline (CRTC 51 / FrameGen1, a 2nd connector) and DSI-LVDS bridge timing (multi-plane KMS compositing — RGB + NV12 planes, alpha-blend and scaling — already works today over the LayerBlend chain, on top of the boot-logo scanout + a real vblank/irqsteer) | next |
+| **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
