@@ -411,6 +411,27 @@ static void sdhci_end_transfer(SDHCIState *s)
         sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
         /* Auto CMD12 response goes to the upper Response register */
         s->rspreg[3] = ldl_be_p(response);
+    } else if ((s->trnmod & SDHC_TRNS_MULTI) && !(s->trnmod & SDHC_TRNS_READ)) {
+        /*
+         * Open-ended multi-block WRITE with no Auto-CMD12. The controller has
+         * clocked out every block, but the card is still in the
+         * receive-data state waiting for a STOP. On real hardware the host's
+         * transfer-complete handler issues CMD12, which moves the card
+         * through programming back to the transfer (ready) state before the
+         * post-write busy poll. Without it the SD/eMMC card model stays in
+         * receivingdata and Linux's __mmc_poll_for_busy() - which only
+         * accepts the transfer state as "not busy" - spins until it gives up
+         * ("Card stuck being busy"), so every write fails and retries.
+         * Issue the implicit STOP here; the card's CMD12 handler is
+         * idempotent in the transfer state, so a later driver-issued CMD12
+         * is harmless. The response is not surfaced (the driver did not ask
+         * for it).
+         */
+        SDRequest request = { .cmd = 0x0C, .arg = 0 };
+        uint8_t response[16];
+
+        trace_sdhci_end_transfer(request.cmd, request.arg);
+        sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
     }
 
     s->prnsts &= ~(SDHC_DOING_READ | SDHC_DOING_WRITE |

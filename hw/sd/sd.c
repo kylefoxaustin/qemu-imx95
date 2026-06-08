@@ -1900,6 +1900,14 @@ static sd_rsp_type_t sd_cmd_STOP_TRANSMISSION(SDState *sd, SDRequest req)
         /* Bzzzzzzztt .... Operation complete.  */
         sd->state = sd_transfer_state;
         return sd_r1;
+    case sd_transfer_state:
+        /*
+         * Idempotent stop: the host (or, for an open-ended multi-block
+         * write, the SDHCI controller's transfer-complete path) may have
+         * already returned the card to the transfer state. A redundant
+         * CMD12 in that state is a harmless no-op rather than an error.
+         */
+        return sd_r1b;
     default:
         return sd_invalid_state_for_cmd(sd, req);
     }
