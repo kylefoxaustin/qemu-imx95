@@ -138,16 +138,9 @@ echo "=== g2d scale+rotate e2e report ==="
 sed -n '/G2D-XFORM ===/,/G2D-XFORM-DONE/p' "$LOG" | grep -vE '^\[ *[0-9].*\]'
 
 pass=1
-grep -aq 'SCALE: PASS' "$LOG" || { echo "  MISS scale self-check"; pass=0; }
-# Rotation is not modelled yet — libg2d decomposes a G2D rotate into tiled
-# FetchRot9 strips (each its own source base + dst offset), which the blit model
-# doesn't replay. Report it but don't gate on it.
-if grep -aq 'ROTATE: PASS' "$LOG"; then
-    echo "  NOTE rotate also validated"
-else
-    echo "  NOTE rotate not modelled yet (FetchRot9 tiled resampling) — informational"
-fi
+grep -aq 'SCALE: PASS'  "$LOG" || { echo "  MISS scale self-check";  pass=0; }
+grep -aq 'ROTATE: PASS' "$LOG" || { echo "  MISS rotate self-check"; pass=0; }
 
 [ "$pass" = 1 ] && {
-    echo "PASS: 2D blit scale validated through G2D"; exit 0; }
+    echo "PASS: 2D blit scale + rotate validated through G2D"; exit 0; }
 echo "FAIL"; exit 1

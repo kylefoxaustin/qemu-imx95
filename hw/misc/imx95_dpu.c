@@ -252,6 +252,24 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_VSCALER9_DYN   0xc1008
 #define BLIT_SCALER_CLKEN(v) (((v) >> 24) & 0x3)
 
+/*
+ * Rotation / format conversion route the source through FetchRot9 (0x80000)
+ * instead of FetchDecode9: the Store9 source-select (PIXENGCFG_STORE9_DYNAMIC,
+ * 0xe100c) then reads the FetchRot9 link id (0x05). libg2d does a rotate as a
+ * sequence of 16-row source bands (its clip window), each transposed into a
+ * 16-column destination strip — we replay one strip per Store9 trigger:
+ *   dst[j][clipH-1-i] = src[i][j]  (a 90-degree CW rotation of the clip band).
+ * Same case with a differing dst format (e.g. RGBA -> YUYV) is a colour-convert
+ * (no transpose). FetchRot9 register layout from dpu95-blit-registers.h.
+ */
+#define BLIT_STORE9_SRCSEL        0xe100c
+#define BLIT_STORE9_SRC_FETCHROT9 0x05
+#define BLIT_FR9_BASEADDRESS0     0x80020
+#define BLIT_FR9_BASEADDRESSMSB0  0x80024
+#define BLIT_FR9_SRCBUFATTR0      0x80030   /* [15:0] stride-1; [21:16] bpp */
+#define BLIT_FR9_CLIPWINDOWDIM    0x80048   /* W-1 | (H-1)<<16 (strip) */
+#define BLIT_FR9_LAYERPROPERTY0   0x80050
+
 /* Store9 — blit destination (sub-block 0xe0000) + the trigger */
 #define BLIT_STORE9_BASEADDRESS0    0xe0020
 #define BLIT_STORE9_BASEADDRESSMSB0 0xe0024
@@ -741,8 +759,54 @@ static uint32_t blit_blend_factor(uint32_t f, uint8_t sa, uint8_t da)
     }
 }
 
+/*
+ * FetchRot9 path (Store9 fed by FetchRot9): one rotated strip per trigger. The
+ * clip window is a clipW x clipH source band; it is transposed 90 CW into a
+ * clipH-wide x clipW-tall destination strip at the Store9 base. 32bpp only.
+ */
+static void imx95_blit_rotate(IMX95DPUState *s)
+{
+    uint32_t sattr = dpu_r(s, BLIT_FR9_SRCBUFATTR0);
+    uint32_t cdim  = dpu_r(s, BLIT_FR9_CLIPWINDOWDIM);
+    uint64_t sbase = dpu_r(s, BLIT_FR9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_FR9_BASEADDRESSMSB0) << 32);
+    uint32_t sstride = BLIT_ATTR_STRIDE(sattr);
+    uint32_t dattr = dpu_r(s, BLIT_STORE9_DSTBUFATTR0);
+    uint64_t dbase = dpu_r(s, BLIT_STORE9_BASEADDRESS0) |
+                     ((uint64_t)dpu_r(s, BLIT_STORE9_BASEADDRESSMSB0) << 32);
+    uint32_t dstride = BLIT_ATTR_STRIDE(dattr);
+    uint32_t cw = BLIT_DIM_W(cdim), ch = BLIT_DIM_H(cdim);
+    g_autofree uint8_t *band = NULL;
+    g_autofree uint8_t *drow = NULL;
+
+    if (sbase == 0 || dbase == 0 || cw == 0 || ch == 0 ||
+        BLIT_FETCH_BPP(sattr) != 32) {
+        return;
+    }
+    band = g_malloc((size_t)cw * ch * 4);
+    drow = g_malloc((size_t)ch * 4);
+    for (uint32_t i = 0; i < ch; i++) {
+        cpu_physical_memory_read(sbase + (uint64_t)i * sstride,
+                                 band + (size_t)i * cw * 4, (size_t)cw * 4);
+    }
+    /* output row j (0..cw-1) is the transpose of source column j */
+    for (uint32_t j = 0; j < cw; j++) {
+        for (uint32_t i = 0; i < ch; i++) {
+            memcpy(drow + (size_t)(ch - 1 - i) * 4,
+                   band + ((size_t)i * cw + j) * 4, 4);
+        }
+        cpu_physical_memory_write(dbase + (uint64_t)j * dstride, drow,
+                                  (size_t)ch * 4);
+    }
+    if (s->trace) {
+        qemu_log("imx95-dpu: blit ROTATE band %ux%u src=0x%" PRIx64
+                 " dst=0x%" PRIx64 "\n", cw, ch, sbase, dbase);
+    }
+}
+
 static void imx95_blit_run(IMX95DPUState *s)
 {
+    uint32_t store_src = dpu_r(s, BLIT_STORE9_SRCSEL) & 0x3f;
     uint32_t dattr = dpu_r(s, BLIT_STORE9_DSTBUFATTR0);
     uint32_t ddim  = dpu_r(s, BLIT_STORE9_DSTBUFDIM);
     uint64_t dbase = dpu_r(s, BLIT_STORE9_BASEADDRESS0) |
@@ -768,6 +832,21 @@ static void imx95_blit_run(IMX95DPUState *s)
         if (s->trace) {
             qemu_log("imx95-dpu: blit skipped (dbase=0x%" PRIx64 " %ux%u "
                      "dbpp=%u)\n", dbase, w, h, dbpp);
+        }
+        return;
+    }
+
+    /*
+     * Store9 fed by FetchRot9 => rotation (same format) or colour conversion
+     * (format differs). FetchDecode9 (copy/blend/scale) is the other source.
+     */
+    if (store_src == BLIT_STORE9_SRC_FETCHROT9 &&
+        (dpu_r(s, BLIT_FR9_LAYERPROPERTY0) & BLIT_SRCBUF_ENABLE)) {
+        if (BLIT_FETCH_BPP(dpu_r(s, BLIT_FR9_SRCBUFATTR0)) == dbpp) {
+            imx95_blit_rotate(s);
+        } else if (s->trace) {
+            qemu_log("imx95-dpu: blit FetchRot9 convert (src!=dst fmt) not "
+                     "modelled — skipped\n");
         }
         return;
     }
