@@ -207,15 +207,16 @@ working host data path yet):
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
   decoded and the configured operation run — same-format **copy**,
   constant-colour **fill**, Porter-Duff **alpha-blend** (BlitBlend9), **scaling**
-  (HScaler9/VScaler9), **rotation** (FetchRot9), and **RGBA↔YUYV colour
-  conversion** (BT.601) — with the completion fence signalled through a ComCtrl
-  SW interrupt. Proven through the real NXP **G2D** stack: stock `g2d_basic_test`
-  drives `libg2d-dpu` over `/dev/dri/renderD128` and its `g2d_copy`,
-  `g2d_cache_op` and Porter-Duff clear-mode self-checks all pass
+  (HScaler9/VScaler9), **rotation** (FetchRot9), and **RGBA↔YUYV / RGBA↔NV12
+  colour conversion** (BT.601) — with the completion fence signalled through a
+  ComCtrl SW interrupt. Proven through the real NXP **G2D** stack: stock
+  `g2d_basic_test` drives `libg2d-dpu` over `/dev/dri/renderD128` and its
+  `g2d_copy`, `g2d_cache_op` and Porter-Duff clear-mode self-checks all pass
   (`tests/blit/run.sh`); small g2d exercisers validate a 2× upscale + 90° rotate
-  (`run-xform.sh`) and an RGBA↔YUYV round trip (`run-convert.sh`); and a
-  kernel-free `tests/qtest/imx95-blit-test.c` drives a synthetic cmdlist. NV12
-  (and other YUV) conversion is not modelled yet.
+  (`run-xform.sh`), an RGBA↔YUYV round trip (`run-convert.sh`) and an RGBA↔NV12
+  round trip (`run-nv12.sh`); and a kernel-free `tests/qtest/imx95-blit-test.c`
+  drives a synthetic cmdlist. The other YUV formats (I420/YV12/…) are not
+  modelled yet.
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
