@@ -328,7 +328,7 @@ under "What runs today" above. What remains is forward-looking:
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
-| GPU / VPU / NPU acceleration | Functional models to replace the Mali / Wave VPU / Neutron NPU probe-time stubs | deferred |
+| GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
 | Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
@@ -416,8 +416,13 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
    arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
    follow-up to qemu-devel.
 
-**Hardware accelerators (GPU/VPU/NPU) are probe-time stubs only** — their Linux
-drivers register but no rendering/codec/inference occurs.
+**The GPU and VPU are probe-time stubs** — their Linux drivers register but no
+rendering/codec occurs. The **Neutron NPU brings up end to end**: the remoteproc
+loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
+(`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
+(`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0
+nodes and inference falls back to CPU), since the proprietary firmware's inference
+is out of scope.
 
 Full diagnoses, including the icount × multi-CPU finding, are in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
