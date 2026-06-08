@@ -30,10 +30,18 @@ clean run proves the copy datapath end to end (the kernel-free
 colours (4:2:2 chroma subsampling is lossless in the flat interiors). A
 conversion routes the source through FetchDecode9 with the Store9 source-select
 reading the colour-space-converter output (`0xe100c == 0x06`); the model does the
-RGBA<->YUYV BT.601 conversion (`SRC + DST bpp == 48`, i.e. a 32<->16 pair).
-`g2d_basic_test`'s own `YUY2->NV12` self-check is `#if G2D_OPENCL` and so is
-compiled out of the DPU build, which is why this needs its own exerciser. NV12
-and the other YUV formats are not modelled.
+RGBA<->YUYV BT.601 conversion. `g2d_basic_test`'s own `YUY2->NV12` self-check is
+`#if G2D_OPENCL` and so is compiled out of the DPU build, which is why this needs
+its own exerciser.
+
+`run-nv12.sh` + `g2d_nv12.c` extend the same idea to **NV12** (2-plane 4:2:0):
+RGBA->NV12 writes Y to Store9 plane 0 (BASEADDRESS0, 8bpp) and interleaved Cb,Cr
+to Store9 plane 1 (BASEADDRESS1, half-res); NV12->RGBA reads Y from FetchDecode9
+and the chroma plane from FetchEco9 (0xa0000). The RGBA->NV12->RGBA round trip
+reproduces the quadrant colours. The CSC dispatch picks the conversion by the
+src/dst bit-depths (32<->16 = YUYV, 32<->8 = NV12) and falls through to a plain
+copy when the formats match (so a stale CSC select can't swallow a copy). Other
+YUV formats (I420/YV12/YUYV variants) are not modelled.
 
 ## Scaling — `run-xform.sh`
 

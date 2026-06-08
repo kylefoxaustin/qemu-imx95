@@ -312,6 +312,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
 #define BLIT_STORE9_DSTBUFATTR0     0xe0030   /* [15:0] stride-1; [21:16] b/px */
 #define BLIT_STORE9_DSTBUFDIM       0xe0054   /* [13:0] w-1; [29:16] h-1 */
 #define BLIT_STORE9_TRIGGER         0xe1014   /* PIXENGCFG_STORE9_TRIGGER */
+/*
+ * NV12 (2-plane 4:2:0) conversion. Store9 writes plane 0 = Y (BASEADDRESS0,
+ * 8bpp) and plane 1 = interleaved Cb,Cr (BASEADDRESS1, half-res). For the
+ * reverse, FetchDecode9 reads Y and FetchEco9 (0xa0000) reads the chroma plane.
+ */
+#define BLIT_STORE9_BASEADDRESS1    0xe0038
+#define BLIT_STORE9_BASEADDRESSMSB1 0xe003c
+#define BLIT_STORE9_DSTBUFATTR1     0xe0040   /* UV plane stride */
+#define BLIT_FE9_BASEADDRESS0       0xa0010   /* FetchEco9 chroma source base */
+#define BLIT_FE9_BASEADDRESSMSB0    0xa0014
+#define BLIT_FE9_SRCBUFATTR0        0xa0020   /* [15:0] stride-1 */
 
 #define BLIT_SRCBUF_ENABLE       (1u << 31)
 #define BLIT_ATTR_STRIDE(v)      (((v) & 0xffff) + 1)        /* bytes (n-1) */
@@ -896,12 +907,139 @@ static void imx95_blit_rotate(IMX95DPUState *s)
     }
 }
 
+/* RGBA8888 -> YUYV (4:2:2 packed, bytes Y0 U Y1 V), BT.601. */
+static void imx95_blit_rgba_to_yuyv(uint64_t sbase,
+                                    uint32_t sstride, uint64_t dbase,
+                                    uint32_t dstride, uint32_t w, uint32_t h)
+{
+    g_autofree uint8_t *srow = g_malloc((size_t)w * 4);
+    g_autofree uint8_t *drow = g_malloc((size_t)w * 2);
+
+    for (uint32_t y = 0; y < h; y++) {
+        cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                 (size_t)w * 4);
+        for (uint32_t x = 0; x + 1 < w; x += 2) {
+            uint32_t p0 = ldl_le_p(srow + x * 4);
+            uint32_t p1 = ldl_le_p(srow + (x + 1) * 4);
+            uint8_t y0, u0, v0, y1, u1, v1;
+            /* G2D_RGBA8888 = bytes R,G,B,A: R is the low byte. */
+            imx95_rgb_to_yuv601(p0 & 0xff, (p0 >> 8) & 0xff,
+                                (p0 >> 16) & 0xff, &y0, &u0, &v0);
+            imx95_rgb_to_yuv601(p1 & 0xff, (p1 >> 8) & 0xff,
+                                (p1 >> 16) & 0xff, &y1, &u1, &v1);
+            drow[x * 2 + 0] = y0;
+            drow[x * 2 + 1] = (u0 + u1) / 2;
+            drow[x * 2 + 2] = y1;
+            drow[x * 2 + 3] = (v0 + v1) / 2;
+        }
+        cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                  (size_t)w * 2);
+    }
+}
+
+/* YUYV -> RGBA8888, BT.601. */
+static void imx95_blit_yuyv_to_rgba(uint64_t sbase,
+                                    uint32_t sstride, uint64_t dbase,
+                                    uint32_t dstride, uint32_t w, uint32_t h)
+{
+    g_autofree uint8_t *srow = g_malloc((size_t)w * 2);
+    g_autofree uint8_t *drow = g_malloc((size_t)w * 4);
+
+    for (uint32_t y = 0; y < h; y++) {
+        cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                 (size_t)w * 2);
+        for (uint32_t x = 0; x + 1 < w; x += 2) {
+            uint8_t y0 = srow[x * 2 + 0], u = srow[x * 2 + 1];
+            uint8_t y1 = srow[x * 2 + 2], v = srow[x * 2 + 3];
+            uint8_t r, g, b;
+            imx95_yuv601_to_rgb(y0, u, v, &r, &g, &b);
+            stl_le_p(drow + x * 4, r | (g << 8) | (b << 16) | 0xff000000u);
+            imx95_yuv601_to_rgb(y1, u, v, &r, &g, &b);
+            stl_le_p(drow + (x + 1) * 4,
+                     r | (g << 8) | (b << 16) | 0xff000000u);
+        }
+        cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                  (size_t)w * 4);
+    }
+}
+
 /*
- * CSC path (Store9 fed by the colour-space converter, src-select 0x06): a full
- * RGBA8888 <-> YUYV (4:2:2 packed, bytes Y0 U Y1 V) using BT.601. The source is
- * read from FetchDecode9 (same as a copy), only the format differs.
+ * RGBA8888 -> NV12: Y to plane 0 (full res), interleaved Cb,Cr to plane 1 at
+ * 4:2:0 (one chroma pair per 2x2 luma block, horizontally averaged).
  */
-static void imx95_blit_convert(IMX95DPUState *s)
+static void imx95_blit_rgba_to_nv12(uint64_t sbase,
+                                    uint32_t sstride, uint64_t ybase,
+                                    uint32_t ystride, uint64_t cbase,
+                                    uint32_t cstride, uint32_t w, uint32_t h)
+{
+    g_autofree uint8_t *srow = g_malloc((size_t)w * 4);
+    g_autofree uint8_t *yrow = g_malloc((size_t)w);
+    g_autofree uint8_t *crow = g_malloc((size_t)w);
+
+    for (uint32_t y = 0; y < h; y++) {
+        cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
+                                 (size_t)w * 4);
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t p = ldl_le_p(srow + x * 4);
+            uint8_t yy, uu, vv;
+            imx95_rgb_to_yuv601(p & 0xff, (p >> 8) & 0xff, (p >> 16) & 0xff,
+                                &yy, &uu, &vv);
+            yrow[x] = yy;
+        }
+        cpu_physical_memory_write(ybase + (uint64_t)y * ystride, yrow,
+                                  (size_t)w);
+        if ((y & 1) == 0) {                 /* one chroma row per 2 luma rows */
+            for (uint32_t x = 0; x + 1 < w; x += 2) {
+                uint32_t p0 = ldl_le_p(srow + x * 4);
+                uint32_t p1 = ldl_le_p(srow + (x + 1) * 4);
+                uint8_t y0, u0, v0, y1, u1, v1;
+                imx95_rgb_to_yuv601(p0 & 0xff, (p0 >> 8) & 0xff,
+                                    (p0 >> 16) & 0xff, &y0, &u0, &v0);
+                imx95_rgb_to_yuv601(p1 & 0xff, (p1 >> 8) & 0xff,
+                                    (p1 >> 16) & 0xff, &y1, &u1, &v1);
+                crow[x + 0] = (u0 + u1) / 2;
+                crow[x + 1] = (v0 + v1) / 2;
+            }
+            cpu_physical_memory_write(cbase + (uint64_t)(y / 2) * cstride,
+                                      crow, (size_t)w);
+        }
+    }
+}
+
+/* NV12 -> RGBA8888: Y from plane 0, Cb,Cr from plane 1 (half-res). */
+static void imx95_blit_nv12_to_rgba(uint64_t ybase,
+                                    uint32_t ystride, uint64_t cbase,
+                                    uint32_t cstride, uint64_t dbase,
+                                    uint32_t dstride, uint32_t w, uint32_t h)
+{
+    g_autofree uint8_t *yrow = g_malloc((size_t)w);
+    g_autofree uint8_t *crow = g_malloc((size_t)w);
+    g_autofree uint8_t *drow = g_malloc((size_t)w * 4);
+
+    for (uint32_t y = 0; y < h; y++) {
+        cpu_physical_memory_read(ybase + (uint64_t)y * ystride, yrow,
+                                 (size_t)w);
+        cpu_physical_memory_read(cbase + (uint64_t)(y / 2) * cstride, crow,
+                                 (size_t)w);
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t ci = (x / 2) * 2;
+            uint8_t r, g, b;
+            imx95_yuv601_to_rgb(yrow[x], crow[ci], crow[ci + 1], &r, &g, &b);
+            stl_le_p(drow + x * 4, r | (g << 8) | (b << 16) | 0xff000000u);
+        }
+        cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
+                                  (size_t)w * 4);
+    }
+}
+
+/*
+ * CSC path (Store9 fed by the colour-space converter, src-select 0x06): convert
+ * between RGBA8888 and YUYV (4:2:2 packed) or NV12 (2-plane 4:2:0), BT.601. The
+ * luma/RGB source is FetchDecode9 (like a copy); NV12's chroma is the Store9
+ * plane 1 (write) or FetchEco9 (read). Returns true if a conversion ran, so a
+ * non-conversion blit (e.g. a copy with a stale CSC select) falls through.
+ */
+static bool imx95_blit_convert(IMX95DPUState *s)
 {
     uint32_t sattr = dpu_r(s, BLIT_FD9_SRCBUFATTR0);
     uint32_t ddim  = dpu_r(s, BLIT_STORE9_DSTBUFDIM);
@@ -915,65 +1053,41 @@ static void imx95_blit_convert(IMX95DPUState *s)
     uint32_t sbpp = BLIT_FETCH_BPP(sattr);
     uint32_t dbpp = BLIT_STORE_BPP(dattr) ? BLIT_STORE_BPP(dattr) : 32;
     uint32_t w = BLIT_DIM_W(ddim), h = BLIT_DIM_H(ddim);
-    g_autofree uint8_t *srow = NULL;
-    g_autofree uint8_t *drow = NULL;
 
     if (sbase == 0 || dbase == 0 || w < 2 || h == 0) {
-        return;
+        return false;
     }
-    if (sbpp == 32 && dbpp == 16) {                 /* RGBA8888 -> YUYV */
-        srow = g_malloc((size_t)w * 4);
-        drow = g_malloc((size_t)w * 2);
-        for (uint32_t y = 0; y < h; y++) {
-            cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
-                                     (size_t)w * 4);
-            for (uint32_t x = 0; x + 1 < w; x += 2) {
-                uint32_t p0 = ldl_le_p(srow + x * 4);
-                uint32_t p1 = ldl_le_p(srow + (x + 1) * 4);
-                uint8_t y0, u0, v0, y1, u1, v1;
-                /* G2D_RGBA8888 = bytes R,G,B,A: R is the low byte. */
-                imx95_rgb_to_yuv601(p0 & 0xff, (p0 >> 8) & 0xff,
-                                    (p0 >> 16) & 0xff, &y0, &u0, &v0);
-                imx95_rgb_to_yuv601(p1 & 0xff, (p1 >> 8) & 0xff,
-                                    (p1 >> 16) & 0xff, &y1, &u1, &v1);
-                drow[x * 2 + 0] = y0;
-                drow[x * 2 + 1] = (u0 + u1) / 2;
-                drow[x * 2 + 2] = y1;
-                drow[x * 2 + 3] = (v0 + v1) / 2;
-            }
-            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
-                                      (size_t)w * 2);
+    if (sbpp == 32 && dbpp == 16) {                  /* RGBA8888 -> YUYV */
+        imx95_blit_rgba_to_yuyv(sbase, sstride, dbase, dstride, w, h);
+    } else if (sbpp == 16 && dbpp == 32) {           /* YUYV -> RGBA8888 */
+        imx95_blit_yuyv_to_rgba(sbase, sstride, dbase, dstride, w, h);
+    } else if (sbpp == 32 && dbpp == 8) {            /* RGBA8888 -> NV12 */
+        uint32_t cmsb = dpu_r(s, BLIT_STORE9_BASEADDRESSMSB1);
+        uint64_t cbase = dpu_r(s, BLIT_STORE9_BASEADDRESS1) |
+                         ((uint64_t)cmsb << 32);
+        uint32_t cstride = BLIT_ATTR_STRIDE(dpu_r(s, BLIT_STORE9_DSTBUFATTR1));
+        if (cbase == 0) {
+            return false;
         }
-        if (s->trace) {
-            qemu_log("imx95-dpu: blit CONVERT RGBA->YUYV %ux%u dst=0x%" PRIx64
-                     "\n", w, h, dbase);
+        imx95_blit_rgba_to_nv12(sbase, sstride, dbase, dstride,
+                                cbase, cstride, w, h);
+    } else if (sbpp == 8 && dbpp == 32) {            /* NV12 -> RGBA8888 */
+        uint64_t cbase = dpu_r(s, BLIT_FE9_BASEADDRESS0) |
+                         ((uint64_t)dpu_r(s, BLIT_FE9_BASEADDRESSMSB0) << 32);
+        uint32_t cstride = BLIT_ATTR_STRIDE(dpu_r(s, BLIT_FE9_SRCBUFATTR0));
+        if (cbase == 0) {
+            return false;
         }
-    } else if (sbpp == 16 && dbpp == 32) {          /* YUYV -> RGBA8888 */
-        srow = g_malloc((size_t)w * 2);
-        drow = g_malloc((size_t)w * 4);
-        for (uint32_t y = 0; y < h; y++) {
-            cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
-                                     (size_t)w * 2);
-            for (uint32_t x = 0; x + 1 < w; x += 2) {
-                uint8_t y0 = srow[x * 2 + 0], u = srow[x * 2 + 1];
-                uint8_t y1 = srow[x * 2 + 2], v = srow[x * 2 + 3];
-                uint8_t r, g, b;
-                /* G2D_RGBA8888 = bytes R,G,B,A (little-endian word below). */
-                imx95_yuv601_to_rgb(y0, u, v, &r, &g, &b);
-                stl_le_p(drow + x * 4,
-                         r | (g << 8) | (b << 16) | 0xff000000u);
-                imx95_yuv601_to_rgb(y1, u, v, &r, &g, &b);
-                stl_le_p(drow + (x + 1) * 4,
-                         r | (g << 8) | (b << 16) | 0xff000000u);
-            }
-            cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
-                                      (size_t)w * 4);
-        }
-        if (s->trace) {
-            qemu_log("imx95-dpu: blit CONVERT YUYV->RGBA %ux%u dst=0x%" PRIx64
-                     "\n", w, h, dbase);
-        }
+        imx95_blit_nv12_to_rgba(sbase, sstride, cbase, cstride,
+                                dbase, dstride, w, h);
+    } else {
+        return false;
     }
+    if (s->trace) {
+        qemu_log("imx95-dpu: blit CONVERT src %ubpp -> dst %ubpp %ux%u "
+                 "dst=0x%" PRIx64 "\n", sbpp, dbpp, w, h, dbase);
+    }
+    return true;
 }
 
 static void imx95_blit_run(IMX95DPUState *s)
@@ -1022,10 +1136,12 @@ static void imx95_blit_run(IMX95DPUState *s)
         }
         return;
     }
-    /* a 32<->16 (RGBA<->YUYV) pair through the CSC unit => colour convert */
-    if (store_src == BLIT_STORE9_SRC_CSC &&
-        BLIT_FETCH_BPP(sattr) + dbpp == 48) {
-        imx95_blit_convert(s);   /* BT.601; only on a real format change */
+    /*
+     * CSC unit feeds Store9 => RGBA<->YUYV/NV12 colour convert (BT.601). It
+     * returns false for a non-conversion blit (e.g. a copy that left the CSC
+     * select stale), which then falls through to the copy/scale path below.
+     */
+    if (store_src == BLIT_STORE9_SRC_CSC && imx95_blit_convert(s)) {
         return;
     }
 
