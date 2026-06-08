@@ -16,10 +16,11 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
 Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
 cluster's SCMI traffic. Intended use cases are BSP development, System Manager
-firmware development, peripheral-driver development, and CI for the above. It
-is not cycle-accurate, and hardware accelerators (GPU, VPU, NPU) are stubbed at
-probe time only — this emulator does not perform GPU rendering, video codec, or
-NPU inference (see [Known limitations](#known-limitations)).
+firmware development, peripheral-driver development, and CI for the above. It is
+not cycle-accurate. The GPU and the VPU (Wave6) video codec are stubbed at probe
+time only — no GPU rendering, no VPU video codec — while the HW JPEG codecs are
+functional; and the Neutron NPU brings up end to end but its proprietary compute
+is out of scope (see [Known limitations](#known-limitations)).
 
 Structural and stylistic conventions follow the upstream i.MX 8MP code
 (`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`); the long-term aim is to be
@@ -34,7 +35,7 @@ upstream-mergeable into QEMU mainline.
 FrameGen), on the stock `imx95-19x19-evk` device tree. Six Tux logos = six
 Cortex-A55 cores.*
 
-## Quickstart for newcomers
+## Quickstart
 
 This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
 machine is on the default `imx95-netc` branch (a plain clone lands there).
@@ -66,14 +67,36 @@ That proves the emulator end-to-end without downloading anything from NXP.
 **3. The full stack — Linux + System Manager + M7.** Booting Linux to userspace
 needs four artifacts built from NXP sources (the SM firmware, a kernel `Image`,
 a DTB, an initramfs). They are not redistributable, so they aren't in the repo —
-see [Required artifacts](#required-artifacts) for the build recipes and
-[Quick start](#quick-start) for the boot command. The repo ships the initramfs
-builder (`tests/busybox-initramfs/build.sh`), so the real work is just building
-the NXP SM firmware + a kernel. For the M7's SM-managed lifecycle (boot,
-rpmsg, fault recovery), see
+see [Required artifacts](#required-artifacts) for the build recipes. The repo
+ships the initramfs builder (`tests/busybox-initramfs/build.sh`), so the real
+work is just building the NXP SM firmware + a kernel.
+
+**Easiest path:** `tests/swap-boot/run.sh`, with the artifact paths set via the
+`QEMU`/`SM_ELF`/`KERNEL`/`DTB`/`INITRD` env vars. The script encapsulates the
+canonical invocation.
+
+**Equivalent explicit command** (for adapting to other harnesses):
+
+```
+./build/qemu-system-aarch64 -M imx95-19x19-evk -m 2G -display none \
+    -kernel <Image> -dtb <imx95-19x19-evk.dtb> -initrd <initramfs.cpio.gz> \
+    -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+    -device loader,file=<m33_image.elf>,cpu-num=6 \
+    -serial mon:stdio -serial null
+```
+
+Two cmdline details are load-bearing:
+
+- **earlycon address `0x44380010`, not `0x44380000`.** The i.MX 95 LPUART has
+  VERID/PARAM/GLOBAL/PINCFG at 0x00–0x0C and BAUD at 0x10. Linux's regular
+  driver applies the `reg_off = 0x10` offset to the DT base automatically;
+  earlycon does not, so the cmdline address must be pre-offset.
+- **`cpuidle.off=1` is required** — see [Known limitations](#known-limitations).
+
+For the M7's SM-managed lifecycle (boot, rpmsg, fault recovery), see
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst).
 
-## Scope: what's modelled and what's deferred
+## Scope: what's modelled, what's deferred
 
 This machine models the **full i.MX 95 CPU complement** — all three CPU types,
 not a partial SoC. The headline: it boots **real Linux on the A55 cluster, with
@@ -102,11 +125,12 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-**FlexCAN, networking and the DPU display are functional; USB and audio come
-up at the registration bar** — the five FlexCAN controllers (real Linux driver),
-all three ENETC Ethernet ports (incl. the 10G) and the DPU display path (boot
-logo on screen) run end to end, while the usb2 ChipIdea host (`usb-kbd` input)
-and all three EVK ASoC sound cards bind and enumerate against stock Linux (see
+**FlexCAN, networking, the DPU display and its 2D blit engine are functional;
+USB and audio come up at the registration bar** — the five FlexCAN controllers
+(real Linux driver), all three ENETC Ethernet ports (incl. the 10G), the DPU
+display path (boot logo on screen) and the 2D blit engine (proven through the
+real NXP G2D stack) run end to end, while the usb2 ChipIdea host (`usb-kbd`
+input) and all three EVK ASoC sound cards bind and enumerate against stock Linux (see
 "What runs today" for the per-device **functional** / **brings up** split).
 Functional A/V datapaths (audio playback/capture, VPU decode) and other
 customer-specific real-time peripherals (TSN, DSP) remain further out. See
@@ -370,32 +394,6 @@ Either drop your artifacts there, set `IMX95_ARTIFACTS=/your/dir`, or set the
 individual `SM_ELF`/`KERNEL`/`DTB` vars per run. The scripts print exactly which
 var to set if an artifact is missing.
 
-## Quick start
-
-Build (see [Building](#building)), then boot Linux to userspace on the real SM.
-
-**Easiest path:** `tests/swap-boot/run.sh`, with the artifact paths set via the
-`QEMU`/`SM_ELF`/`KERNEL`/`DTB`/`INITRD` env vars. The script encapsulates the
-canonical invocation.
-
-**Equivalent explicit command** (for adapting to other harnesses):
-
-```
-./build/qemu-system-aarch64 -M imx95-19x19-evk -m 2G -display none \
-    -kernel <Image> -dtb <imx95-19x19-evk.dtb> -initrd <initramfs.cpio.gz> \
-    -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
-    -device loader,file=<m33_image.elf>,cpu-num=6 \
-    -serial mon:stdio -serial null
-```
-
-Two cmdline details are load-bearing:
-
-- **earlycon address `0x44380010`, not `0x44380000`.** The i.MX 95 LPUART has
-  VERID/PARAM/GLOBAL/PINCFG at 0x00–0x0C and BAUD at 0x10. Linux's regular
-  driver applies the `reg_off = 0x10` offset to the DT base automatically;
-  earlycon does not, so the cmdline address must be pre-offset.
-- **`cpuidle.off=1` is required** — see [Known limitations](#known-limitations).
-
 ## Known limitations
 
 **Deep cpuidle requires `cpuidle.off=1`.** Without it, Linux hangs shortly
@@ -416,8 +414,9 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
    arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
    follow-up to qemu-devel.
 
-**The GPU and VPU are probe-time stubs** — their Linux drivers register but no
-rendering/codec occurs. The **Neutron NPU brings up end to end**: the remoteproc
+**The GPU and the VPU (Wave6) are probe-time stubs** — their Linux drivers
+register but no GPU rendering or VPU video codec occurs (the HW JPEG codecs, a
+separate block, are functional). The **Neutron NPU brings up end to end**: the remoteproc
 loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
 (`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
 (`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0
