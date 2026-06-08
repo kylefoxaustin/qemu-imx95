@@ -1656,6 +1656,20 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in(gicdev, gpio_table[g].irq0));
             sysbus_connect_irq(sbd, 1,
                 qdev_get_gpio_in(gicdev, gpio_table[g].irq1));
+
+            /*
+             * uSDHC2 card-detect: the EVK dtb routes the SD slot's CD to
+             * GPIO3 pin 0 (cd-gpios = <&gpio3 0 GPIO_ACTIVE_LOW>). If a card
+             * is plugged into the SD slot (-drive if=sd, attached on uSDHC2
+             * above), assert card-present by driving that pin low, so the
+             * stock dtb detects the card with no non-removable/broken-cd
+             * override. The RGPIO in_level is board-owned (survives reset),
+             * so the level set here persists. No card -> line idles high
+             * (slot empty), matching real hardware.
+             */
+            if (gpio_table[g].addr == 0x43820000 && drive_get(IF_SD, 0, 0)) {
+                qemu_set_irq(qdev_get_gpio_in(gpio, 0), 0);
+            }
         }
     }
 
