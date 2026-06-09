@@ -38,6 +38,7 @@
 #include "hw/dma/imx95_edma.h"
 #include "hw/audio/imx95_sai.h"
 #include "hw/audio/imx95_micfil.h"
+#include "hw/audio/imx95_xcvr.h"
 #include "hw/i3c/svc_i3c.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
@@ -273,6 +274,8 @@ struct FslImx95State {
     IMX95EdmaState          edma3;   /* 0x42210000: general-purpose */
     IMX95SaiState           sai[FSL_IMX95_NUM_SAIS];  /* sai1, sai3 */
     IMX95MicfilState        micfil;
+    /* XCVR/SPDIF transceiver (xcvr@42680000); EVK-disabled, custom dtb. */
+    IMX95XcvrState          xcvr;
     /*
      * Silvaco I3C masters (i3c1 AONMIX @0x44330000, i3c2 @0x42520000).
      * EVK leaves both status=disabled; enabled via a patched dtb. The
@@ -508,6 +511,9 @@ enum FslImx95Irqs {
     /* Silvaco I3C masters (dtsi i3c@44330000 SPI 12, i3c@42520000 SPI 57). */
     FSL_IMX95_I3C1_IRQ      = 12,
     FSL_IMX95_I3C2_IRQ      = 57,
+    /* XCVR/SPDIF transceiver (dtsi xcvr@42680000 SPI 189, 190). */
+    FSL_IMX95_XCVR_IRQ0     = 189,
+    FSL_IMX95_XCVR_IRQ1     = 190,
 };
 
 /* MICFIL's four interrupt lines (dtsi micfil@44520000), in DT order. */

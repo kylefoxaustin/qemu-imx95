@@ -1893,6 +1893,25 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
 
         /*
+         * XCVR/SPDIF transceiver (xcvr@42680000). EVK-disabled; a patched dtb
+         * enables it. The fsl_xcvr driver loads xcvr-imx95.bin into the code
+         * RAM and brings up the PHY/PLL (use_phy), then plays SPDIF: its TX
+         * FIFO is serviced by eDMA2 (the tx dma is &edma2 66), so wire its
+         * dma-req to edma2 line 1 (sai3 uses line 0). Two interrupt lines.
+         */
+        sbd = SYS_BUS_DEVICE(&s->xcvr);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x42680000);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(gicdev, FSL_IMX95_XCVR_IRQ0));
+        sysbus_connect_irq(sbd, 1,
+                           qdev_get_gpio_in(gicdev, FSL_IMX95_XCVR_IRQ1));
+        qdev_connect_gpio_out_named(DEVICE(&s->xcvr), "dma-req", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->edma2), "dma-req", 1));
+
+        /*
          * Silvaco I3C masters. Both are status=disabled on the 19x19 EVK;
          * a patched dtb (the imx95-...-i3c overlay) enables them and moves a
          * codec onto i3c1 as a legacy-I2C target. Attach a wm8962 at 0x1a on
@@ -2480,6 +2499,7 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "sai1", &s->sai[0], TYPE_IMX95_SAI);
     object_initialize_child(obj, "sai3", &s->sai[1], TYPE_IMX95_SAI);
     object_initialize_child(obj, "micfil", &s->micfil, TYPE_IMX95_MICFIL);
+    object_initialize_child(obj, "xcvr", &s->xcvr, TYPE_IMX95_XCVR);
     object_initialize_child(obj, "i3c1", &s->i3c1, TYPE_SVC_I3C);
     object_initialize_child(obj, "i3c2", &s->i3c2, TYPE_SVC_I3C);
 }
