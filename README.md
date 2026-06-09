@@ -226,6 +226,17 @@ working host data path yet):
   (disp_irq2): with both LVDS channels + panels enabled, dpu95 brings up LVDS-1
   (CRTC 0) and LVDS-2 (CRTC 1) and a `modetest` atomic commit completes on CRTC 1
   (`tests/dual-pipe/`).
+
+  ![DPU multi-plane compositing — a primary plane plus an overlay blended through the LayerBlend chain](docs/images/dpu-compositing.png)
+
+  *Multi-plane compositing: a primary plane (SMPTE bars) with an overlay window
+  blended on top by the DPU LayerBlend chain, scanned out at 1280×800.*
+
+  ![Both DPU pixel pipelines — LVDS-1 / CRTC 0 (left) and LVDS-2 / CRTC 1 (right)](docs/images/dpu-dualpipe-crtc0.png) ![LVDS-2 / CRTC 1](docs/images/dpu-dualpipe-crtc1.png)
+
+  *Both pixel pipelines driven at once — CRTC 0 / LVDS-1 (left) and CRTC 1 /
+  LVDS-2 (right), each with its own FrameGen, LayerBlend chain and
+  display-interrupt block.*
 - **2D blit engine — functional.** The DPU's 2D blit block (the Socionext
   display controller's blit engine, a DRM render node `dpu95-blit`) is modelled
   in `hw/misc/imx95_dpu.c`: the Command Sequencer's HIF command stream is
@@ -255,6 +266,12 @@ working host data path yet):
 
   *The NXP `imx-image-full` Weston desktop, scanned out at 1280×800 by the
   emulated DPU after booting an ext4 rootfs read-write from eMMC.*
+
+  ![GStreamer videotestsrc rendered live on the Weston desktop via the DPU](docs/images/gst-on-display.png)
+
+  *A GStreamer `videotestsrc ! waylandsink` pipeline rendering a live SMPTE test
+  pattern as a Wayland window on the running Weston desktop — produced by the
+  GStreamer stack, composited and scanned out by the DPU.*
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
