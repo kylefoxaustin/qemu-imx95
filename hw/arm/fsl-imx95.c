@@ -398,7 +398,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
              * edma3 (0x42210000) stays a stub (no modelled consumer). */
             { 0x42210000, 0x210000 },
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
-            { 0x42490000, 64 * KiB }, /* watchdog */
+            /* wdog3 (0x42490000) is a real imx95.wdog model below. */
             /* pwm@424e0000/42510000 are real TPM-PWM models below. */
             /* 0x42540000 (Linux i2c-3): real master (wm8962 codec) below. */
             { 0x42530000, 64 * KiB }, /* i2c (Linux i2c-2) */
@@ -1356,6 +1356,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * Stub model is enough to satisfy disable_wdog().
      */
     s->wdog3 = qdev_new("imx95.wdog");
+    /* WDOG3 is the watchdog Linux owns: give it a real timeout (it bites). */
+    qdev_prop_set_bit(s->wdog3, "functional", true);
     if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(s->wdog3), errp)) {
         return;
     }
