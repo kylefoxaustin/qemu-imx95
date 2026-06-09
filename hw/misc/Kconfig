@@ -108,6 +108,9 @@ config IMX_MU
 config IMX95_WDOG
     bool
 
+config IMX95_DDR_PMU
+    bool
+
 config IMX95_XCACHE
     bool
 

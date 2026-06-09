@@ -626,6 +626,7 @@ config FSL_IMX95
     select IMX_MU
     select IMX95_ELE_SERVER
     select IMX95_WDOG
+    select IMX95_DDR_PMU
     select IMX95_XCACHE
     select IMX95_PMIC
     select IMX95_GPC

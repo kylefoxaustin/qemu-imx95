@@ -56,6 +56,7 @@
 #include "hw/sd/sd.h"
 #include "hw/ssi/ssi.h"
 #include "hw/ssi/imx95_lpspi.h"
+#include "hw/misc/imx95_ddr_pmu.h"
 #include "system/blockdev.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
@@ -1392,6 +1393,24 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(s->xcache_ps), 0,
                     fsl_imx95_memmap[FSL_IMX95_XCACHE_PS].addr);
+
+    /*
+     * DDR performance monitor (ddr-pmu@4e090dc0, "fsl,imx95-ddr-pmu"). A
+     * register/perf-interface compatibility block so the built-in
+     * fsl_imx9_ddr_perf driver probes and registers its perf PMU
+     * (/sys/bus/event_source/devices/imx9_ddr0). Counters honestly read 0 -
+     * QEMU cannot observe the CPU<->DRAM traffic a real PMU counts.
+     */
+    {
+        DeviceState *pmu = qdev_new(TYPE_IMX95_DDR_PMU);
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(pmu), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(pmu), 0, 0x4e090dc0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(pmu), 0,
+                           qdev_get_gpio_in(gicdev, 91)); /* dtsi GIC SPI 91 */
+    }
 
     /*
      * LPI2C master the SM uses for the PMIC + IO-expander (SDK LPI2C1 at
