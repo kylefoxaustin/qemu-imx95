@@ -388,6 +388,14 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **virtio-mmio + 9p host share — functional.** The machine instantiates a few
+  generic virtio-mmio transports (modern virtio 1.0) and the board injects
+  matching `/virtio_mmio@` nodes into the supplied dtb (`arm_boot_info`
+  `modify_dtb` hook), so the guest enumerates them on a normal boot — not just
+  at the QEMU device level. That gives the guest a place to attach virtio
+  devices; `tests/virtio-9p/` boots with `-device virtio-9p-device` backed by a
+  host directory and confirms the full path: the guest sees `virtio0`, 9p mounts
+  over `trans=virtio`, and a host file is visible + readable in the guest `/mnt`.
 - **MIPI-DSI display output — brings up.** The DSI display path comes up end to
   end: DPU CRTC → pixel link → MIPI-DSI host (`dsi@4acf0000`,
   `nxp,imx95-mipi-dsi`, `hw/display/imx95_dsi.c`) → DSI panel. The host model
