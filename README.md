@@ -388,6 +388,19 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **SPDIF / XCVR — brings up.** The audio transceiver (`xcvr@42680000`,
+  `fsl,imx95-xcvr`, `hw/audio/imx95_xcvr.c`) is modelled so the `fsl_xcvr`
+  driver brings it up and registers its SPDIF card (`imx-audio-xcvr`). Ported
+  from the i.MX93 XCVR (shared IP) — the SET/CLR/TOG register aliases, the
+  indirect PHY/PLL "AI" interface, the firmware code RAM, and the cyclic-eDMA TX
+  FIFO. The i.MX95 part (unlike the 93's firmware-free SPDIF-only block) loads
+  `xcvr-imx95.bin` into the code RAM from runtime-resume and brings up the
+  PHY/PLL; the model accepts the firmware writes (which arrive as 8-byte
+  `memcpy_toio` stores) and acknowledges the AI accesses the driver polls. The
+  node is EVK-disabled, so `tests/spdif/` boots a patched dtb that enables it +
+  adds the card, stages the firmware + ASoC stack, and forces a runtime-PM
+  resume to drive the firmware load and PHY bring-up. The SPDIF TX-FIFO playback
+  drain is an opt-in follow-on (`SPDIF_PLAYBACK=1`).
 - **I3C — functional.** Both Silvaco I3C masters (`hw/i3c/svc_i3c.c`,
   `silvaco,i3c-master-v1`; `i3c1@44330000`, `i3c2@42520000`) are real
   controllers: the `svc-i3c-master` driver drives `MCTRL`/`MSTATUS`/`MWDATAB`/
