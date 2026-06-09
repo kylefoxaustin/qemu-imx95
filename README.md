@@ -241,6 +241,20 @@ working host data path yet):
   round trip (`run-nv12.sh`); and a kernel-free `tests/qtest/imx95-blit-test.c`
   drives a synthetic cmdlist. The other YUV formats (I420/YV12/…) are not
   modelled yet.
+- **Wayland desktop — functional.** A stock NXP `imx-image-full` rootfs boots
+  from a real read/write **eMMC** disk (over the uSDHC/ADMA datapath) and its
+  systemd brings up **Weston** on the DPU/LVDS output — `/dev/dri/card0`, libseat
+  (seatd builtin), the desktop shell, panel and clock all composite and scan out
+  end to end. Like the i.MX 93 there is no 3D GPU (Mali is a probe-time stub), so
+  Weston **software-renders** (`weston.ini` `use-g2d=false` / pixman); the default
+  `use-g2d=true` wants the Mali GPU and exits with "No mali devices found". See
+  `tests/weston/run.sh` (boots the `.wic`, switches the renderer to pixman
+  in-guest, QMP-screendumps the desktop).
+
+  ![Weston/Wayland desktop on the emulated i.MX 95 DPU — software-rendered (pixman)](docs/images/weston-desktop.png)
+
+  *The NXP `imx-image-full` Weston desktop, scanned out at 1280×800 by the
+  emulated DPU after booting an ext4 rootfs read-write from eMMC.*
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
@@ -331,7 +345,7 @@ the same ENETC v4 PF brought up via a fixed-link `10gbase-r` node, so
 See [`tests/netc/`](tests/netc/) for the bring-up, two-port, 10G, and soak
 recipes.
 
-Other Tier-3 limitations (no Linux block storage, GPU/VPU stub-only, the Neutron
+Other Tier-3 limitations (GPU/VPU stub-only, the Neutron
 NPU brings up but does not compute) are
 characterized with precise failure points — see
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
@@ -352,9 +366,12 @@ controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
 host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
 JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
 functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
-under "What runs today" above. The **Neutron NPU** also comes up end to end
-(`remoteproc` + driver + LiteRT delegate running `benchmark_model`); only its
-proprietary on-NPU compute is deferred. What remains is forward-looking:
+under "What runs today" above. **Linux block storage** is now functional too —
+read/write **eMMC + SD** over the uSDHC/ADMA datapath, enough to mount an ext4
+rootfs read-write and boot a **Weston desktop** off it. The **Neutron NPU** also
+comes up end to end (`remoteproc` + driver + LiteRT delegate running
+`benchmark_model`); only its proprietary on-NPU compute is deferred. What
+remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
@@ -364,7 +381,6 @@ proprietary on-NPU compute is deferred. What remains is forward-looking:
 | Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
-| Linux block storage | The uSDHC data path so `/dev/mmcblk*` is usable from Linux (U-Boot SPL already boots from SD) | deferred |
 
 The deferred rows are characterized with precise failure points in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md); none is a
@@ -647,6 +663,15 @@ working artifacts — they are not committed to the repo (the directory is
   LiteRT Neutron delegate runs `benchmark_model` — `tests/neutron/`; the
   proprietary on-NPU compute stays out of scope). Along the way: backed the PCIe
   `app`/`atu` windows so an unbacked-register external abort can't wedge the boot.
+- **v2.x storage + Wayland desktop (on `imx95-netc`)** — made Linux block
+  storage functional and stood up a Weston desktop on it. A generic `hw/sd`
+  fix (open-ended multi-block read+write returned the card to the transfer
+  state via the controller's implicit STOP — the "Card stuck being busy" hang)
+  unblocked read/write **eMMC + SD** over the uSDHC/ADMA datapath; the board
+  now wires the SD slot (`-drive if=sd` on uSDHC2 with GPIO3 card-detect), with
+  `tests/sd-emmc/` proving write+readback+persist on both card types. On top of
+  that, the NXP `imx-image-full` rootfs mounts read-write from eMMC and systemd
+  brings up **Weston** (software-rendered/pixman) on the DPU — `tests/weston/`.
 
 ## License & credits
 
