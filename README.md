@@ -301,6 +301,15 @@ working host data path yet):
   for the core to probe, as with the Neutron NPU; device enumeration on the
   SuperSpeed host is a follow-on (USB device enumeration is via the ChipIdea
   host today).
+- **PCIe Root Complex (pcie0) — functional.** A from-scratch DesignWare PCIe RC
+  (`hw/pci-host/imx95_pcie.c`, `fsl,imx95-pcie` @0x4c300000) — distinct from the
+  NETC integrated-ECAM host. The imx95 dwc-core driver brings the link up
+  through the "app" SERDES glue (PHY MPLL reported locked, `LTSSM_EN` gates the
+  dbi link-up bit), programs the iATU, and a downstream **endpoint enumerates**
+  with its BARs assigned in the controller's >4 GiB MEM window — e.g. an
+  `-device e1000e,bus=imx95-pcie` shows up at `0000:01:00.0` (`tests/pcie/`).
+  INTx routes to GIC SPI 306–309; MSI rides the GICv3 ITS (like NETC). pcie1 is
+  still a stub; full endpoint-driver datapath (MSI delivery) is a follow-on.
 - **Audio — WM8962 playback + MICFIL capture functional; BT-SCO brings up.**
   `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
   **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
