@@ -388,6 +388,17 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **MIPI-DSI display output — brings up.** The DSI display path comes up end to
+  end: DPU CRTC → pixel link → MIPI-DSI host (`dsi@4acf0000`,
+  `nxp,imx95-mipi-dsi`, `hw/display/imx95_dsi.c`) → DSI panel. The host model
+  wraps the Synopsys dw-mipi-dsi core: it answers the three status polls
+  (`DSI_VERSION`, `DSI_CMD_PKT_STATUS` reporting the FIFO idle so the panel's
+  DCS init stream drains, `DSI_PHY_STATUS` lock) so the bridge enables and the
+  panel comes up; the DPU model does the scanout. `tests/dsi/` applies a Raydium
+  RM67191 DSI panel overlay (`fdtoverlay`) and confirms the bridge binds to the
+  DPU pixel link, the panel init completes (no MCS failure), and `card0-DSI-1`
+  reports **connected** with a 1080×1920 mode — the same DRM scanout the LVDS
+  boot-logo path uses, here over DSI.
 - **Camera (MIPI CSI-2 → ISI) — brings up.** The camera capture pipeline comes
   up end to end through the V4L2 media graph. The ISI capture engine
   (`isi@4ad50000`, `fsl,imx95-isi`, `hw/display/imx95_isi.c`) registers all
