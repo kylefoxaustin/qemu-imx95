@@ -961,6 +961,8 @@ F: hw/arm/imx95-evk.c
 F: hw/arm/fsl-imx95.c
 F: hw/misc/imx95_*.c
 F: hw/timer/imx95_sysctr.c
+F: hw/dma/imx95_edma.c
+F: hw/audio/imx95_*.c
 F: hw/char/imx_lpuart.c
 F: hw/i2c/imx_lpi2c.c
 F: hw/misc/imx_mu.c
@@ -974,6 +976,8 @@ F: include/hw/arm/fsl-imx95.h
 F: include/hw/char/imx_lpuart.h
 F: include/hw/misc/imx_mu.h
 F: include/hw/misc/imx95_*.h
+F: include/hw/dma/imx95_edma.h
+F: tests/qtest/imx95-*.c
 F: docs/imx95/
 F: docs/system/arm/imx95-evk.rst
 F: tests/swap-boot/

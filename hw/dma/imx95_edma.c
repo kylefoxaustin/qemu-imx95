@@ -89,13 +89,33 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
     int16_t soff = (int16_t)ld16(t + TCD_SOFF);
     int16_t doff = (int16_t)ld16(t + TCD_DOFF);
     uint16_t attr = ld16(t + TCD_ATTR);
-    uint32_t nbytes = ld32(t + TCD_NBYTES) & 0x3fffffff; /* mask MLOFF flags */
+    uint32_t nb_raw = ld32(t + TCD_NBYTES);
     uint16_t citer = ld16(t + TCD_CITER) & ITER_MASK;
     uint32_t ssize = 1u << ATTR_SSIZE(attr);
     uint32_t dsize = 1u << ATTR_DSIZE(attr);
     uint32_t esize = MAX(ssize, dsize);
-    uint64_t total;
+    uint32_t nbytes;
+    int32_t mloff = 0;
+    bool smloe, dmloe;
     uint8_t buf[8];
+
+    /*
+     * Decode the NBYTES minor-loop format. With the minor-loop offset enabled
+     * (SMLOE bit 31 or DMLOE bit 30), the byte count is only bits [9:0] and
+     * bits [29:10] are a signed offset added to SADDR/DADDR once per minor
+     * loop; otherwise the count is bits [29:0]. MICFIL multichannel capture
+     * sets SMLOE with a negative MLOFF to rewind SADDR after reading
+     * DATACH0..n - masking only the two flag bits would leave that offset in
+     * the count and try to move ~1 GiB per minor loop (a guest hang).
+     */
+    smloe = nb_raw & (1u << 31);
+    dmloe = nb_raw & (1u << 30);
+    if (smloe || dmloe) {
+        nbytes = nb_raw & 0x3ff;
+        mloff = (int32_t)(nb_raw << 2) >> 12;   /* sign-extend bits [29:10] */
+    } else {
+        nbytes = nb_raw & 0x3fffffff;
+    }
 
     if (citer == 0) {
         citer = 1;
@@ -104,20 +124,27 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
         return;
     }
 
-    total = (uint64_t)nbytes * citer;
-
     /*
      * Transfer element by element so that fixed peripheral addresses (SOFF or
      * DOFF == 0) are hit with the access width the device register expects,
-     * while the memory side walks linearly.
+     * while the memory side walks linearly. After each minor loop apply the
+     * minor-loop offset to the configured side(s).
      */
-    for (uint64_t done = 0; done + esize <= total; done += esize) {
-        address_space_read(&address_space_memory, saddr,
-                           MEMTXATTRS_UNSPECIFIED, buf, esize);
-        address_space_write(&address_space_memory, daddr,
-                            MEMTXATTRS_UNSPECIFIED, buf, esize);
-        saddr += soff;
-        daddr += doff;
+    for (uint16_t major = 0; major < citer; major++) {
+        for (uint32_t done = 0; done + esize <= nbytes; done += esize) {
+            address_space_read(&address_space_memory, saddr,
+                               MEMTXATTRS_UNSPECIFIED, buf, esize);
+            address_space_write(&address_space_memory, daddr,
+                                MEMTXATTRS_UNSPECIFIED, buf, esize);
+            saddr += soff;
+            daddr += doff;
+        }
+        if (smloe) {
+            saddr += mloff;
+        }
+        if (dmloe) {
+            daddr += mloff;
+        }
     }
 
     /* Completion: channel done, request disabled, interrupt pending. */
