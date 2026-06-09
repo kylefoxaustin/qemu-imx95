@@ -640,6 +640,7 @@ config FSL_IMX95
     select IMX_TPM_PWM
     select IMX93_ADC
     select IMX_FSPI
+    select IMX95_LPSPI
     select IMX95_AUDIO
     select IMX95_EDMA
     select IMX95_SYSCTR

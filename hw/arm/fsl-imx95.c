@@ -55,6 +55,7 @@
 #include "hw/sd/sdhci.h"
 #include "hw/sd/sd.h"
 #include "hw/ssi/ssi.h"
+#include "hw/ssi/imx95_lpspi.h"
 #include "system/blockdev.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
@@ -401,12 +402,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             /* pwm@424e0000/42510000 are real TPM-PWM models below. */
             /* 0x42540000 (Linux i2c-3): real master (wm8962 codec) below. */
             { 0x42530000, 64 * KiB }, /* i2c (Linux i2c-2) */
-            { 0x42550000, 64 * KiB }, /* spi (lpspi3; enabled on 15x15 FRDM) */
+            /* lpspi1..8 are real LPSPI masters below. */
             { 0x42590000, 64 * KiB }, /* serial */
             /* 0x425e0000 (flexspi1) is a real FlexSPI + NOR model below. */
             { 0x426b0000, 64 * KiB }, { 0x426c0000, 64 * KiB }, /* i2c */
             /* 0x426d0000 (Linux i2c-6) is a real master + pcal6524 below. */
-            { 0x42710000, 64 * KiB }, /* spi */
             { 0x42850000, 64 * KiB }, { 0x42860000, 64 * KiB }, /* mmc */
             { 0x43810000, 64 * KiB }, { 0x43820000, 64 * KiB },
             { 0x43840000, 64 * KiB }, { 0x43850000, 64 * KiB }, /* gpio */
@@ -1973,6 +1973,39 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                    qdev_get_child_bus(fspi, "spi"), errp);
             qdev_connect_gpio_out_named(fspi, "cs", 0,
                             qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0));
+        }
+
+        /*
+         * LPSPI masters (fsl,imx95-spi). Real SSI masters, like the LPI2C
+         * controllers: each gets a uniquely-named SSI bus (lpspi1..8, SDK
+         * controller numbering) so a board or the user can attach a slave with
+         * -device <dev>,bus=lpspiN. The 19x19 EVK enables lpspi7 (a bk4
+         * spidev); the rest stand ready for runtime attach. Promoting them from
+         * the reads-as-0 stub lets spi-fsl-lpspi probe (it reads VERID/PARAM
+         * for the FIFO sizing) and a TDR write shifts onto the SSI bus.
+         */
+        {
+            static const struct {
+                uint64_t addr;
+                int irq;
+                const char *name;
+            } lpspis[] = {
+                { 0x44360000,  16, "lpspi1" }, { 0x44370000,  17, "lpspi2" },
+                { 0x42550000,  61, "lpspi3" }, { 0x42560000,  62, "lpspi4" },
+                { 0x426f0000, 177, "lpspi5" }, { 0x42700000, 178, "lpspi6" },
+                { 0x42710000, 179, "lpspi7" }, { 0x42720000, 180, "lpspi8" },
+            };
+            for (i = 0; i < (int)ARRAY_SIZE(lpspis); i++) {
+                DeviceState *sp = qdev_new(TYPE_IMX95_LPSPI);
+
+                qdev_prop_set_string(sp, "bus-name", lpspis[i].name);
+                if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(sp), errp)) {
+                    return;
+                }
+                sysbus_mmio_map(SYS_BUS_DEVICE(sp), 0, lpspis[i].addr);
+                sysbus_connect_irq(SYS_BUS_DEVICE(sp), 0,
+                                   qdev_get_gpio_in(gicdev, lpspis[i].irq));
+            }
         }
 
         /*
