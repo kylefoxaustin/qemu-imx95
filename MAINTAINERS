@@ -972,6 +972,8 @@ F: include/hw/net/flexcan.h
 F: tests/qtest/flexcan-test.c
 F: hw/net/fsl_enetc.c
 F: include/hw/net/fsl_enetc.h
+F: hw/pci-host/imx95_pcie.c
+F: include/hw/pci-host/imx95_pcie.h
 F: tests/qtest/fsl-enetc-test.c
 F: include/hw/arm/fsl-imx95.h
 F: include/hw/char/imx_lpuart.h
@@ -994,6 +996,7 @@ F: tests/netc/
 F: tests/audio/
 F: tests/watchdog/
 F: tests/usb3/
+F: tests/pcie/
 F: tests/m33-m7-only/
 F: tests/parallel-boot/
 F: tests/docker-repro/

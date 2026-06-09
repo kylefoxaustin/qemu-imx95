@@ -69,6 +69,11 @@ config PCI_EXPRESS_DESIGNWARE
     select PCI_EXPRESS
     select MSI_NONBROKEN
 
+config IMX95_PCIE
+    bool
+    select PCI_EXPRESS
+    select MSI_NONBROKEN
+
 config PCI_BONITO
     select PCI
     select UNIMP

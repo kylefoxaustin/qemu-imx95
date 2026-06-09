@@ -433,6 +433,7 @@ config XLNX_ZYNQMP_ARM
     select XLNX_ZYNQMP
     select XLNX_ZDMA
     select USB_DWC3
+    select IMX95_PCIE
 
 config XLNX_VERSAL
     bool

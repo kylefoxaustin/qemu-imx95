@@ -48,6 +48,7 @@
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
 #include "hw/pci-host/gpex.h"
+#include "hw/pci-host/imx95_pcie.h"
 #include "hw/pci/pci_host.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/misc/unimp.h"
@@ -422,20 +423,17 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             /* usb3 dwc3 core (0x4c100000) is a real usb_dwc3 model below. */
             { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
             /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
-            { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie dbi */
+            /* pcie0 (dbi/app/atu @0x4c3x) is a real imx95.pcie host below. */
+            { 0x4c380000, 64 * KiB }, /* pcie1 dbi */
             /*
-             * PCIe controller "app" + "atu" windows (dtsi pcie0/pcie1
-             * reg-names). The imx_pcie driver maps "app" as its iomuxc_gpr and
-             * reads IMX95_PCIE_RST_CTRL (app+0x3010) during core-reset; if the
-             * window is unbacked the async probe worker takes a synchronous
-             * external abort and dies, so wait_for_device_probe() hangs and
-             * userspace never starts. Backing them (read-0) lets the probe fail
-             * fast (PHY PLL never locks -> timeout -> returns) instead. These
-             * probe only once the M.2/slot power regulators come up, which
-             * happens now that the pcal6524 expander is modelled.
+             * PCIe1's "app" + "atu" windows (dtsi reg-names). The imx_pcie
+             * driver maps "app" as its iomuxc_gpr; if the window is unbacked
+             * the async probe worker takes a synchronous external abort and
+             * dies, so wait_for_device_probe() hangs. Backing them (read-0)
+             * lets pcie1's probe fail fast (PHY PLL never locks -> timeout)
+             * until it too gets a real host. (pcie0 is real, above.)
              */
-            { 0x4c340000, 0x4000 }, { 0x4c360000, 64 * KiB }, /* pcie0 app/atu */
-            { 0x4c3c0000, 0x4000 }, { 0x4c3e0000, 64 * KiB }, /* pcie1 app/atu */
+            { 0x4c3c0000, 0x4000 }, { 0x4c3e0000, 64 * KiB }, /* pcie1 app/atu*/
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
@@ -2364,6 +2362,30 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      */
     s->m33_machine_done.notify = fsl_imx95_machine_done;
     qemu_add_machine_init_done_notifier(&s->m33_machine_done);
+
+    /*
+     * PCIe Root Complex 0 (pcie@4c300000, "fsl,imx95-pcie"). A from-scratch
+     * DesignWare RC (hw/pci-host/imx95_pcie.c) with the unrolled iATU and the
+     * "app" SERDES/GPR glue, so the imx95 dwc-core driver brings the link up
+     * and enumerates an endpoint. Three register regions: dbi (0x4c300000),
+     * unrolled iATU (0x4c360000), "app" glue (0x4c340000). INTx -> GIC SPI
+     * 306..309; MSI rides the GICv3 ITS (the dtb msi-map targets &its).
+     */
+    {
+        DeviceState *pcie = qdev_new(TYPE_IMX95_PCIE_HOST);
+        SysBusDevice *psbd = SYS_BUS_DEVICE(pcie);
+        int pin;
+
+        if (!sysbus_realize_and_unref(psbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(psbd, 0, 0x4c300000);   /* dbi */
+        sysbus_mmio_map(psbd, 1, 0x4c360000);   /* unrolled iATU */
+        sysbus_mmio_map(psbd, 2, 0x4c340000);   /* "app" glue */
+        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+            sysbus_connect_irq(psbd, pin, qdev_get_gpio_in(gicdev, 306 + pin));
+        }
+    }
 
     /* All peripherals not yet modeled get logging stubs. */
     if (!fsl_imx95_install_unimplemented(s, errp)) {
