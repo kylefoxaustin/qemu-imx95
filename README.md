@@ -252,6 +252,14 @@ working host data path yet):
   round trip (`run-nv12.sh`); and a kernel-free `tests/qtest/imx95-blit-test.c`
   drives a synthetic cmdlist. The other YUV formats (I420/YV12/…) are not
   modelled yet.
+
+  ![G2D 2D-blit composited live on the Weston desktop](docs/images/g2d-on-display.png)
+
+  *The NXP `g2d_wayland_shm_test` running on the Weston desktop: `g2d_blitEx`
+  renders the colour bars through the modelled DPU blit engine, and the result
+  is presented to Weston via `wl_shm` and scanned out by the DPU. (The
+  `g2d_wayland_dmabuf_test` variant needs the GL renderer's `linux-dmabuf`
+  import, for which there is no GPU, so the shm path is used.)*
 - **Wayland desktop — functional.** A stock NXP `imx-image-full` rootfs boots
   from a real read/write **eMMC** disk (over the uSDHC/ADMA datapath) and its
   systemd brings up **Weston** on the DPU/LVDS output — `/dev/dri/card0`, libseat
