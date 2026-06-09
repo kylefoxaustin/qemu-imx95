@@ -24,7 +24,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95EdmaState, IMX95_EDMA)
 #define IMX95_EDMA_MAX_CHANNELS     64
 #define IMX95_EDMA_CHAN_OFFSET      0x10000     /* first channel page */
 #define IMX95_EDMA_CHAN_STRIDE      0x10000     /* default page size (edma3) */
-#define IMX95_EDMA_CHAN_REGS_SZ     0x40        /* control regs + TCD */
+#define IMX95_EDMA_CHAN_REGS_SZ     0x50        /* control regs + TCD (tcd64) */
 #define IMX95_EDMA_MGMT_REGS        0x40        /* mgmt words 0x0..0xff */
 
 typedef struct IMX95EdmaChan {
@@ -39,6 +39,7 @@ struct IMX95EdmaState {
     MemoryRegion iomem;
     uint32_t     num_channels;
     uint32_t     chan_stride;   /* page size: edma3 0x10000, edma4 0x8000 */
+    bool         tcd64;         /* 64-bit TCD (edma5) else 32-bit (edma3) */
 
     uint32_t     mgmt[IMX95_EDMA_MGMT_REGS];
     IMX95EdmaChan chan[IMX95_EDMA_MAX_CHANNELS];

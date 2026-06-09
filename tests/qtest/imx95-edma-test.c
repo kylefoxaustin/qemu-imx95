@@ -43,6 +43,31 @@
 #define TCD_CSR_INTMAJ  (1u << 1)
 #define TCD_CSR_ESG     (1u << 4)           /* scatter/gather (cyclic)     */
 
+/*
+ * edma2 (fsl,imx95-edma5) uses the 64-bit TCD layout: 64-bit SADDR/DADDR and
+ * shifted later fields. Base 0x42000000, 0x8000 channel stride.
+ */
+#define EDMA2_BASE      0x42000000ULL
+#define E2_CH(n)        (EDMA2_BASE + CHAN_OFFSET + (n) * 0x8000)
+#define T64_SADDR       0x20
+#define T64_SOFF        0x28
+#define T64_ATTR        0x2a
+#define T64_NBYTES      0x2c
+#define T64_DADDR       0x38
+#define T64_DLAST       0x40
+#define T64_DOFF        0x48
+#define T64_CITER       0x4a
+#define T64_CSR         0x4c
+#define T64_BITER       0x4e
+
+/* SAI3 (wm8962 card), served by edma2 for playback. */
+#define SAI3_BASE       0x42650000ULL
+#define SAI_TCSR        0x08
+#define SAI_TCR1        0x0c
+#define SAI_TDR0        0x20
+#define TCSR_TE         (1u << 31)
+#define TCSR_FRDE       (1u << 0)
+
 /* MICFIL: PDM mic that feeds eDMA1 a capture stream. */
 #define MICFIL_BASE     0x44520000ULL
 #define MICFIL_CTRL1    0x00
@@ -186,11 +211,64 @@ static void test_edma_micfil_cyclic(void)
     qtest_quit(qts);
 }
 
+/*
+ * Cyclic playback on the 64-bit-TCD controller (edma2 / fsl,imx95-edma5),
+ * no kernel: program a cyclic (ESG) channel that reads a RAM ring into SAI3
+ * TDR0, enable SAI3 (TE + DMA request), and step the virtual clock so the SAI
+ * TX tick drains its FIFO and pulses dma-req. Each request makes the eDMA move
+ * one minor loop ring->TDR0 and advance SADDR. A SADDR that has advanced proves
+ * the 64-bit TCD was decoded correctly (the bug: reading 32-bit-TCD offsets on
+ * edma5 missed TCD_CSR.ESG, so the channel was never recognised as cyclic and
+ * never advanced).
+ */
+static void test_edma_tcd64_playback(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint8_t pat[256];
+    uint32_t saddr_lo;
+    int i;
+
+    for (i = 0; i < (int)sizeof(pat); i++) {
+        pat[i] = (uint8_t)(i * 3 + 1);
+    }
+    qtest_memwrite(qts, SRC_GPA, pat, sizeof(pat));
+
+    /* Cyclic eDMA2 ch0 (64-bit TCD): RAM ring -> SAI3 TDR0 (fixed dest). */
+    qtest_writel(qts, E2_CH(0) + T64_SADDR, (uint32_t)SRC_GPA);
+    qtest_writel(qts, E2_CH(0) + T64_SADDR + 4, (uint32_t)(SRC_GPA >> 32));
+    qtest_writew(qts, E2_CH(0) + T64_SOFF, 4);
+    qtest_writew(qts, E2_CH(0) + T64_ATTR, ATTR(2));   /* 4-byte elements */
+    qtest_writel(qts, E2_CH(0) + T64_NBYTES, 4);
+    qtest_writel(qts, E2_CH(0) + T64_DADDR, (uint32_t)(SAI3_BASE + SAI_TDR0));
+    qtest_writel(qts, E2_CH(0) + T64_DADDR + 4, 0);
+    qtest_writew(qts, E2_CH(0) + T64_DOFF, 0);              /* TDR0 fixed */
+    qtest_writel(qts, E2_CH(0) + T64_DLAST, 0);
+    qtest_writew(qts, E2_CH(0) + T64_CITER, 0x100);
+    qtest_writew(qts, E2_CH(0) + T64_BITER, 0x100);
+    qtest_writew(qts, E2_CH(0) + T64_CSR, TCD_CSR_ESG | TCD_CSR_INTMAJ);
+    qtest_writel(qts, E2_CH(0) + CH_SBR, CH_SBR_WR);   /* memory -> device */
+    qtest_writel(qts, E2_CH(0) + CH_CSR, CH_CSR_ERQ);       /* arm cyclic */
+
+    /* Enable SAI3 TX with DMA request and a 0 watermark. */
+    qtest_writel(qts, SAI3_BASE + SAI_TCR1, 0);
+    qtest_writel(qts, SAI3_BASE + SAI_TCSR, TCSR_TE | TCSR_FRDE);
+
+    /* Advance time so the SAI TX tick fires and drives the eDMA. */
+    qtest_clock_step(qts, (1000000000LL / 96000) * 64);
+
+    /* The eDMA must have walked the ring: SADDR advanced past the start. */
+    saddr_lo = qtest_readl(qts, E2_CH(0) + T64_SADDR);
+    g_assert_cmpuint(saddr_lo, >, (uint32_t)SRC_GPA);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/imx95/edma/plain", test_edma_plain);
     qtest_add_func("/imx95/edma/mloff", test_edma_mloff);
     qtest_add_func("/imx95/edma/micfil-cyclic", test_edma_micfil_cyclic);
+    qtest_add_func("/imx95/edma/tcd64-playback", test_edma_tcd64_playback);
     return g_test_run();
 }

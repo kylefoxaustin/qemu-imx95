@@ -291,20 +291,27 @@ working host data path yet):
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
   PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
-- **Audio — MICFIL capture functional; WM8962 / BT-SCO bring up.**
+- **Audio — WM8962 playback + MICFIL capture functional; BT-SCO brings up.**
   `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
   **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
-  mic), and `bt-sco-audio`. The **MICFIL PDM capture datapath runs end to end**:
-  the MICFIL model (`hw/audio/imx95_micfil.c`) synthesises a sample stream into
-  its data FIFO and pulses a DMA request as the FIFO passes its watermark, and a
-  cyclic (scatter/gather) **eDMA** channel (`hw/dma/imx95_edma.c`) reads
-  `DATACH0` into the ALSA ring buffer one minor loop per request — so a real
-  `snd_pcm_readi()` returns non-silent, varying **S32_LE** samples
-  (`tests/audio/run-capture.sh`; a kernel-free `tests/qtest/imx95-edma-test.c`
-  drives the same MICFIL → eDMA cyclic path). The SAI register-file models back
-  `fsl-sai`/`fsl-micfil` probe and DMA-channel allocation for all three cards
-  (`tests/audio/run.sh`); WM8962/SAI playback and BT-SCO have no sample path yet
-  (no codec-driven SAI TX), so those two stay at the registration bar.
+  mic), and `bt-sco-audio`. Both audio datapaths run end to end through the eDMA:
+  - **Playback** — the SAI model (`hw/audio/imx95_sai.c`) clocks its TX FIFO out
+    at the audio word rate and pulses a DMA request as it drains; a cyclic
+    **eDMA** channel refills it from the ALSA ring (ring → SAI3 `TDR0`), and the
+    clocked-out samples are handed to the QEMU audio backend. A real
+    `snd_pcm_writei()` of a square wave plays the whole stream paced at the
+    audio rate (`tests/audio/run-playback.sh`).
+  - **MICFIL capture** — the MICFIL model synthesises a PDM sample stream into
+    its FIFO and a cyclic eDMA channel reads `DATACH0` into the ALSA ring, so
+    `snd_pcm_readi()` returns non-silent **S32_LE** samples
+    (`tests/audio/run-capture.sh`).
+
+  Both directions ride the eDMA cyclic (scatter/gather) path in
+  `hw/dma/imx95_edma.c`, which models **both** the 32-bit TCD (edma1,
+  `fsl,imx93-edma3`) and the **64-bit TCD** (edma2/3, `fsl,imx95-edma5`)
+  layouts; a kernel-free `tests/qtest/imx95-edma-test.c` drives the MICFIL→eDMA
+  capture and the eDMA→SAI3 (64-bit-TCD) playback datapaths. BT-SCO uses a dummy
+  codec and has no real sample path, so it stays at the registration bar.
 - **HW JPEG codecs — functional.** Encode and decode. The two dedicated CAST
   `mxc-jpeg` blocks (separate from the Wave6 VPU) are modelled as real
   descriptor-chain engines (`hw/misc/imx95_jpeg.c`): `/dev/video2` decodes a
@@ -418,7 +425,7 @@ remains is forward-looking:
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
-| Audio playback / SAI capture | The SAI TX/RX FIFO + codec datapath so WM8962/BT-SCO PCM moves (**MICFIL PDM capture is already functional**; all three cards register) | deferred |
+| BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
 

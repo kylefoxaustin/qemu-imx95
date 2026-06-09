@@ -38,18 +38,31 @@
 #define CH_PRI      0x10
 #define CH_MUX      0x14
 #define CH_MATTR    0x18
-/* TCD (struct fsl_edma_hw_tcd) within the channel page. */
-#define TCD_SADDR   0x20
-#define TCD_SOFF    0x24
-#define TCD_ATTR    0x26
-#define TCD_NBYTES  0x28
-#define TCD_SLAST   0x2c
-#define TCD_DADDR   0x30
-#define TCD_DOFF    0x34
-#define TCD_CITER   0x36
-#define TCD_DLAST   0x38
-#define TCD_CSR     0x3c
-#define TCD_BITER   0x3e
+/*
+ * TCD field offsets within the channel page. eDMA v3 ("fsl,imx93-edma3") uses a
+ * 32-bit TCD (struct fsl_edma_hw_tcd); eDMA v5 ("fsl,imx95-edma5") a 64-bit TCD
+ * (struct fsl_edma_hw_tcd64) with 64-bit SADDR/DADDR/SLAST/DLAST_SGA, so SOFF
+ * and every later field shift. The layout is selected per controller via
+ * s->tcd64; reading the wrong one misses TCD_CSR.ESG and the channel is never
+ * recognised as cyclic (audio capture/playback then never advances).
+ */
+typedef struct {
+    unsigned saddr, soff, attr, nbytes, slast, daddr, dlast, doff, citer, csr,
+             biter;
+    bool a64;       /* saddr/daddr/slast/dlast_sga are 64-bit */
+} EdmaTcdLayout;
+
+static const EdmaTcdLayout tcd_v3 = {
+    .saddr = 0x20, .soff = 0x24, .attr = 0x26, .nbytes = 0x28, .slast = 0x2c,
+    .daddr = 0x30, .dlast = 0x38, .doff = 0x34, .citer = 0x36, .csr = 0x3c,
+    .biter = 0x3e, .a64 = false,
+};
+static const EdmaTcdLayout tcd_v5 = {
+    .saddr = 0x20, .soff = 0x28, .attr = 0x2a, .nbytes = 0x2c, .slast = 0x30,
+    .daddr = 0x38, .dlast = 0x40, .doff = 0x48, .citer = 0x4a, .csr = 0x4c,
+    .biter = 0x4e, .a64 = true,
+};
+#define TCD(s)  ((s)->tcd64 ? &tcd_v5 : &tcd_v3)
 
 #define CH_CSR_ERQ      (1u << 0)
 #define CH_CSR_EARQ     (1u << 1)
@@ -85,6 +98,31 @@ static inline void st32(uint8_t *p, uint32_t v)
     p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
 }
 
+static inline uint64_t ld64(const uint8_t *p)
+{
+    return ld32(p) | ((uint64_t)ld32(p + 4) << 32);
+}
+
+static inline void st64(uint8_t *p, uint64_t v)
+{
+    st32(p, (uint32_t)v); st32(p + 4, (uint32_t)(v >> 32));
+}
+
+/* Read/write a SADDR/DADDR-class address honouring the 32/64-bit TCD layout. */
+static inline uint64_t ld_addr(const EdmaTcdLayout *L, const uint8_t *p)
+{
+    return L->a64 ? ld64(p) : ld32(p);
+}
+
+static inline void st_addr(const EdmaTcdLayout *L, uint8_t *p, uint64_t v)
+{
+    if (L->a64) {
+        st64(p, v);
+    } else {
+        st32(p, (uint32_t)v);
+    }
+}
+
 /*
  * Decode the TCD NBYTES word. With the minor-loop offset enabled (SMLOE or
  * DMLOE) the byte count is only bits [9:0] and bits [29:10] are a signed offset
@@ -107,13 +145,14 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
 {
     IMX95EdmaChan *c = &s->chan[ch];
     uint8_t *t = c->regs;
-    uint64_t saddr = ld32(t + TCD_SADDR);
-    uint64_t daddr = ld32(t + TCD_DADDR);
-    int16_t soff = (int16_t)ld16(t + TCD_SOFF);
-    int16_t doff = (int16_t)ld16(t + TCD_DOFF);
-    uint16_t attr = ld16(t + TCD_ATTR);
-    uint32_t nb_raw = ld32(t + TCD_NBYTES);
-    uint16_t citer = ld16(t + TCD_CITER) & ITER_MASK;
+    const EdmaTcdLayout *L = TCD(s);
+    uint64_t saddr = ld_addr(L, t + L->saddr);
+    uint64_t daddr = ld_addr(L, t + L->daddr);
+    int16_t soff = (int16_t)ld16(t + L->soff);
+    int16_t doff = (int16_t)ld16(t + L->doff);
+    uint16_t attr = ld16(t + L->attr);
+    uint32_t nb_raw = ld32(t + L->nbytes);
+    uint16_t citer = ld16(t + L->citer) & ITER_MASK;
     uint32_t ssize = 1u << ATTR_SSIZE(attr);
     uint32_t dsize = 1u << ATTR_DSIZE(attr);
     uint32_t esize = MAX(ssize, dsize);
@@ -154,11 +193,11 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
     }
 
     /* Completion: channel done, request disabled, interrupt pending. */
-    st32(t + TCD_SADDR, (uint32_t)saddr);     /* harmless bookkeeping */
-    st32(t + TCD_DADDR, (uint32_t)daddr);
+    st_addr(L, t + L->saddr, saddr);          /* harmless bookkeeping */
+    st_addr(L, t + L->daddr, daddr);
     /* CITER reads back as 0 so the driver computes a full real count. */
-    t[TCD_CITER] = 0;
-    t[TCD_CITER + 1] = 0;
+    t[L->citer] = 0;
+    t[L->citer + 1] = 0;
 
     uint32_t csr = ld32(t + CH_CSR);
     csr &= ~(CH_CSR_ERQ | CH_CSR_ACTIVE);
@@ -184,17 +223,18 @@ static void edma_service_minor(IMX95EdmaState *s, int ch)
 {
     IMX95EdmaChan *c = &s->chan[ch];
     uint8_t *t = c->regs;
-    uint64_t saddr = ld32(t + TCD_SADDR);
-    uint64_t daddr = ld32(t + TCD_DADDR);
-    int16_t soff = (int16_t)ld16(t + TCD_SOFF);
-    int16_t doff = (int16_t)ld16(t + TCD_DOFF);
-    uint16_t attr = ld16(t + TCD_ATTR);
-    uint32_t nb_raw = ld32(t + TCD_NBYTES);
+    const EdmaTcdLayout *L = TCD(s);
+    uint64_t saddr = ld_addr(L, t + L->saddr);
+    uint64_t daddr = ld_addr(L, t + L->daddr);
+    int16_t soff = (int16_t)ld16(t + L->soff);
+    int16_t doff = (int16_t)ld16(t + L->doff);
+    uint16_t attr = ld16(t + L->attr);
+    uint32_t nb_raw = ld32(t + L->nbytes);
     int32_t mloff;
     uint32_t nbytes = edma_decode_nbytes(nb_raw, &mloff);
-    uint16_t citer = ld16(t + TCD_CITER) & ITER_MASK;
-    uint16_t biter = ld16(t + TCD_BITER) & ITER_MASK;
-    uint16_t csr = ld16(t + TCD_CSR);
+    uint16_t citer = ld16(t + L->citer) & ITER_MASK;
+    uint16_t biter = ld16(t + L->biter) & ITER_MASK;
+    uint16_t csr = ld16(t + L->csr);
     uint32_t ssize = 1u << ATTR_SSIZE(attr);
     uint32_t dsize = 1u << ATTR_DSIZE(attr);
     uint32_t esize = MAX(ssize, dsize);
@@ -228,13 +268,13 @@ static void edma_service_minor(IMX95EdmaState *s, int ch)
      * unchanged; the advancing (memory) side must carry over to the next minor
      * loop, or every minor loop would overwrite the same ring bytes.
      */
-    st32(t + TCD_SADDR, (uint32_t)saddr);
-    st32(t + TCD_DADDR, (uint32_t)daddr);
+    st_addr(L, t + L->saddr, saddr);
+    st_addr(L, t + L->daddr, daddr);
 
     if (citer > 1) {
         citer--;
-        t[TCD_CITER] = citer;
-        t[TCD_CITER + 1] = citer >> 8;
+        t[L->citer] = citer;
+        t[L->citer + 1] = citer >> 8;
         return;
     }
 
@@ -246,13 +286,18 @@ static void edma_service_minor(IMX95EdmaState *s, int ch)
         }
     }
     if (csr & TCD_CSR_ESG) {
-        /* Follow DLAST_SGA to the next period's TCD (32 bytes). */
-        uint64_t next = ld32(t + TCD_DLAST);
+        /*
+         * Follow DLAST_SGA to the next period's TCD. The descriptor is the
+         * whole TCD (0x20 bytes for the 32-bit layout, 0x30 for the 64-bit
+         * one) and is loaded over the live TCD starting at SADDR.
+         */
+        uint64_t next = ld_addr(L, t + L->dlast);
+        unsigned tcdsz = L->a64 ? 0x30 : 0x20;
         address_space_read(&address_space_memory, next, MEMTXATTRS_UNSPECIFIED,
-                           t + TCD_SADDR, 0x20);
+                           t + L->saddr, tcdsz);
     } else {
-        t[TCD_CITER] = biter;
-        t[TCD_CITER + 1] = biter >> 8;
+        t[L->citer] = biter;
+        t[L->citer + 1] = biter >> 8;
     }
 }
 
@@ -289,8 +334,9 @@ static void edma_drain_armed_rx(IMX95EdmaState *s)
 static void edma_trigger(IMX95EdmaState *s, int ch)
 {
     IMX95EdmaChan *c = &s->chan[ch];
+    const EdmaTcdLayout *L = TCD(s);
     uint32_t sbr = ld32(c->regs + CH_SBR);
-    int16_t soff = (int16_t)ld16(c->regs + TCD_SOFF);
+    int16_t soff = (int16_t)ld16(c->regs + L->soff);
     bool is_rx;
 
     /*
@@ -298,7 +344,7 @@ static void edma_trigger(IMX95EdmaState *s, int ch)
      * don't run it now, wait for the peripheral's DMA requests to drive it one
      * minor loop at a time. Non-SG transfers keep the run-it-now behaviour.
      */
-    if (ld16(c->regs + TCD_CSR) & TCD_CSR_ESG) {
+    if (ld16(c->regs + L->csr) & TCD_CSR_ESG) {
         c->cyclic = true;
         return;
     }
@@ -446,20 +492,26 @@ static void imx95_edma_realize(DeviceState *dev, Error **errp)
         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq[i]);
     }
 
-    /* Peripheral DMA-request input: drives a cyclic channel one minor loop. */
-    qdev_init_gpio_in_named(dev, edma_dma_request, "dma-req", 1);
+    /*
+     * Peripheral DMA-request inputs: each drives a cyclic channel one minor
+     * loop. Several peripherals can share one eDMA (e.g. edma1 serves both
+     * MICFIL capture and SAI1 playback), so expose a few lines; the handler
+     * services the active cyclic channel regardless of which line pulsed.
+     */
+    qdev_init_gpio_in_named(dev, edma_dma_request, "dma-req", 4);
 }
 
 static const Property imx95_edma_properties[] = {
     DEFINE_PROP_UINT32("num-channels", IMX95EdmaState, num_channels, 31),
     DEFINE_PROP_UINT32("chan-stride", IMX95EdmaState, chan_stride,
                        IMX95_EDMA_CHAN_STRIDE),
+    DEFINE_PROP_BOOL("tcd64", IMX95EdmaState, tcd64, false),
 };
 
 static const VMStateDescription vmstate_imx95_edma_chan = {
     .name = "imx95.edma3.chan",
-    .version_id = 2,
-    .minimum_version_id = 2,
+    .version_id = 3,
+    .minimum_version_id = 3,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, IMX95EdmaChan, IMX95_EDMA_CHAN_REGS_SZ),
         VMSTATE_BOOL(armed, IMX95EdmaChan),
@@ -470,11 +522,11 @@ static const VMStateDescription vmstate_imx95_edma_chan = {
 
 static const VMStateDescription vmstate_imx95_edma = {
     .name = TYPE_IMX95_EDMA,
-    .version_id = 2,
-    .minimum_version_id = 2,
+    .version_id = 3,
+    .minimum_version_id = 3,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(mgmt, IMX95EdmaState, IMX95_EDMA_MGMT_REGS),
-        VMSTATE_STRUCT_ARRAY(chan, IMX95EdmaState, IMX95_EDMA_MAX_CHANNELS, 2,
+        VMSTATE_STRUCT_ARRAY(chan, IMX95EdmaState, IMX95_EDMA_MAX_CHANNELS, 3,
                              vmstate_imx95_edma_chan, IMX95EdmaChan),
         VMSTATE_END_OF_LIST()
     },

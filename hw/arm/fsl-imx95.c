@@ -1760,6 +1760,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                  FSL_IMX95_EDMA2_CHANNELS, &error_abort);
         object_property_set_uint(OBJECT(&s->edma2), "chan-stride",
                                  FSL_IMX95_EDMA2_CHAN_STRIDE, &error_abort);
+        object_property_set_bool(OBJECT(&s->edma2), "tcd64", true,
+                                 &error_abort);
         sbd = SYS_BUS_DEVICE(&s->edma2);
         if (!sysbus_realize(sbd, errp)) {
             return;
@@ -1770,14 +1772,18 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA2_IRQ_BASE + i / 2));
         }
 
-        /* edma3 (fsl,imx95-edma5): same 64-channel/0x8000-stride engine at
+        /*
+         * edma3 (fsl,imx95-edma5): same 64-channel/0x8000-stride engine at
          * 0x42210000, channel N raises GIC SPI 256 + N/2. General-purpose (no
          * peripheral wired to it yet), so the fsl-edma driver probes it and a
-         * client can allocate channels. */
+         * client can allocate channels.
+         */
         object_property_set_uint(OBJECT(&s->edma3), "num-channels",
                                  FSL_IMX95_EDMA2_CHANNELS, &error_abort);
         object_property_set_uint(OBJECT(&s->edma3), "chan-stride",
                                  FSL_IMX95_EDMA2_CHAN_STRIDE, &error_abort);
+        object_property_set_bool(OBJECT(&s->edma3), "tcd64", true,
+                                 &error_abort);
         sbd = SYS_BUS_DEVICE(&s->edma3);
         if (!sysbus_realize(sbd, errp)) {
             return;
@@ -1788,13 +1794,20 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA3_IRQ_BASE + i / 2));
         }
 
-        /* SAI1 (0x443b0000, bt-sco) and SAI3 (0x42650000, wm8962). */
+        /*
+         * SAI1 (0x443b0000, bt-sco) and SAI3 (0x42650000, wm8962). Their TX
+         * FIFOs are paced by eDMA: SAI1 shares edma1 with MICFIL (req line 1,
+         * MICFIL is line 0), SAI3 is served by edma2 (req line 0). The played
+         * samples ride out to the audio backend (-audio captures them).
+         */
         sbd = SYS_BUS_DEVICE(&s->sai[0]);
         if (!sysbus_realize(sbd, errp)) {
             return;
         }
         sysbus_mmio_map(sbd, 0, 0x443b0000);
         sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(gicdev, FSL_IMX95_SAI1_IRQ));
+        qdev_connect_gpio_out_named(DEVICE(&s->sai[0]), "dma-req", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->edma1), "dma-req", 1));
 
         sbd = SYS_BUS_DEVICE(&s->sai[1]);
         if (!sysbus_realize(sbd, errp)) {
@@ -1802,6 +1815,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(sbd, 0, 0x42650000);
         sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(gicdev, FSL_IMX95_SAI3_IRQ));
+        qdev_connect_gpio_out_named(DEVICE(&s->sai[1]), "dma-req", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->edma2), "dma-req", 0));
 
         /* MICFIL PDM mic (0x44520000), four interrupt lines. */
         {
