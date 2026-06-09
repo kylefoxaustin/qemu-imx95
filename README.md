@@ -291,6 +291,16 @@ working host data path yet):
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
   PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
+- **USB3 SuperSpeed (DWC3) — brings up.** The `snps,dwc3` core
+  (`usb@4c100000`, `fsl,imx95-dwc3`) is modelled with QEMU's `usb_dwc3` (which
+  wraps a sysbus xHCI), so `dwc3-core` binds and the xHCI registers as a USB 3.0
+  **SuperSpeed host** (two root hubs), where the USB2 ChipIdea host above is
+  EHCI. A low-priority reads-as-0 region under the 64 KiB DWC3 window keeps
+  `dwc3_core_init`'s reads of the unmodelled glue registers from faulting
+  (`tests/usb3/`). The `iommus=<&smmu>` phandle must be stripped (no SMMU model)
+  for the core to probe, as with the Neutron NPU; device enumeration on the
+  SuperSpeed host is a follow-on (USB device enumeration is via the ChipIdea
+  host today).
 - **Audio — WM8962 playback + MICFIL capture functional; BT-SCO brings up.**
   `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
   **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
@@ -350,9 +360,29 @@ working host data path yet):
   write/read-back. (The chip is a fully-SDR Micron `mt25ql512ab` stand-in: the
   EVK's `mt35xu01gbba` mandates an octal-DTR mode QEMU's generic `m25p80` does
   not model.)
+- **LPSPI — functional.** All eight LPSPI controllers (`hw/ssi/imx95_lpspi.c`,
+  `fsl,imx95-spi`) are real SSI masters: a TDR write shifts onto the bus and the
+  shifted-in data returns via RDR. Each gets a uniquely-named SSI bus
+  (`lpspi1..8`) so a slave can be attached with `-device <dev>,bus=lpspiN`, like
+  the LPI2C controllers. The 19x19 EVK enables lpspi7 (a `bk4` spidev → a
+  `/dev/spidev` node); `tests/qtest/imx95-lpspi-test.c` reads an ISSI NOR's
+  JEDEC ID through the controller.
+- **Watchdog — functional.** WDOG3 (`hw/misc/imx95_wdog.c`, the i.MX7ULP-style
+  `fsl,imx93-wdt` clocked by the 32 kHz oscillator) binds as `/dev/watchdog0`;
+  when enabled and not refreshed within the timeout it fires the QEMU watchdog
+  action (`tests/watchdog/` arms it, stops pinging, and the bite powers off the
+  VM). The System Manager's own WDOG2 stays non-functional so the SM can
+  configure and refresh it without the timer ever biting.
+- **DDR PMU — brings up.** `ddr-pmu@4e090dc0` (`fsl,imx95-ddr-pmu`,
+  `hw/misc/imx95_ddr_pmu.c`) is a perf-interface compatibility block so the
+  `fsl_imx9_ddr_perf` driver registers its perf PMU
+  (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
+  events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
+  real PMU counts, so the counters honestly read 0.
 
-Functional audio playback / capture would need the SAI/MICFIL FIFO
-datapaths and is tracked in
+Audio playback (WM8962/SAI3) and MICFIL PDM capture are now functional (see the
+Audio entry above); the remaining datapath gaps (BT-SCO, SAI RX capture) are
+tracked in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
 **CAN — functional.** All five **FlexCAN** controllers are modelled
