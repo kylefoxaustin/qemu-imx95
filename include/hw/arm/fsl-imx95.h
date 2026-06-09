@@ -267,6 +267,7 @@ struct FslImx95State {
     /* Audio: eDMA front-ends + SAI/MICFIL; wm8962 codec on lpi2c4. */
     IMX95EdmaState          edma1;   /* 0x44000000: serves sai1 + micfil */
     IMX95EdmaState          edma2;   /* 0x42000000: serves sai3 */
+    IMX95EdmaState          edma3;   /* 0x42210000: general-purpose */
     IMX95SaiState           sai[FSL_IMX95_NUM_SAIS];  /* sai1, sai3 */
     IMX95MicfilState        micfil;
     DeviceState            *lpi2c4;  /* wm8962 audio-codec i2c bus */
@@ -488,6 +489,7 @@ enum FslImx95Irqs {
     FSL_IMX95_SAI3_IRQ      = 170,
     FSL_IMX95_EDMA1_IRQ_BASE = 96,   /* edma1 channel N -> GIC SPI 96 + N */
     FSL_IMX95_EDMA2_IRQ_BASE = 128,  /* edma2 channel N -> GIC SPI 128 + N/2 */
+    FSL_IMX95_EDMA3_IRQ_BASE = 256,  /* edma3 channel N -> GIC SPI 256 + N/2 */
 };
 
 /* MICFIL's four interrupt lines (dtsi micfil@44520000), in DT order. */

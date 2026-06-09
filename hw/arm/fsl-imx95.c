@@ -394,9 +394,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
              * 0x200000), so a 1 MiB stub faults on the high channels. Use the
              * DT-declared sizes: edma5 = 0x210000, edma3 = 0x200000.
              */
-            /* edma2 (0x42000000) + edma1 (0x44000000) are real models below;
-             * edma3 (0x42210000) stays a stub (no modelled consumer). */
-            { 0x42210000, 0x210000 },
+            /* edma1/edma2/edma3 are real imx95.edma models below. */
             { 0x42430000, 64 * KiB }, /* cm7 mailbox */
             /* wdog3 (0x42490000) is a real imx95.wdog model below. */
             /* pwm@424e0000/42510000 are real TPM-PWM models below. */
@@ -1772,6 +1770,24 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA2_IRQ_BASE + i / 2));
         }
 
+        /* edma3 (fsl,imx95-edma5): same 64-channel/0x8000-stride engine at
+         * 0x42210000, channel N raises GIC SPI 256 + N/2. General-purpose (no
+         * peripheral wired to it yet), so the fsl-edma driver probes it and a
+         * client can allocate channels. */
+        object_property_set_uint(OBJECT(&s->edma3), "num-channels",
+                                 FSL_IMX95_EDMA2_CHANNELS, &error_abort);
+        object_property_set_uint(OBJECT(&s->edma3), "chan-stride",
+                                 FSL_IMX95_EDMA2_CHAN_STRIDE, &error_abort);
+        sbd = SYS_BUS_DEVICE(&s->edma3);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, 0x42210000);
+        for (i = 0; i < FSL_IMX95_EDMA2_CHANNELS; i++) {
+            sysbus_connect_irq(sbd, i,
+                qdev_get_gpio_in(gicdev, FSL_IMX95_EDMA3_IRQ_BASE + i / 2));
+        }
+
         /* SAI1 (0x443b0000, bt-sco) and SAI3 (0x42650000, wm8962). */
         sbd = SYS_BUS_DEVICE(&s->sai[0]);
         if (!sysbus_realize(sbd, errp)) {
@@ -2337,6 +2353,7 @@ static void fsl_imx95_init(Object *obj)
 
     object_initialize_child(obj, "edma1", &s->edma1, TYPE_IMX95_EDMA);
     object_initialize_child(obj, "edma2", &s->edma2, TYPE_IMX95_EDMA);
+    object_initialize_child(obj, "edma3", &s->edma3, TYPE_IMX95_EDMA);
     object_initialize_child(obj, "sai1", &s->sai[0], TYPE_IMX95_SAI);
     object_initialize_child(obj, "sai3", &s->sai[1], TYPE_IMX95_SAI);
     object_initialize_child(obj, "micfil", &s->micfil, TYPE_IMX95_MICFIL);
