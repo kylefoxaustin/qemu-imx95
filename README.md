@@ -15,9 +15,16 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 
 qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
 Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
-cluster's SCMI traffic. Intended use cases are BSP development, System Manager
-firmware development, peripheral-driver development, and CI for the above. It is
-not cycle-accurate. The GPU and the VPU (Wave6) video codec are stubbed at probe
+cluster's SCMI traffic. It brings up much of the EVK: **NETC networking**
+(ENETC, `eth0` up with working ping), **read/write SD/eMMC storage** (a real
+ext4 rootfs over uSDHC/ADMA), the **DPU display** with multi-plane compositing,
+both pixel pipelines and a **Weston/Wayland desktop**, the **2D blit engine**
+(real NXP G2D), **HW JPEG** encode/decode, **FlexCAN**, **USB** (HID keyboard),
+three **ASoC audio cards**, the **Neutron NPU** stack, **expandable I²C** (all
+eight LPI2C, `-device`-attachable), and the **Cortex-M33** real-time core
+running real NXP firmware plus a **Cortex-M7** with A55↔M7 RPMsg. Intended use
+cases are BSP development, System Manager firmware development, peripheral-driver
+development, and CI for the above. It is not cycle-accurate. The GPU and the VPU (Wave6) video codec are stubbed at probe
 time only — no GPU rendering, no VPU video codec — while the HW JPEG codecs are
 functional; and the Neutron NPU brings up end to end but its proprietary compute
 is out of scope (see [Known limitations](#known-limitations)).
