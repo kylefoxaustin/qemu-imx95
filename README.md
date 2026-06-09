@@ -388,6 +388,12 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **Extra SAIs (sai2/4/5) — bring up.** The EVK wires only sai1 + sai3 (above);
+  `sai2@4c880000`, `sai4@42660000` and `sai5@42670000` are EVK-disabled. The
+  machine now instantiates all five (same `fsl,imx95-sai` IP), so a patched dtb
+  enables the three extra nodes and the `fsl-sai` driver probes and binds each
+  (`tests/sai-extra/` confirms all three bind). A full playback card would also
+  need a codec + card node; this is controller registration bring-up.
 - **SPDIF / XCVR — brings up.** The audio transceiver (`xcvr@42680000`,
   `fsl,imx95-xcvr`, `hw/audio/imx95_xcvr.c`) is modelled so the `fsl_xcvr`
   driver brings it up and registers its SPDIF card (`imx-audio-xcvr`). Ported
