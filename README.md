@@ -388,6 +388,20 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **Camera (MIPI CSI-2 → ISI) — brings up.** The camera capture pipeline comes
+  up end to end through the V4L2 media graph. The ISI capture engine
+  (`isi@4ad50000`, `fsl,imx95-isi`, `hw/display/imx95_isi.c`) registers all
+  eight `mxc_isi.N.capture` `/dev/video` nodes and, on a channel's `CHNL_EN`,
+  DMAs a synthesised moving test pattern into the capture buffers (raising the
+  per-channel frame-stored IRQ) — the same contract the `imx8-isi` driver
+  drives. An OV5640 MIPI sensor model (`hw/i2c/ov5640.c`, answering the chip-ID
+  read) lets the `ov5640` driver register its subdev. The MIPI CSI-2 receivers +
+  combo D-PHY are readable stubs (the dwc-mipi-csi2 stop-state poll passes on a
+  0 read). `tests/camera/` applies an ov5640 overlay (`fdtoverlay` onto the base
+  dtb's symbols) and confirms the whole graph binds — `ov5640 → csi → formatter
+  → crossbar → ISI`, all subdevs + capture nodes present, no abort. The final
+  STREAMON/DQBUF frame capture additionally needs the imx8-isi crossbar's
+  per-stream media-ctl format recipe (a follow-on).
 - **Extra SAIs (sai2/4/5) — bring up.** The EVK wires only sai1 + sai3 (above);
   `sai2@4c880000`, `sai4@42660000` and `sai5@42670000` are EVK-disabled. The
   machine now instantiates all five (same `fsl,imx95-sai` IP), so a patched dtb
