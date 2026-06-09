@@ -411,21 +411,28 @@ static void sdhci_end_transfer(SDHCIState *s)
         sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
         /* Auto CMD12 response goes to the upper Response register */
         s->rspreg[3] = ldl_be_p(response);
-    } else if ((s->trnmod & SDHC_TRNS_MULTI) && !(s->trnmod & SDHC_TRNS_READ)) {
+    } else if (s->trnmod & SDHC_TRNS_MULTI) {
         /*
-         * Open-ended multi-block WRITE with no Auto-CMD12. The controller has
-         * clocked out every block, but the card is still in the
-         * receive-data state waiting for a STOP. On real hardware the host's
-         * transfer-complete handler issues CMD12, which moves the card
-         * through programming back to the transfer (ready) state before the
-         * post-write busy poll. Without it the SD/eMMC card model stays in
-         * receivingdata and Linux's __mmc_poll_for_busy() - which only
-         * accepts the transfer state as "not busy" - spins until it gives up
-         * ("Card stuck being busy"), so every write fails and retries.
-         * Issue the implicit STOP here; the card's CMD12 handler is
-         * idempotent in the transfer state, so a later driver-issued CMD12
-         * is harmless. The response is not surfaced (the driver did not ask
-         * for it).
+         * Open-ended multi-block transfer with no Auto-CMD12. The controller
+         * has clocked every block, but the card is still in a data-transfer
+         * state waiting for a STOP: receive-data after a WRITE, send-data
+         * after a READ. On real hardware the host's transfer-complete handler
+         * issues CMD12, returning the card (via programming, for a write) to
+         * the transfer/ready state. Without it the SD/eMMC card model is left
+         * mid-transfer, so:
+         *   - after a WRITE, Linux's __mmc_poll_for_busy() (which only accepts
+         *     the transfer state as "not busy") spins -> "Card stuck being
+         *     busy" and the write fails/retries; and
+         *   - after a READ, the next open-ended CMD18/CMD25 finds the card in
+         *     send-data and is rejected (ILLEGAL -> command-response timeout),
+         *     so back-to-back reads storm with timeouts and occasionally fail.
+         * Issue the implicit STOP here for both directions. The card's CMD12
+         * handler is idempotent in the transfer state, so a later
+         * driver-issued CMD12 is a harmless no-op. The response is not
+         * surfaced (the driver did not ask for it). Counted (CMD23) and
+         * Auto-CMD12 transfers already stop the card themselves and take the
+         * branch above or self-terminate, so this only rescues the
+         * open-ended-no-Auto-CMD12 case.
          */
         SDRequest request = { .cmd = 0x0C, .arg = 0 };
         uint8_t response[16];
