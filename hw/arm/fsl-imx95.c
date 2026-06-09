@@ -46,6 +46,7 @@
 #include "hw/audio/wm8962.h"
 #include "hw/sensor/tmp105.h"
 #include "hw/display/imx95_isi.h"
+#include "hw/display/imx95_dsi.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
@@ -595,6 +596,26 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             sysbus_connect_irq(SYS_BUS_DEVICE(isi), i,
                                qdev_get_gpio_in(gicdev, isi_irq[i]));
         }
+    }
+
+    /*
+     * MIPI-DSI host (dsi@4acf0000, nxp,imx95-mipi-dsi). EVK-disabled; enabled
+     * via a patched dtb. A DRM bridge wrapping the dw-mipi-dsi core: the DPU's
+     * pixel link feeds it and it drives a DSI panel. The model satisfies the
+     * core's three status polls (VERSION / CMD_PKT_STATUS / PHY_STATUS) so the
+     * bridge enables and the panel's DSI init commands complete; the DPU model
+     * still does the framebuffer scanout. Its interrupt (dtsi <48>) rides the
+     * displaymix irqsteer.
+     */
+    {
+        DeviceState *dsi = qdev_new(TYPE_IMX95_DSI);
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(dsi), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(dsi), 0, 0x4acf0000);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dsi), 0,
+                           qdev_get_gpio_in(irqsteer, 48));
     }
 
     /*

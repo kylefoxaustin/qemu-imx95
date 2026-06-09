@@ -156,3 +156,6 @@ config MAC_PVG_PCI
 
 config IMX95_ISI
     bool
+
+config IMX95_DSI
+    bool

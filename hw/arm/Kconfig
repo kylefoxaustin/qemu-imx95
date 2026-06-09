@@ -638,6 +638,7 @@ config FSL_IMX95
     select IMX95_DPU
     select IMX95_NEUTRON
     select IMX95_ISI
+    select IMX95_DSI
     select IMX_IRQSTEER
     select IMX95_GPIO
     select IMX95_JPEG
