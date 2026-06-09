@@ -44,6 +44,7 @@
 #include "hw/core/qdev-properties-system.h"
 #include "hw/i2c/i2c.h"
 #include "hw/audio/wm8962.h"
+#include "hw/sensor/tmp105.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
@@ -253,6 +254,10 @@ static const struct {
     /* usb3 PHY (stub) + usb2 ChipIdea controller (a real model, below). */
     [FSL_IMX95_USB_PHY]  = { 0x4c1f0000, 64 * KiB, "usb_phy" },
     [FSL_IMX95_USB2]     = { 0x4c200000, 4 * KiB,  "usb2" },
+
+    /* Silvaco I3C masters (EVK-disabled; enabled via a patched dtb). */
+    [FSL_IMX95_I3C1]     = { 0x44330000, 64 * KiB, "i3c1" },
+    [FSL_IMX95_I3C2]     = { 0x42520000, 64 * KiB, "i3c2" },
 };
 
 /*
@@ -1888,6 +1893,37 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
 
         /*
+         * Silvaco I3C masters. Both are status=disabled on the 19x19 EVK;
+         * a patched dtb (the imx95-...-i3c overlay) enables them and moves a
+         * codec onto i3c1 as a legacy-I2C target. Attach a wm8962 at 0x1a on
+         * i3c1's built-in I2C bus so the svc-i3c-master driver finds a device.
+         */
+        sbd = SYS_BUS_DEVICE(&s->i3c1);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, fsl_imx95_memmap[FSL_IMX95_I3C1].addr);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(gicdev, FSL_IMX95_I3C1_IRQ));
+        i2c_slave_create_simple(s->i3c1.bus->i2c_bus, TYPE_WM8962,
+                                FSL_IMX95_WM8962_ADDR);
+
+        sbd = SYS_BUS_DEVICE(&s->i3c2);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        sysbus_mmio_map(sbd, 0, fsl_imx95_memmap[FSL_IMX95_I3C2].addr);
+        sysbus_connect_irq(sbd, 0,
+                           qdev_get_gpio_in(gicdev, FSL_IMX95_I3C2_IRQ));
+        /*
+         * A tmp105 on i3c2's legacy-I2C bus gives the i3c test a self-checking
+         * target: the lm75 hwmon driver reads temp1 over the master's
+         * legacy-I2C path (MCTRL START -> MRDATAB), so a non-zero
+         * /sys/.../temp1_input proves the I3C datapath end to end.
+         */
+        i2c_slave_create_simple(s->i3c2.bus->i2c_bus, TYPE_TMP105, 0x48);
+
+        /*
          * lpi2c@42530000 (Linux i2c-2): real master so the on-board PCAL6408A
          * IO-expander (0x20) and PCA9632 LED controller (0x62) probe instead
          * of timing out (-110) on the old stub. Both are register-file i2c
@@ -2444,6 +2480,8 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "sai1", &s->sai[0], TYPE_IMX95_SAI);
     object_initialize_child(obj, "sai3", &s->sai[1], TYPE_IMX95_SAI);
     object_initialize_child(obj, "micfil", &s->micfil, TYPE_IMX95_MICFIL);
+    object_initialize_child(obj, "i3c1", &s->i3c1, TYPE_SVC_I3C);
+    object_initialize_child(obj, "i3c2", &s->i3c2, TYPE_SVC_I3C);
 }
 
 static const Property fsl_imx95_properties[] = {

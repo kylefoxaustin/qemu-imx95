@@ -4,6 +4,10 @@ config I3C
 config DW_I3C
     bool
 
+config SILVACO_I3C
+    bool
+    select I3C
+
 config I3C_DEVICES
     # Device group for i3c devices which can reasonably be user-plugged to any
     # board's i3c bus.

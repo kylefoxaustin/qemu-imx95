@@ -38,6 +38,7 @@
 #include "hw/dma/imx95_edma.h"
 #include "hw/audio/imx95_sai.h"
 #include "hw/audio/imx95_micfil.h"
+#include "hw/i3c/svc_i3c.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
@@ -272,6 +273,14 @@ struct FslImx95State {
     IMX95EdmaState          edma3;   /* 0x42210000: general-purpose */
     IMX95SaiState           sai[FSL_IMX95_NUM_SAIS];  /* sai1, sai3 */
     IMX95MicfilState        micfil;
+    /*
+     * Silvaco I3C masters (i3c1 AONMIX @0x44330000, i3c2 @0x42520000).
+     * EVK leaves both status=disabled; enabled via a patched dtb. The
+     * imx95-...-i3c overlay moves a codec onto the bus as a legacy-I2C
+     * target, so a wm8962 is attached on i3c1's built-in I2C bus.
+     */
+    SvcI3cState             i3c1;
+    SvcI3cState             i3c2;
     DeviceState            *lpi2c4;  /* wm8962 audio-codec i2c bus */
     /* NETC integrated-endpoint ECAM PCIe bus (v2.x; ENETC MACs attach here). */
     PCIBus                 *netc_pcie_bus;
@@ -449,6 +458,10 @@ enum FslImx95MemoryRegions {
     FSL_IMX95_USB_PHY,
     FSL_IMX95_USB2,
 
+    /* Silvaco I3C masters (dtsi i3c@44330000 / i3c@42520000). */
+    FSL_IMX95_I3C1,
+    FSL_IMX95_I3C2,
+
     FSL_IMX95_NUM_REGIONS,
 };
 
@@ -492,6 +505,9 @@ enum FslImx95Irqs {
     FSL_IMX95_EDMA1_IRQ_BASE = 96,   /* edma1 channel N -> GIC SPI 96 + N */
     FSL_IMX95_EDMA2_IRQ_BASE = 128,  /* edma2 channel N -> GIC SPI 128 + N/2 */
     FSL_IMX95_EDMA3_IRQ_BASE = 256,  /* edma3 channel N -> GIC SPI 256 + N/2 */
+    /* Silvaco I3C masters (dtsi i3c@44330000 SPI 12, i3c@42520000 SPI 57). */
+    FSL_IMX95_I3C1_IRQ      = 12,
+    FSL_IMX95_I3C2_IRQ      = 57,
 };
 
 /* MICFIL's four interrupt lines (dtsi micfil@44520000), in DT order. */

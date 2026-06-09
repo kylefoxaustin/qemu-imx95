@@ -652,6 +652,8 @@ config FSL_IMX95
     select SDHCI
     select PCI_EXPRESS_GENERIC_BRIDGE
     select USB_CHIPIDEA
+    select SILVACO_I3C
+    select TMP105
     select UNIMP
 
 config FSL_IMX95_EVK
