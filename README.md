@@ -291,12 +291,20 @@ working host data path yet):
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
   window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
   PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
-- **Audio — brings up.** `/proc/asound/cards` lists all three ASoC cards:
-  `wm8962-audio` (SAI3 ↔ a real **WM8962** codec on lpi2c4, reading device-id
-  0x6243), `micfil-audio` (PDM mic), and `bt-sco-audio`. Backed by register-file
-  **eDMA / SAI / MICFIL** models (`hw/dma/imx95_edma.c`, `hw/audio/`) so the
-  `fsl-edma`/`fsl-sai`/`fsl-micfil` drivers probe and allocate DMA channels
-  (`tests/audio/`).
+- **Audio — MICFIL capture functional; WM8962 / BT-SCO bring up.**
+  `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
+  **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
+  mic), and `bt-sco-audio`. The **MICFIL PDM capture datapath runs end to end**:
+  the MICFIL model (`hw/audio/imx95_micfil.c`) synthesises a sample stream into
+  its data FIFO and pulses a DMA request as the FIFO passes its watermark, and a
+  cyclic (scatter/gather) **eDMA** channel (`hw/dma/imx95_edma.c`) reads
+  `DATACH0` into the ALSA ring buffer one minor loop per request — so a real
+  `snd_pcm_readi()` returns non-silent, varying **S32_LE** samples
+  (`tests/audio/run-capture.sh`; a kernel-free `tests/qtest/imx95-edma-test.c`
+  drives the same MICFIL → eDMA cyclic path). The SAI register-file models back
+  `fsl-sai`/`fsl-micfil` probe and DMA-channel allocation for all three cards
+  (`tests/audio/run.sh`); WM8962/SAI playback and BT-SCO have no sample path yet
+  (no codec-driven SAI TX), so those two stay at the registration bar.
 - **HW JPEG codecs — functional.** Encode and decode. The two dedicated CAST
   `mxc-jpeg` blocks (separate from the Wave6 VPU) are modelled as real
   descriptor-chain engines (`hw/misc/imx95_jpeg.c`): `/dev/video2` decodes a
@@ -410,7 +418,7 @@ remains is forward-looking:
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
 | **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
-| Audio playback / capture | The SAI/MICFIL FIFO + codec datapath so PCM actually moves (all three cards register today) | deferred |
+| Audio playback / SAI capture | The SAI TX/RX FIFO + codec datapath so WM8962/BT-SCO PCM moves (**MICFIL PDM capture is already functional**; all three cards register) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
 

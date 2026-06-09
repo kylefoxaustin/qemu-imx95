@@ -33,9 +33,24 @@
 #define TCD_DADDR       0x30
 #define TCD_DOFF        0x34
 #define TCD_CITER       0x36
+#define TCD_DLAST       0x38
+#define TCD_CSR         0x3c
+#define TCD_BITER       0x3e
 
 #define CH_CSR_ERQ      (1u << 0)
 #define CH_SBR_WR       (1u << 21)          /* memory -> device: run now */
+#define CH_SBR_RD       (1u << 22)          /* device -> memory            */
+#define TCD_CSR_INTMAJ  (1u << 1)
+#define TCD_CSR_ESG     (1u << 4)           /* scatter/gather (cyclic)     */
+
+/* MICFIL: PDM mic that feeds eDMA1 a capture stream. */
+#define MICFIL_BASE     0x44520000ULL
+#define MICFIL_CTRL1    0x00
+#define MICFIL_FIFO_CTRL 0x10
+#define MICFIL_DATACH0  0x24
+#define CTRL1_PDMIEN    (1u << 29)
+#define CTRL1_DISEL_DMA (1u << 24)
+#define MICFIL_WORD_NS  (1000000000LL / 48000)
 
 /* ATTR = (SSIZE << 8) | DSIZE; size field s encodes 1<<s bytes. */
 #define ATTR(s)         (((s) << 8) | (s))
@@ -120,10 +135,62 @@ static void test_edma_mloff(void)
     qtest_quit(qts);
 }
 
+/*
+ * Cyclic capture datapath end to end (no kernel): MICFIL synthesises a sample
+ * stream into its FIFO and pulses a DMA request as it passes the watermark; a
+ * cyclic (ESG) eDMA channel reads MICFIL DATACH0 into a memory ring one minor
+ * loop per request. Stepping the virtual clock fires the MICFIL word timer, so
+ * non-silent samples must land in RAM - the same path a real arecord drives.
+ */
+static void test_edma_micfil_cyclic(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint8_t got[64 * 4];
+    int i, nonzero = 0;
+
+    /* Clear the destination ring so any landed sample is visible. */
+    memset(got, 0, sizeof(got));
+    qtest_memwrite(qts, DST_GPA, got, sizeof(got));
+
+    /* Program a cyclic eDMA1 ch0: fixed src = MICFIL DATACH0 -> memory ring. */
+    qtest_writel(qts, CH(0) + TCD_SADDR, MICFIL_BASE + MICFIL_DATACH0);
+    qtest_writew(qts, CH(0) + TCD_SOFF, 0);             /* peripheral fixed */
+    qtest_writew(qts, CH(0) + TCD_ATTR, ATTR(2));       /* 4-byte elements */
+    qtest_writel(qts, CH(0) + TCD_NBYTES, 4);   /* one word per minor loop */
+    qtest_writel(qts, CH(0) + TCD_DADDR, (uint32_t)DST_GPA);
+    qtest_writew(qts, CH(0) + TCD_DOFF, 4);
+    qtest_writel(qts, CH(0) + TCD_DLAST, 0);
+    /* CITER/BITER large so a major loop never completes during the test. */
+    qtest_writew(qts, CH(0) + TCD_CITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_BITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_CSR, TCD_CSR_ESG | TCD_CSR_INTMAJ);
+    qtest_writel(qts, CH(0) + CH_SBR, CH_SBR_RD);
+    qtest_writel(qts, CH(0) + CH_CSR, CH_CSR_ERQ);      /* arm cyclic channel */
+
+    /* Enable MICFIL (PDM, DMA request mode) with a small FIFO watermark. */
+    qtest_writel(qts, MICFIL_BASE + MICFIL_FIFO_CTRL, 4);
+    qtest_writel(qts, MICFIL_BASE + MICFIL_CTRL1,
+                 CTRL1_PDMIEN | CTRL1_DISEL_DMA);
+
+    /* Advance ~100 word periods: timer fills the FIFO and fires requests. */
+    qtest_clock_step(qts, MICFIL_WORD_NS * 100);
+
+    qtest_memread(qts, DST_GPA, got, sizeof(got));
+    for (i = 0; i < (int)sizeof(got); i++) {
+        if (got[i]) {
+            nonzero++;
+        }
+    }
+    /* A real (non-silent) capture must have moved bytes into the ring. */
+    g_assert_cmpint(nonzero, >, 0);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/imx95/edma/plain", test_edma_plain);
     qtest_add_func("/imx95/edma/mloff", test_edma_mloff);
+    qtest_add_func("/imx95/edma/micfil-cyclic", test_edma_micfil_cyclic);
     return g_test_run();
 }

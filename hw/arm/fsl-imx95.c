@@ -1798,6 +1798,13 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 sysbus_connect_irq(sbd, i,
                     qdev_get_gpio_in(gicdev, micfil_irqs[i]));
             }
+            /*
+             * MICFIL is serviced by eDMA1: wire its FIFO-fill DMA-request line
+             * so the cyclic capture channel advances one minor loop per request
+             * (PDM samples -> the ALSA ring buffer).
+             */
+            qdev_connect_gpio_out_named(DEVICE(&s->micfil), "dma-req", 0,
+                qdev_get_gpio_in_named(DEVICE(&s->edma1), "dma-req", 0));
         }
 
         /*

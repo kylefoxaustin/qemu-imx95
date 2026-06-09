@@ -989,6 +989,7 @@ F: tests/m7-fault-recovery/
 F: tests/m7-rpmsg/
 F: tests/flexcan/
 F: tests/netc/
+F: tests/audio/
 F: tests/m33-m7-only/
 F: tests/parallel-boot/
 F: tests/docker-repro/

@@ -60,6 +60,12 @@
 #define CH_SBR_WR       (1u << 21)      /* tx: memory -> device */
 #define CH_SBR_RD       (1u << 22)      /* rx: device -> memory */
 
+#define TCD_CSR_INTMAJ  (1u << 1)       /* interrupt on major-loop complete */
+#define TCD_CSR_ESG     (1u << 4)       /* enable scatter/gather (cyclic)   */
+
+#define NBYTES_SMLOE    (1u << 31)      /* source minor-loop offset enable  */
+#define NBYTES_DMLOE    (1u << 30)      /* dest minor-loop offset enable    */
+
 #define ATTR_DSIZE(a)   ((a) & 0x7)
 #define ATTR_SSIZE(a)   (((a) >> 8) & 0x7)
 #define ITER_MASK       0x7fff
@@ -79,6 +85,23 @@ static inline void st32(uint8_t *p, uint32_t v)
     p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
 }
 
+/*
+ * Decode the TCD NBYTES word. With the minor-loop offset enabled (SMLOE or
+ * DMLOE) the byte count is only bits [9:0] and bits [29:10] are a signed offset
+ * (returned via *mloff) added to SADDR/DADDR once per minor loop; otherwise the
+ * count is bits [29:0]. MICFIL multichannel capture sets SMLOE with a negative
+ * MLOFF to rewind SADDR after reading DATACH0..n.
+ */
+static uint32_t edma_decode_nbytes(uint32_t raw, int32_t *mloff)
+{
+    if (raw & (NBYTES_SMLOE | NBYTES_DMLOE)) {
+        *mloff = (int32_t)(raw << 2) >> 12;     /* sign-extend bits [29:10] */
+        return raw & 0x3ff;
+    }
+    *mloff = 0;
+    return raw & 0x3fffffff;
+}
+
 /* Execute a channel's TCD: move CITER * NBYTES bytes SADDR->DADDR. */
 static void edma_run_channel(IMX95EdmaState *s, int ch)
 {
@@ -94,28 +117,11 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
     uint32_t ssize = 1u << ATTR_SSIZE(attr);
     uint32_t dsize = 1u << ATTR_DSIZE(attr);
     uint32_t esize = MAX(ssize, dsize);
-    uint32_t nbytes;
-    int32_t mloff = 0;
-    bool smloe, dmloe;
+    int32_t mloff;
+    uint32_t nbytes = edma_decode_nbytes(nb_raw, &mloff);
+    bool smloe = nb_raw & NBYTES_SMLOE;
+    bool dmloe = nb_raw & NBYTES_DMLOE;
     uint8_t buf[8];
-
-    /*
-     * Decode the NBYTES minor-loop format. With the minor-loop offset enabled
-     * (SMLOE bit 31 or DMLOE bit 30), the byte count is only bits [9:0] and
-     * bits [29:10] are a signed offset added to SADDR/DADDR once per minor
-     * loop; otherwise the count is bits [29:0]. MICFIL multichannel capture
-     * sets SMLOE with a negative MLOFF to rewind SADDR after reading
-     * DATACH0..n - masking only the two flag bits would leave that offset in
-     * the count and try to move ~1 GiB per minor loop (a guest hang).
-     */
-    smloe = nb_raw & (1u << 31);
-    dmloe = nb_raw & (1u << 30);
-    if (smloe || dmloe) {
-        nbytes = nb_raw & 0x3ff;
-        mloff = (int32_t)(nb_raw << 2) >> 12;   /* sign-extend bits [29:10] */
-    } else {
-        nbytes = nb_raw & 0x3fffffff;
-    }
 
     if (citer == 0) {
         citer = 1;
@@ -165,6 +171,110 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
     }
 }
 
+/*
+ * Service one minor loop of a cyclic (scatter/gather) channel - the way audio
+ * capture runs: the peripheral (MICFIL) requests a burst as its FIFO fills, and
+ * each request moves NBYTES from the peripheral's data register to the ring
+ * buffer. At the end of a major loop (one period) the channel raises its
+ * interrupt, then follows DLAST_SGA to the next period's TCD - looping until
+ * the driver clears ERQ. This keeps the transfer paced by the peripheral
+ * instead of running the whole ring at once.
+ */
+static void edma_service_minor(IMX95EdmaState *s, int ch)
+{
+    IMX95EdmaChan *c = &s->chan[ch];
+    uint8_t *t = c->regs;
+    uint64_t saddr = ld32(t + TCD_SADDR);
+    uint64_t daddr = ld32(t + TCD_DADDR);
+    int16_t soff = (int16_t)ld16(t + TCD_SOFF);
+    int16_t doff = (int16_t)ld16(t + TCD_DOFF);
+    uint16_t attr = ld16(t + TCD_ATTR);
+    uint32_t nb_raw = ld32(t + TCD_NBYTES);
+    int32_t mloff;
+    uint32_t nbytes = edma_decode_nbytes(nb_raw, &mloff);
+    uint16_t citer = ld16(t + TCD_CITER) & ITER_MASK;
+    uint16_t biter = ld16(t + TCD_BITER) & ITER_MASK;
+    uint16_t csr = ld16(t + TCD_CSR);
+    uint32_t ssize = 1u << ATTR_SSIZE(attr);
+    uint32_t dsize = 1u << ATTR_DSIZE(attr);
+    uint32_t esize = MAX(ssize, dsize);
+    uint8_t buf[8];
+
+    if (!(ld32(t + CH_CSR) & CH_CSR_ERQ)) {
+        return;                 /* stream stopped between request and service */
+    }
+    if (nbytes == 0 || esize == 0 || esize > sizeof(buf)) {
+        return;
+    }
+
+    /* One minor loop: NBYTES, element by element (peripheral side is fixed). */
+    for (uint32_t done = 0; done + esize <= nbytes; done += esize) {
+        address_space_read(&address_space_memory, saddr,
+                           MEMTXATTRS_UNSPECIFIED, buf, esize);
+        address_space_write(&address_space_memory, daddr,
+                            MEMTXATTRS_UNSPECIFIED, buf, esize);
+        saddr += soff;
+        daddr += doff;
+    }
+    /* Apply the minor-loop offset to whichever side enabled it. */
+    if (nb_raw & NBYTES_SMLOE) {
+        saddr += mloff;
+    }
+    if (nb_raw & NBYTES_DMLOE) {
+        daddr += mloff;
+    }
+    /*
+     * Persist both pointers. The fixed (peripheral) side has off == 0 so it is
+     * unchanged; the advancing (memory) side must carry over to the next minor
+     * loop, or every minor loop would overwrite the same ring bytes.
+     */
+    st32(t + TCD_SADDR, (uint32_t)saddr);
+    st32(t + TCD_DADDR, (uint32_t)daddr);
+
+    if (citer > 1) {
+        citer--;
+        t[TCD_CITER] = citer;
+        t[TCD_CITER + 1] = citer >> 8;
+        return;
+    }
+
+    /* Major loop complete: one period delivered. */
+    if (csr & TCD_CSR_INTMAJ) {
+        st32(t + CH_INT, 1);
+        if (ch < s->num_channels) {
+            qemu_irq_raise(s->irq[ch]);
+        }
+    }
+    if (csr & TCD_CSR_ESG) {
+        /* Follow DLAST_SGA to the next period's TCD (32 bytes). */
+        uint64_t next = ld32(t + TCD_DLAST);
+        address_space_read(&address_space_memory, next, MEMTXATTRS_UNSPECIFIED,
+                           t + TCD_SADDR, 0x20);
+    } else {
+        t[TCD_CITER] = biter;
+        t[TCD_CITER + 1] = biter >> 8;
+    }
+}
+
+/* A peripheral DMA request: advance the cyclic channel that serves it. */
+static void edma_dma_request(void *opaque, int n, int level)
+{
+    IMX95EdmaState *s = opaque;
+    int i;
+
+    if (!level) {
+        return;
+    }
+    for (i = 0; i < s->num_channels; i++) {
+        IMX95EdmaChan *c = &s->chan[i];
+
+        if (c->cyclic && (ld32(c->regs + CH_CSR) & CH_CSR_ERQ)) {
+            edma_service_minor(s, i);
+            return;
+        }
+    }
+}
+
 static void edma_drain_armed_rx(IMX95EdmaState *s)
 {
     for (int i = 0; i < s->num_channels; i++) {
@@ -182,6 +292,17 @@ static void edma_trigger(IMX95EdmaState *s, int ch)
     uint32_t sbr = ld32(c->regs + CH_SBR);
     int16_t soff = (int16_t)ld16(c->regs + TCD_SOFF);
     bool is_rx;
+
+    /*
+     * Scatter/gather (ESG) means a cyclic, peripheral-paced transfer (audio):
+     * don't run it now, wait for the peripheral's DMA requests to drive it one
+     * minor loop at a time. Non-SG transfers keep the run-it-now behaviour.
+     */
+    if (ld16(c->regs + TCD_CSR) & TCD_CSR_ESG) {
+        c->cyclic = true;
+        return;
+    }
+    c->cyclic = false;
 
     /* Prefer CH_SBR direction; fall back to "source offset fixed" = rx. */
     if (sbr & (CH_SBR_RD | CH_SBR_WR)) {
@@ -291,6 +412,7 @@ static void imx95_edma_reset(DeviceState *dev)
     for (int i = 0; i < IMX95_EDMA_MAX_CHANNELS; i++) {
         memset(s->chan[i].regs, 0, sizeof(s->chan[i].regs));
         s->chan[i].armed = false;
+        s->chan[i].cyclic = false;
         if (i < s->num_channels) {
             qemu_irq_lower(s->irq[i]);
         }
@@ -323,6 +445,9 @@ static void imx95_edma_realize(DeviceState *dev, Error **errp)
     for (int i = 0; i < s->num_channels; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq[i]);
     }
+
+    /* Peripheral DMA-request input: drives a cyclic channel one minor loop. */
+    qdev_init_gpio_in_named(dev, edma_dma_request, "dma-req", 1);
 }
 
 static const Property imx95_edma_properties[] = {
@@ -333,22 +458,23 @@ static const Property imx95_edma_properties[] = {
 
 static const VMStateDescription vmstate_imx95_edma_chan = {
     .name = "imx95.edma3.chan",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(regs, IMX95EdmaChan, IMX95_EDMA_CHAN_REGS_SZ),
         VMSTATE_BOOL(armed, IMX95EdmaChan),
+        VMSTATE_BOOL(cyclic, IMX95EdmaChan),
         VMSTATE_END_OF_LIST()
     },
 };
 
 static const VMStateDescription vmstate_imx95_edma = {
     .name = TYPE_IMX95_EDMA,
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(mgmt, IMX95EdmaState, IMX95_EDMA_MGMT_REGS),
-        VMSTATE_STRUCT_ARRAY(chan, IMX95EdmaState, IMX95_EDMA_MAX_CHANNELS, 1,
+        VMSTATE_STRUCT_ARRAY(chan, IMX95EdmaState, IMX95_EDMA_MAX_CHANNELS, 2,
                              vmstate_imx95_edma_chan, IMX95EdmaChan),
         VMSTATE_END_OF_LIST()
     },

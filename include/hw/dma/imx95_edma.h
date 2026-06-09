@@ -30,6 +30,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95EdmaState, IMX95_EDMA)
 typedef struct IMX95EdmaChan {
     uint8_t  regs[IMX95_EDMA_CHAN_REGS_SZ];     /* byte-addressable page head */
     bool     armed;             /* dev->mem deferred until data */
+    bool     cyclic;            /* scatter/gather (ESG): paced by peripheral */
 } IMX95EdmaChan;
 
 struct IMX95EdmaState {
