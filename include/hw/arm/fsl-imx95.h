@@ -118,6 +118,18 @@ enum FslImx95Configuration {
     FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
 };
 
+/*
+ * virtio-mmio transports (not real i.MX95 hardware). A handful of generic
+ * transports give the guest a place to attach virtio devices (e.g. a
+ * virtio-9p-device for a host file share, or a virtio-keyboard). The board
+ * (imx95-evk.c) injects matching /virtio_mmio@ nodes into the supplied dtb so
+ * the guest enumerates them on a normal boot. SPIs 240..243 are free.
+ */
+#define FSL_IMX95_VIRTIO_MMIO_BASE  0x70000000
+#define FSL_IMX95_VIRTIO_MMIO_SIZE  0x200
+#define FSL_IMX95_NUM_VIRTIO_MMIO   4
+#define FSL_IMX95_VIRTIO_MMIO_IRQ   240     /* first SPI; one per transport */
+
 struct FslImx95State {
     SysBusDevice            parent_obj;
 

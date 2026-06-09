@@ -14,6 +14,7 @@
 
 #include "qemu/osdep.h"
 #include "system/address-spaces.h"
+#include "system/device_tree.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/fsl-imx95.h"
 #include "hw/arm/machines-qom.h"
@@ -33,6 +34,30 @@ struct Imx95EvkMachineState {
     /* Optional CAN buses, attached via -machine canbus0=...,canbus1=... */
     CanBusState *canbus[FSL_IMX95_NUM_FLEXCAN];
 };
+
+/*
+ * Inject device-tree nodes for the virtio-mmio transports the SoC instantiates
+ * (see fsl-imx95.c) so the guest enumerates them on a normal boot of the
+ * supplied dtb (the kernel's CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES is off). The
+ * node has no interrupt-parent, so it inherits the root's GIC (#interrupt-cells
+ * = 3): <GIC_SPI irq IRQ_TYPE_LEVEL_HIGH>.
+ */
+static void imx95_evk_modify_dtb(const struct arm_boot_info *info, void *fdt)
+{
+    for (int i = FSL_IMX95_NUM_VIRTIO_MMIO - 1; i >= 0; i--) {
+        hwaddr base = FSL_IMX95_VIRTIO_MMIO_BASE +
+                      (hwaddr)i * FSL_IMX95_VIRTIO_MMIO_SIZE;
+        int irq = FSL_IMX95_VIRTIO_MMIO_IRQ + i;
+        g_autofree char *node = g_strdup_printf("/virtio_mmio@%" PRIx64, base);
+
+        qemu_fdt_add_subnode(fdt, node);
+        qemu_fdt_setprop_string(fdt, node, "compatible", "virtio,mmio");
+        qemu_fdt_setprop_cells(fdt, node, "reg",
+                               0, base, 0, FSL_IMX95_VIRTIO_MMIO_SIZE);
+        qemu_fdt_setprop_cells(fdt, node, "interrupts", 0, irq, 4);
+        qemu_fdt_setprop(fdt, node, "dma-coherent", NULL, 0);
+    }
+}
 
 static void imx95_evk_init(MachineState *machine)
 {
@@ -65,6 +90,8 @@ static void imx95_evk_init(MachineState *machine)
          * and below the GPU/VPU carveouts at 0xa0000000.
          */
         .initrd_start = FSL_IMX95_RAM_START + 256 * MiB,
+        /* Inject the virtio-mmio transport nodes into the supplied dtb. */
+        .modify_dtb   = imx95_evk_modify_dtb,
     };
 
     s = FSL_IMX95(object_new(TYPE_FSL_IMX95));

@@ -619,6 +619,33 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
     }
 
     /*
+     * Generic virtio-mmio transports (not i.MX95 hardware). They let the guest
+     * attach virtio devices - e.g. -device virtio-9p-device for a host file
+     * share. The board injects matching DT nodes into the supplied dtb so the
+     * guest discovers them on a normal boot. Modern (virtio 1.0) transport:
+     * the legacy default fails feature negotiation with the modern guest
+     * virtio_mmio driver.
+     */
+    {
+        DeviceState *gicdev = DEVICE(&s->gic);
+        int i;
+
+        for (i = 0; i < FSL_IMX95_NUM_VIRTIO_MMIO; i++) {
+            DeviceState *vmmio = qdev_new("virtio-mmio");
+            SysBusDevice *sbd = SYS_BUS_DEVICE(vmmio);
+
+            qdev_prop_set_bit(vmmio, "force-legacy", false);
+            if (!sysbus_realize_and_unref(sbd, errp)) {
+                return false;
+            }
+            sysbus_mmio_map(sbd, 0, FSL_IMX95_VIRTIO_MMIO_BASE +
+                            (hwaddr)i * FSL_IMX95_VIRTIO_MMIO_SIZE);
+            sysbus_connect_irq(sbd, 0,
+                qdev_get_gpio_in(gicdev, FSL_IMX95_VIRTIO_MMIO_IRQ + i));
+        }
+    }
+
+    /*
      * Neutron NPU (bring-up). Two DT reg windows: the remoteproc's RESETCTRL
      * @0x4ab00000 (clock gate) and the device/mailbox @0x4ab00004. Linux loads
      * NeutronFirmware.elf onto the NPU core and drives inference over the

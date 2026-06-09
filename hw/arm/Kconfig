@@ -656,6 +656,7 @@ config FSL_IMX95
     select USB_CHIPIDEA
     select SILVACO_I3C
     select TMP105
+    select VIRTIO_MMIO
     select UNIMP
 
 config FSL_IMX95_EVK
