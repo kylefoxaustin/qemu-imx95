@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * i.MX95 camera capture overlay: an OV5640 MIPI CSI-2 sensor wired through the
+ * MIPI CSI-2 receiver -> CSI pixel formatter -> ISI, modelled on the BSP's
+ * imx95-19x19-evk-os08a20.dtso but using the ov5640 (the simplest in-tree MIPI
+ * sensor: no firmware, just a chip-ID gate). The QEMU ov5640 model answers the
+ * sensor I2C; the ISI model synthesises the frames. The sensor sits on lpi2c3
+ * (i2c@42530000, a real LPI2C master in the machine, QEMU bus "lpi2c1").
+ */
+
+/dts-v1/;
+/plugin/;
+
+&{/} {
+	cam_xclk: cam-xclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+};
+
+&lpi2c3 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	ov5640: ov5640@3c {
+		compatible = "ovti,ov5640";
+		reg = <0x3c>;
+		clocks = <&cam_xclk>;
+		clock-names = "xclk";
+		DOVDD-supply = <&reg_dummy>;
+		AVDD-supply = <&reg_dummy>;
+		DVDD-supply = <&reg_dummy>;
+		status = "okay";
+
+		port {
+			ov5640_ep: endpoint {
+				remote-endpoint = <&mipi_csi0_ep>;
+				bus-type = <4>;       /* MEDIA_BUS_TYPE_CSI2_DPHY */
+				data-lanes = <1 2>;
+				clock-lanes = <0>;
+			};
+		};
+	};
+};
+
+&dphy_rx {
+	status = "okay";
+};
+
+&mipi_csi0 {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			mipi_csi0_ep: endpoint {
+				remote-endpoint = <&ov5640_ep>;
+				data-lanes = <1 2>;
+				clock-lanes = <0>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			mipi_csi0_out: endpoint {
+				remote-endpoint = <&formatter_0_in>;
+			};
+		};
+	};
+};
+
+&csi_pixel_formatter_0 {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			formatter_0_in: endpoint {
+				remote-endpoint = <&mipi_csi0_out>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			formatter_0_out: endpoint {
+				remote-endpoint = <&isi_in_2>;
+			};
+		};
+	};
+};
+
+&isi {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@2 {
+			reg = <2>;
+			isi_in_2: endpoint {
+				remote-endpoint = <&formatter_0_out>;
+			};
+		};
+	};
+};

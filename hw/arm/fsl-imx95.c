@@ -45,6 +45,7 @@
 #include "hw/i2c/i2c.h"
 #include "hw/audio/wm8962.h"
 #include "hw/sensor/tmp105.h"
+#include "hw/display/imx95_isi.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
 #include "hw/intc/arm_gicv3_its_common.h"
@@ -418,6 +419,16 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x44350000, 64 * KiB }, /* i2c */
             /* adc@44530000 is a real imx93-adc model below. */
             { 0x4ac10000, 64 * KiB }, /* camera csr (clock provider) */
+            /*
+             * Camera MIPI CSI-2 receivers + the D-PHY/combo-PHY CSR. The ISI
+             * (0x4ad50000) is a real model; these are readable stubs (the
+             * dwc-mipi-csi2 D-PHY stop-state poll passes on a 0 read, and the
+             * phy/formatter just need their writes to land). EVK-disabled, only
+             * touched once a patched dtb enables the camera graph.
+             */
+            { 0x4ad20000, 64 * KiB }, /* combo phy / dphy-rx csr */
+            { 0x4ad30000, 64 * KiB }, /* mipi_csi0 (dw-mipi-csi2) */
+            { 0x4ad40000, 64 * KiB }, /* mipi_csi1 (dw-mipi-csi2) */
             { 0x4ad00000, 64 * KiB }, /* display stream csr (clock provider) */
             { 0x4ad10000, 64 * KiB }, /* display master csr (mmio-mux) */
             { 0x4b010000, 64 * KiB }, /* syscon (dispmix csr) */
@@ -556,6 +567,33 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         for (i = 0; i < 4; i++) {
             sysbus_connect_irq(SYS_BUS_DEVICE(dpu), 8 + i,
                 qdev_get_gpio_in(irqsteer, dpu_irqsteer_line2[i]));
+        }
+    }
+
+    /*
+     * ISI (Image Sensing Interface) - the camera capture engine (isi@4ad50000,
+     * fsl,imx95-isi). EVK-disabled; enabled via a patched dtb. The imx8-isi
+     * driver streams a channel by DMAing frames to its ping-pong buffers; this
+     * model synthesises a moving test pattern per enabled channel and raises
+     * the per-channel frame-stored interrupt. The eight channel interrupts are
+     * GIC SPI 221 then 344..350 (dtsi). The upstream MIPI CSI-2 receiver +
+     * sensor complete the V4L2 media graph; this is the frame source.
+     */
+    {
+        static const int isi_irq[IMX95_ISI_NUM_CHANNELS] = {
+            221, 344, 345, 346, 347, 348, 349, 350,
+        };
+        DeviceState *gicdev = DEVICE(&s->gic);
+        DeviceState *isi = qdev_new(TYPE_IMX95_ISI);
+        int i;
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(isi), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(isi), 0, 0x4ad50000);
+        for (i = 0; i < IMX95_ISI_NUM_CHANNELS; i++) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(isi), i,
+                               qdev_get_gpio_in(gicdev, isi_irq[i]));
         }
     }
 
