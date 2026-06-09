@@ -34,6 +34,7 @@
 #include "hw/net/flexcan.h"
 #include "hw/net/fsl_enetc.h"
 #include "hw/usb/chipidea.h"
+#include "hw/usb/hcd-dwc3.h"
 #include "hw/dma/imx95_edma.h"
 #include "hw/audio/imx95_sai.h"
 #include "hw/audio/imx95_micfil.h"
@@ -264,6 +265,7 @@ struct FslImx95State {
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
+    USBDWC3                 usb3;   /* 0x4c100000: SuperSpeed DWC3 (xHCI) */
     /* Audio: eDMA front-ends + SAI/MICFIL; wm8962 codec on lpi2c4. */
     IMX95EdmaState          edma1;   /* 0x44000000: serves sai1 + micfil */
     IMX95EdmaState          edma2;   /* 0x42000000: serves sai3 */

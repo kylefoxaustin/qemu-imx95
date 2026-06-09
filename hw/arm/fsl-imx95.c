@@ -419,7 +419,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4b0d0000, 0x20000 },  /* pixel interleaver bridge */
             /* 0x4b400000 display-controller (dpu) -> imx95.dpu status stub */
             { 0x4c010000, 64 * KiB }, /* hsio blk-ctl (clock provider) */
-            { 0x4c100000, 64 * KiB }, /* usb3 dwc3 core */
+            /* usb3 dwc3 core (0x4c100000) is a real usb_dwc3 model below. */
             { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
             /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
             { 0x4c300000, 64 * KiB }, { 0x4c380000, 64 * KiB }, /* pcie dbi */
@@ -1731,8 +1731,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * usb-kbd / usb-mouse on its bus becomes an input source for the DPU
      * display window. The companion usbmisc@4c200200 (non-core wrapper:
      * over-current / charger-detect glue) is a logging stub - the ChipIdea
-     * driver only needs it to not fault. The usb3 DWC3 (0x4c100000) stays a
-     * stub; the ChipIdea is all we need for HID.
+     * driver only needs it to not fault.
      */
     {
         SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usb2);
@@ -1744,6 +1743,37 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(sbd, 0,
             qdev_get_gpio_in(gicdev, FSL_IMX95_USB2_IRQ));
         create_unimplemented_device("usbmisc", 0x4c200200, 0x200);
+    }
+
+    /*
+     * USB3 SuperSpeed: the snps,dwc3 core (usb@4c100000, "fsl,imx95-dwc3" /
+     * "fsl,imx8mp-dwc3"). QEMU's usb_dwc3 wraps a sysbus xHCI, so dwc3-core
+     * binds and a -device usb-... enumerates on the SuperSpeed host. The glue
+     * (imx95-dwc3 @0x4c010010, inside the hsio blk-ctl) and the USB PHY are
+     * logging stubs - the dwc3-imx driver only pokes a few mode/clock regs. The
+     * dtb's iommus=<&smmu 0xe> must be stripped (no SMMU model) for the core to
+     * probe, same as the Neutron NPU; tests/usb3/ does that.
+     */
+    {
+        SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usb3);
+
+        qdev_prop_set_uint32(DEVICE(&s->usb3.sysbus_xhci), "p2", 1);
+        qdev_prop_set_uint32(DEVICE(&s->usb3.sysbus_xhci), "p3", 1);
+        qdev_prop_set_uint32(DEVICE(&s->usb3.sysbus_xhci), "slots", 2);
+        if (!sysbus_realize(sbd, errp)) {
+            return;
+        }
+        /*
+         * Background the whole 64 KiB DWC3 window first: the usb_dwc3 model
+         * only backs the xHCI block + the global-register block (0xc100), so
+         * the dwc3-core driver's reads of the unmodelled gaps (e.g. the device-
+         * mode DCTL during soft-reset) would take an external abort. A
+         * low-priority reads-as-0 stub under the device lets them fall through.
+         */
+        create_unimplemented_device("usb3-dwc3", 0x4c100000, 0x10000);
+        sysbus_mmio_map(sbd, 0, 0x4c100000);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->usb3.sysbus_xhci), 0,
+                           qdev_get_gpio_in(gicdev, 175)); /* dtsi SPI 175 */
     }
 
     /*
@@ -2384,6 +2414,7 @@ static void fsl_imx95_init(Object *obj)
     }
 
     object_initialize_child(obj, "usb2", &s->usb2, TYPE_CHIPIDEA);
+    object_initialize_child(obj, "usb3", &s->usb3, TYPE_USB_DWC3);
 
     object_initialize_child(obj, "edma1", &s->edma1, TYPE_IMX95_EDMA);
     object_initialize_child(obj, "edma2", &s->edma2, TYPE_IMX95_EDMA);
