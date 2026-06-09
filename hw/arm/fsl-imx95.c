@@ -1870,6 +1870,36 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         qdev_connect_gpio_out_named(DEVICE(&s->sai[1]), "dma-req", 0,
             qdev_get_gpio_in_named(DEVICE(&s->edma2), "dma-req", 0));
 
+        /*
+         * Extra SAIs sai2/sai4/sai5 (EVK-disabled; enabled via a patched dtb).
+         * Same modelled IP as sai1/sai3 - registration bring-up: map + IRQ so
+         * the fsl-sai driver probes and registers each DAI. Their TX/RX FIFOs
+         * are paced by eDMA only on PCM open, which the bring-up test does not
+         * do, so no dma-req is wired (edma2 has no free request lines anyway).
+         */
+        {
+            static const struct {
+                int idx;
+                hwaddr addr;
+                int irq;
+            } extra_sai[] = {
+                { 2, 0x4c880000, FSL_IMX95_SAI2_IRQ },
+                { 3, 0x42660000, FSL_IMX95_SAI4_IRQ },
+                { 4, 0x42670000, FSL_IMX95_SAI5_IRQ },
+            };
+            int k;
+
+            for (k = 0; k < ARRAY_SIZE(extra_sai); k++) {
+                sbd = SYS_BUS_DEVICE(&s->sai[extra_sai[k].idx]);
+                if (!sysbus_realize(sbd, errp)) {
+                    return;
+                }
+                sysbus_mmio_map(sbd, 0, extra_sai[k].addr);
+                sysbus_connect_irq(sbd, 0,
+                    qdev_get_gpio_in(gicdev, extra_sai[k].irq));
+            }
+        }
+
         /* MICFIL PDM mic (0x44520000), four interrupt lines. */
         {
             static const int micfil_irqs[IMX95_MICFIL_IRQS] =
@@ -2498,6 +2528,9 @@ static void fsl_imx95_init(Object *obj)
     object_initialize_child(obj, "edma3", &s->edma3, TYPE_IMX95_EDMA);
     object_initialize_child(obj, "sai1", &s->sai[0], TYPE_IMX95_SAI);
     object_initialize_child(obj, "sai3", &s->sai[1], TYPE_IMX95_SAI);
+    object_initialize_child(obj, "sai2", &s->sai[2], TYPE_IMX95_SAI);
+    object_initialize_child(obj, "sai4", &s->sai[3], TYPE_IMX95_SAI);
+    object_initialize_child(obj, "sai5", &s->sai[4], TYPE_IMX95_SAI);
     object_initialize_child(obj, "micfil", &s->micfil, TYPE_IMX95_MICFIL);
     object_initialize_child(obj, "xcvr", &s->xcvr, TYPE_IMX95_XCVR);
     object_initialize_child(obj, "i3c1", &s->i3c1, TYPE_SVC_I3C);

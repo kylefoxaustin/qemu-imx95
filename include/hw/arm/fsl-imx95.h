@@ -106,7 +106,12 @@ enum FslImx95Configuration {
     FSL_IMX95_NUM_USDHCS    = 3,    /* uSDHC1..uSDHC3 */
     FSL_IMX95_NUM_FLEXCAN   = 5,    /* FlexCAN1..FlexCAN5 */
     FSL_IMX95_NUM_ENETC     = 3,    /* ENETC0 (0x0) + ENETC1 (0x40) + ENETC2 10G (0x80) */
-    FSL_IMX95_NUM_SAIS      = 2,    /* the EVK's active SAI cards: sai1 + sai3 */
+    /*
+     * sai[0]=sai1, sai[1]=sai3 (the EVK's active cards), then sai[2]=sai2,
+     * sai[3]=sai4, sai[4]=sai5 (EVK-disabled, enabled via a patched dtb -
+     * registration bring-up only; the extra instances share the modelled IP).
+     */
+    FSL_IMX95_NUM_SAIS      = 5,
     FSL_IMX95_EDMA1_CHANNELS = 31,  /* edma1@44000000 (fsl,imx93-edma3) */
     FSL_IMX95_EDMA2_CHANNELS = 64,  /* edma2@42000000 (fsl,imx95-edma5) */
     FSL_IMX95_EDMA2_CHAN_STRIDE = 0x8000,
@@ -505,6 +510,10 @@ enum FslImx95Irqs {
     /* Audio: SAI + MICFIL + eDMA channel interrupts. */
     FSL_IMX95_SAI1_IRQ      = 34,
     FSL_IMX95_SAI3_IRQ      = 170,
+    /* Extra SAIs (dtsi sai@4c880000/42660000/42670000), EVK-disabled. */
+    FSL_IMX95_SAI2_IRQ      = 169,
+    FSL_IMX95_SAI4_IRQ      = 171,
+    FSL_IMX95_SAI5_IRQ      = 172,
     FSL_IMX95_EDMA1_IRQ_BASE = 96,   /* edma1 channel N -> GIC SPI 96 + N */
     FSL_IMX95_EDMA2_IRQ_BASE = 128,  /* edma2 channel N -> GIC SPI 128 + N/2 */
     FSL_IMX95_EDMA3_IRQ_BASE = 256,  /* edma3 channel N -> GIC SPI 256 + N/2 */
