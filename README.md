@@ -388,6 +388,15 @@ working host data path yet):
   (`/sys/bus/event_source/devices/imx9_ddr0`) and `perf stat` can open the
   events. It is not a measurement — QEMU cannot observe the CPU↔DRAM traffic a
   real PMU counts, so the counters honestly read 0.
+- **I3C — functional.** Both Silvaco I3C masters (`hw/i3c/svc_i3c.c`,
+  `silvaco,i3c-master-v1`; `i3c1@44330000`, `i3c2@42520000`) are real
+  controllers: the `svc-i3c-master` driver drives `MCTRL`/`MSTATUS`/`MWDATAB`/
+  `MRDATAB`, runs Dynamic Address Assignment (no native I3C targets), and
+  registers an I2C adapter for the bus's legacy-I2C devices. The 19x19 EVK
+  leaves both nodes disabled, so `tests/i3c/` boots with a patched dtb that
+  enables them and declares a `tmp105` legacy-I2C child on `i3c2`; a small
+  i2c-dev helper then runs a SMBus config write/read round-trip to the sensor
+  over the I3C master, confirming a real transfer traverses the bus end to end.
 
 Audio playback (WM8962/SAI3) and MICFIL PDM capture are now functional (see the
 Audio entry above); the remaining datapath gaps (BT-SCO, SAI RX capture) are
