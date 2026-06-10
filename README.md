@@ -309,7 +309,7 @@ working host data path yet):
   with its BARs assigned in the controller's >4 GiB MEM window — e.g. an
   `-device e1000e,bus=imx95-pcie` shows up at `0000:01:00.0` (`tests/pcie/`).
   INTx routes to GIC SPI 306–309; MSI rides the GICv3 ITS (like NETC). pcie1 is
-  still a stub; full endpoint-driver datapath (MSI delivery) is a follow-on.
+  still a stub; full endpoint-driver datapath (MSI delivery) is a follow-on. Beyond link-up + enumeration, an arbitrary endpoint binds end to end: a `virtio-9p-pci` device's driver binds, MSI-X is delivered through the GICv3 ITS, the endpoint DMAs its virtqueue out of guest RAM, and a 9p mount over the PCIe device reads a host file in the guest (`tests/pcie-9p/`, with the dtb's SMMU `iommu-map` stripped and `msi-map` made identity, like the USB3 path).
 - **Audio — WM8962 playback + MICFIL capture functional; BT-SCO brings up.**
   `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
   **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
