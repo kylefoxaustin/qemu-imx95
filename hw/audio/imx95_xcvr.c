@@ -45,7 +45,13 @@
  */
 #define XCVR_EXT_CTRL_REL       0x10
 #define EXT_CTRL_TX_DPTH_RESET  (1u << 27)  /* TX datapath in reset       */
-#define EXT_CTRL_DMA_RD_DIS     (1u << 25)  /* DMA read (playback) disable */
+/*
+ * The driver gates the TX (playback) DMA with DMA_DIS(tx) == BIT(24)
+ * (DMA_WR_DIS) - counterintuitively NOT DMA_RD_DIS (BIT(25), which is the RX
+ * gate). On TRIGGER_START it clears BIT(24) to let the eDMA feed the TX FIFO,
+ * so the TX datapath is active once that bit is clear.
+ */
+#define EXT_CTRL_TX_DMA_DIS     (1u << 24)  /* DMA_WR_DIS - gates TX DMA   */
 #define EXT_CTRL_SPDIF_MODE     (1u << 23)  /* SPDIF mode selected         */
 #define EXT_CTRL_TX_FWM_MASK    0x7f        /* TX FIFO watermark [6:0]     */
 
@@ -58,7 +64,7 @@ static bool xcvr_tx_active(IMX95XcvrState *s)
     uint32_t ec = s->regs[XCVR_EXT_CTRL_REL >> 2];
 
     return (ec & EXT_CTRL_SPDIF_MODE) && !(ec & EXT_CTRL_TX_DPTH_RESET) &&
-           !(ec & EXT_CTRL_DMA_RD_DIS);
+           !(ec & EXT_CTRL_TX_DMA_DIS);
 }
 
 /* Queue clocked-out bytes for the audio backend. */

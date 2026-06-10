@@ -19,8 +19,9 @@
 # firmware loads (no "failed to request firmware"), and the card registers -
 # this exercises the model's hard paths (the 8-byte memcpy_toio firmware write
 # into the code RAM, the PHY/PLL AI bring-up, the runtime-PM firmware reload).
-# Tier 2 (opt-in, SPDIF_PLAYBACK=1): play an S16->S32 stream to the card. The
-# TX-FIFO drain is a documented follow-on, so it is off by default.
+# Tier 2 (default; needs the ALSA staging bits): play an S16->S32 stream to the
+# card - the eDMA-paced TX-FIFO drain runs over the 64-bit-TCD edma2 and the
+# played samples reach the audio backend (captured to a wav when -audio wav).
 #
 # Required (override via env): QEMU, KBUILD (Image + dtb + dtc + the snd .ko
 # tree), SM_ELF, XCVR_FW (xcvr-imx95.bin), an aarch64 cross-gcc. SKIPs if any
@@ -119,16 +120,13 @@ for m in $MODS; do
     cp "$f" "$STAGE/mods/"
 done
 
-# Tier 2 (opt-in via SPDIF_PLAYBACK=1): cross-compile the pcm_play oracle and
-# stage libasound + its full NEEDED closure + the "hw" PCM config tree (the
-# exact proven staging the WM8962 run-playback test uses). It is off by default:
-# the SPDIF TX datapath drain is a known follow-on (the driver's TRIGGER_START
-# DMA-enable doesn't complete in the test window, so writei would block), while
-# the model's substantial paths - firmware load, PHY/PLL bring-up, card
-# registration, runtime-PM-safe - are fully proven by Tier 1.
+# Tier 2 (on by default; needs the ALSA bits): cross-compile the pcm_play oracle
+# and stage libasound + its full NEEDED closure + the "hw" PCM config tree (the
+# exact proven staging the WM8962 run-playback test uses), then play a stream to
+# the SPDIF card. Skips (does not fail) if the ALSA staging inputs are absent.
 PLAYBACK=0
 LASOUND=$(ls "$BSP_ROOTFS"/usr/lib/libasound.so.2.* 2>/dev/null | head -1)
-if [ "${SPDIF_PLAYBACK:-0}" = "1" ] \
+if [ "${SPDIF_PLAYBACK:-1}" = "1" ] \
    && [ -f "$ALSA_INC/alsa/asoundlib.h" ] && [ -n "$LASOUND" ] \
    && [ -f "$HERE/../audio/pcm_play.c" ] \
    && "${CROSS}gcc" -O2 -Wall -I"$ALSA_INC" -o "$STAGE/pcm_play" \
