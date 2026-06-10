@@ -301,15 +301,24 @@ working host data path yet):
   for the core to probe, as with the Neutron NPU; device enumeration on the
   SuperSpeed host is a follow-on (USB device enumeration is via the ChipIdea
   host today).
-- **PCIe Root Complex (pcie0) — functional.** A from-scratch DesignWare PCIe RC
-  (`hw/pci-host/imx95_pcie.c`, `fsl,imx95-pcie` @0x4c300000) — distinct from the
-  NETC integrated-ECAM host. The imx95 dwc-core driver brings the link up
-  through the "app" SERDES glue (PHY MPLL reported locked, `LTSSM_EN` gates the
-  dbi link-up bit), programs the iATU, and a downstream **endpoint enumerates**
-  with its BARs assigned in the controller's >4 GiB MEM window — e.g. an
-  `-device e1000e,bus=imx95-pcie` shows up at `0000:01:00.0` (`tests/pcie/`).
-  INTx routes to GIC SPI 306–309; MSI rides the GICv3 ITS (like NETC). pcie1 is
-  still a stub; full endpoint-driver datapath (MSI delivery) is a follow-on. Beyond link-up + enumeration, an arbitrary endpoint binds end to end: a `virtio-9p-pci` device's driver binds, MSI-X is delivered through the GICv3 ITS, the endpoint DMAs its virtqueue out of guest RAM, and a 9p mount over the PCIe device reads a host file in the guest (`tests/pcie-9p/`, with the dtb's SMMU `iommu-map` stripped and `msi-map` made identity, like the USB3 path).
+- **PCIe Root Complex (pcie0 + pcie1) — functional.** A from-scratch DesignWare
+  PCIe RC (`hw/pci-host/imx95_pcie.c`, `fsl,imx95-pcie`) — distinct from the NETC
+  integrated-ECAM host. The imx95 dwc-core driver brings the link up through the
+  "app" SERDES glue (PHY MPLL reported locked, `LTSSM_EN` gates the dbi link-up
+  bit), programs the iATU, and a downstream **endpoint enumerates** with its BARs
+  assigned in the controller's >4 GiB MEM window — e.g. an `-device
+  e1000e,bus=imx95-pcie` shows up at `0000:01:00.0` (`tests/pcie/`). INTx routes
+  to GIC SPI 306–309 (pcie0) / 312–315 (pcie1); MSI rides the GICv3 ITS (like
+  NETC). Beyond link-up + enumeration, an arbitrary endpoint binds end to end: a
+  `virtio-9p-pci` device's driver binds, MSI-X is delivered through the GICv3
+  ITS, the endpoint DMAs its virtqueue out of guest RAM, and a 9p mount over the
+  PCIe device reads a host file in the guest (`tests/pcie-9p/`, with the dtb's
+  SMMU `iommu-map` stripped and `msi-map` made identity, like the USB3 path).
+  **Both** general-purpose controllers are modelled: pcie0 (@0x4c300000, PCI
+  domain 0) and pcie1 (@0x4c380000, domain 1) are independent instances of the
+  same host with distinct bus names (`imx95-pcie` / `imx95-pcie1`), and they
+  coexist — `tests/pcie1/` binds a `virtio-9p-pci` endpoint on the second
+  controller (domain `0001`) end to end.
 - **Audio — WM8962 playback + MICFIL capture functional; BT-SCO brings up.**
   `/proc/asound/cards` lists all three ASoC cards: `wm8962-audio` (SAI3 ↔ a real
   **WM8962** codec on lpi2c4, reading device-id 0x6243), `micfil-audio` (PDM
