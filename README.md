@@ -427,7 +427,7 @@ working host data path yet):
   enables the three extra nodes and the `fsl-sai` driver probes and binds each
   (`tests/sai-extra/` confirms all three bind). A full playback card would also
   need a codec + card node; this is controller registration bring-up.
-- **SPDIF / XCVR — brings up.** The audio transceiver (`xcvr@42680000`,
+- **SPDIF / XCVR — functional (playback).** The audio transceiver (`xcvr@42680000`,
   `fsl,imx95-xcvr`, `hw/audio/imx95_xcvr.c`) is modelled so the `fsl_xcvr`
   driver brings it up and registers its SPDIF card (`imx-audio-xcvr`). Ported
   from the i.MX93 XCVR (shared IP) — the SET/CLR/TOG register aliases, the
@@ -438,8 +438,9 @@ working host data path yet):
   `memcpy_toio` stores) and acknowledges the AI accesses the driver polls. The
   node is EVK-disabled, so `tests/spdif/` boots a patched dtb that enables it +
   adds the card, stages the firmware + ASoC stack, and forces a runtime-PM
-  resume to drive the firmware load and PHY bring-up. The SPDIF TX-FIFO playback
-  drain is an opt-in follow-on (`SPDIF_PLAYBACK=1`).
+  resume to drive the firmware load and PHY bring-up, then plays a stream:
+  the eDMA-paced TX FIFO drains over the 64-bit-TCD edma2 and the samples reach
+  the audio backend (full writei + drain).
 - **I3C — functional.** Both Silvaco I3C masters (`hw/i3c/svc_i3c.c`,
   `silvaco,i3c-master-v1`; `i3c1@44330000`, `i3c2@42520000`) are real
   controllers: the `svc-i3c-master` driver drives `MCTRL`/`MSTATUS`/`MWDATAB`/
