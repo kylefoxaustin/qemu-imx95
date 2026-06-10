@@ -203,6 +203,27 @@ static void imx95_pcie_root_config_write(PCIDevice *d, uint32_t address,
         break;
     default:
         pci_bridge_write_config(d, address, val, len);
+        /*
+         * The DWC RC root port always bridges downstream: it decodes/forwards
+         * memory + I/O (so the CPU reaches the endpoint BARs) and forwards
+         * upstream bus-master DMA (so the endpoint can reach guest memory + the
+         * MSI doorbell). Linux only sets the root-port COMMAND when its port
+         * driver enables it, which may not happen here - leaving MEM/IO/MASTER
+         * clear, so the bridge neither forwards the BARs (CPU faults on BAR
+         * MMIO) nor the device DMA (the virtqueue stalls). Keep all three
+         * asserted and re-run the bridge window update so the forwarding
+         * apertures are always present.
+         */
+        if (ranges_overlap(address, len, PCI_COMMAND, 2)) {
+            uint16_t cmd = pci_get_word(d->config + PCI_COMMAND);
+            uint16_t want = cmd | PCI_COMMAND_MEMORY | PCI_COMMAND_IO |
+                            PCI_COMMAND_MASTER;
+
+            if (cmd != want) {
+                pci_set_word(d->config + PCI_COMMAND, want);
+                pci_bridge_update_mappings(PCI_BRIDGE(d));
+            }
+        }
         break;
     }
 }
@@ -471,8 +492,15 @@ static void imx95_pcie_root_realize(PCIDevice *dev, Error **errp)
         name = g_strdup_printf("imx95-pcie inbound %zu", i);
         memory_region_init_alias(mem, OBJECT(root), name, host_mem,
                                  dummy_offset, dummy_size);
+        /*
+         * Higher priority than the PCI memory window (added at the default
+         * priority 0 in host_realize): the device's DMA must reach guest RAM
+         * and the ITS MSI doorbell through this inbound (PCI -> CPU) window, so
+         * it has to win over the full-range PCI-mem region that would otherwise
+         * absorb (and drop) every upstream access.
+         */
         memory_region_add_subregion_overlap(&host->pci.address_space_root,
-                                             dummy_offset, mem, -1);
+                                             dummy_offset, mem, 1);
         memory_region_set_enabled(mem, false);
         g_free(name);
 
@@ -516,6 +544,23 @@ static const char *imx95_pcie_root_bus_path(PCIHostState *host_bridge,
     return "0000:00";
 }
 
+/*
+ * Route every downstream device's DMA through the RC's own address space (which
+ * carries the inbound iATU windows -> guest memory + the MSI doorbell), like
+ * designware.c. Without this the device DMAs into the bare PCI-memory window
+ * and never reaches RAM, so the virtqueue stalls.
+ */
+static AddressSpace *imx95_pcie_dma_iommu(PCIBus *bus, void *opaque, int devfn)
+{
+    IMX95PCIEHost *host = opaque;
+
+    return &host->pci.address_space;
+}
+
+static const PCIIOMMUOps imx95_pcie_iommu_ops = {
+    .get_address_space = imx95_pcie_dma_iommu,
+};
+
 static void imx95_pcie_host_realize(DeviceState *dev, Error **errp)
 {
     PCIHostState *pci = PCI_HOST_BRIDGE(dev);
@@ -554,6 +599,7 @@ static void imx95_pcie_host_realize(DeviceState *dev, Error **errp)
                                 &s->pci.memory);
     address_space_init(&s->pci.address_space, &s->pci.address_space_root,
                        "imx95-pcie-dma");
+    pci_setup_iommu(pci->bus, &imx95_pcie_iommu_ops, s);
 
     qdev_realize(DEVICE(&s->root), BUS(pci->bus), &error_fatal);
 }
