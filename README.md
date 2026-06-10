@@ -407,8 +407,8 @@ working host data path yet):
   DPU pixel link, the panel init completes (no MCS failure), and `card0-DSI-1`
   reports **connected** with a 1080×1920 mode — the same DRM scanout the LVDS
   boot-logo path uses, here over DSI.
-- **Camera (MIPI CSI-2 → ISI) — brings up.** The camera capture pipeline comes
-  up end to end through the V4L2 media graph. The ISI capture engine
+- **Camera (MIPI CSI-2 → ISI) — functional (capture).** A V4L2 client captures
+  frames end to end through the media graph. The ISI capture engine
   (`isi@4ad50000`, `fsl,imx95-isi`, `hw/display/imx95_isi.c`) registers all
   eight `mxc_isi.N.capture` `/dev/video` nodes and, on a channel's `CHNL_EN`,
   DMAs a synthesised moving test pattern into the capture buffers (raising the
@@ -417,10 +417,14 @@ working host data path yet):
   read) lets the `ov5640` driver register its subdev. The MIPI CSI-2 receivers +
   combo D-PHY are readable stubs (the dwc-mipi-csi2 stop-state poll passes on a
   0 read). `tests/camera/` applies an ov5640 overlay (`fdtoverlay` onto the base
-  dtb's symbols) and confirms the whole graph binds — `ov5640 → csi → formatter
-  → crossbar → ISI`, all subdevs + capture nodes present, no abort. The final
-  STREAMON/DQBUF frame capture additionally needs the imx8-isi crossbar's
-  per-stream media-ctl format recipe (a follow-on).
+  dtb's symbols), then a cross-built V4L2 client (`v4l2_cap.c`) sets up the
+  streams-API pipeline — `ov5640 → csi → formatter → crossbar → ISI` — and
+  `REQBUFS`/`STREAMON`/`DQBUF`s five frames off `/dev/video0`, asserting the
+  ISI's moving test pattern lands in the MMAP'd buffers. (Getting `STREAMON` to
+  validate hinged on propagating the sensor's exact `UYVY8_1X16` MIPI code along
+  the crossbar's connected sink; the client carries a userspace `link_validate`
+  oracle that pins any per-link format mismatch, since the kernel logs it only
+  at the invisible `dev_dbg` level.)
 - **Extra SAIs (sai2/4/5) — bring up.** The EVK wires only sai1 + sai3 (above);
   `sai2@4c880000`, `sai4@42660000` and `sai5@42670000` are EVK-disabled. The
   machine now instantiates all five (same `fsl,imx95-sai` IP), so a patched dtb
@@ -524,7 +528,7 @@ remains is forward-looking:
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera capture** | MIPI CSI + ISI/ISP as a V4L2 source — gated on the ap1302 firmware-loading ISP (no parallel-sensor shortcut on the 95) | after display |
+| **Camera ISP** | The ap1302 firmware-loading ISP front end (basic **MIPI CSI-2 → ISI V4L2 capture is now functional** via the ov5640 sensor — `STREAMON`/`DQBUF` real frames; the ISP's on-chip image processing is what remains) | after display |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
