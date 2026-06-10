@@ -69,6 +69,15 @@ struct IMX95PCIEHost {
 
     IMX95PCIERoot root;
 
+    /*
+     * Secondary-bus name (for -device ...,bus=) and PCI domain. Both are
+     * properties so the SoC can instantiate two independent controllers
+     * (pcie0 / pcie1) without their bus names or root-bus paths colliding.
+     */
+    char *bus_name;
+    uint32_t domain_nr;
+    char root_path[16];     /* "%04x:00", filled at realize from domain_nr */
+
     struct {
         AddressSpace address_space;
         MemoryRegion address_space_root;

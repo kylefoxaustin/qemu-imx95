@@ -440,17 +440,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             /* usb3 dwc3 core (0x4c100000) is a real usb_dwc3 model below. */
             { 0x4c1f0000, 64 * KiB }, /* usb3 phy */
             /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
-            /* pcie0 (dbi/app/atu @0x4c3x) is a real imx95.pcie host below. */
-            { 0x4c380000, 64 * KiB }, /* pcie1 dbi */
-            /*
-             * PCIe1's "app" + "atu" windows (dtsi reg-names). The imx_pcie
-             * driver maps "app" as its iomuxc_gpr; if the window is unbacked
-             * the async probe worker takes a synchronous external abort and
-             * dies, so wait_for_device_probe() hangs. Backing them (read-0)
-             * lets pcie1's probe fail fast (PHY PLL never locks -> timeout)
-             * until it too gets a real host. (pcie0 is real, above.)
-             */
-            { 0x4c3c0000, 0x4000 }, { 0x4c3e0000, 64 * KiB }, /* pcie1 app/atu*/
+            /* pcie0/pcie1 (dbi/app/atu @0x4c3x) are real imx95.pcie hosts. */
             { 0x4c410000, 64 * KiB }, /* syscon */
             { 0x4c480000, 0x40000 },  /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
@@ -2535,26 +2525,44 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     qemu_add_machine_init_done_notifier(&s->m33_machine_done);
 
     /*
-     * PCIe Root Complex 0 (pcie@4c300000, "fsl,imx95-pcie"). A from-scratch
+     * PCIe Root Complexes 0 and 1 ("fsl,imx95-pcie"). A from-scratch
      * DesignWare RC (hw/pci-host/imx95_pcie.c) with the unrolled iATU and the
      * "app" SERDES/GPR glue, so the imx95 dwc-core driver brings the link up
-     * and enumerates an endpoint. Three register regions: dbi (0x4c300000),
-     * unrolled iATU (0x4c360000), "app" glue (0x4c340000). INTx -> GIC SPI
-     * 306..309; MSI rides the GICv3 ITS (the dtb msi-map targets &its).
+     * and enumerates an endpoint. Each has three register regions: dbi,
+     * unrolled iATU, "app" glue. INTx -> GIC SPI (pcie0 306..309 domain 0,
+     * pcie1 312..315 domain 1); MSI rides the GICv3 ITS (the dtb msi-map
+     * targets &its). The two instances carry distinct bus-name / domain-nr so
+     * their secondary buses (imx95-pcie / imx95-pcie1) and root-bus paths do
+     * not collide.
      */
     {
-        DeviceState *pcie = qdev_new(TYPE_IMX95_PCIE_HOST);
-        SysBusDevice *psbd = SYS_BUS_DEVICE(pcie);
-        int pin;
+        static const struct {
+            hwaddr dbi, atu, app;
+            int irq_base;
+            const char *bus_name;
+            uint32_t domain;
+        } pcie_cfg[] = {
+            { 0x4c300000, 0x4c360000, 0x4c340000, 306, "imx95-pcie",  0 },
+            { 0x4c380000, 0x4c3e0000, 0x4c3c0000, 312, "imx95-pcie1", 1 },
+        };
+        int n, pin;
 
-        if (!sysbus_realize_and_unref(psbd, errp)) {
-            return;
-        }
-        sysbus_mmio_map(psbd, 0, 0x4c300000);   /* dbi */
-        sysbus_mmio_map(psbd, 1, 0x4c360000);   /* unrolled iATU */
-        sysbus_mmio_map(psbd, 2, 0x4c340000);   /* "app" glue */
-        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
-            sysbus_connect_irq(psbd, pin, qdev_get_gpio_in(gicdev, 306 + pin));
+        for (n = 0; n < ARRAY_SIZE(pcie_cfg); n++) {
+            DeviceState *pcie = qdev_new(TYPE_IMX95_PCIE_HOST);
+            SysBusDevice *psbd = SYS_BUS_DEVICE(pcie);
+
+            qdev_prop_set_string(pcie, "bus-name", pcie_cfg[n].bus_name);
+            qdev_prop_set_uint32(pcie, "domain-nr", pcie_cfg[n].domain);
+            if (!sysbus_realize_and_unref(psbd, errp)) {
+                return;
+            }
+            sysbus_mmio_map(psbd, 0, pcie_cfg[n].dbi);   /* dbi */
+            sysbus_mmio_map(psbd, 1, pcie_cfg[n].atu);   /* unrolled iATU */
+            sysbus_mmio_map(psbd, 2, pcie_cfg[n].app);   /* "app" glue */
+            for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+                sysbus_connect_irq(psbd, pin,
+                    qdev_get_gpio_in(gicdev, pcie_cfg[n].irq_base + pin));
+            }
         }
     }
 

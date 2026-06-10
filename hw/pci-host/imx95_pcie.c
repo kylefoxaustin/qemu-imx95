@@ -470,7 +470,7 @@ static void imx95_pcie_root_realize(PCIDevice *dev, Error **errp)
     const uint64_t dummy_size = 4;
     size_t i;
 
-    br->bus_name = "imx95-pcie";
+    br->bus_name = host->bus_name ? host->bus_name : (char *)"imx95-pcie";
     pci_set_word(dev->config + PCI_COMMAND,
                  PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
     pci_config_set_interrupt_pin(dev->config, 1);
@@ -541,7 +541,9 @@ static void imx95_pcie_set_irq(void *opaque, int irq_num, int level)
 static const char *imx95_pcie_root_bus_path(PCIHostState *host_bridge,
                                             PCIBus *rootbus)
 {
-    return "0000:00";
+    IMX95PCIEHost *s = IMX95_PCIE_HOST(host_bridge);
+
+    return s->root_path;
 }
 
 /*
@@ -567,6 +569,8 @@ static void imx95_pcie_host_realize(DeviceState *dev, Error **errp)
     IMX95PCIEHost *s = IMX95_PCIE_HOST(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
     size_t i;
+
+    snprintf(s->root_path, sizeof(s->root_path), "%04x:00", s->domain_nr);
 
     for (i = 0; i < ARRAY_SIZE(s->pci.irqs); i++) {
         sysbus_init_irq(sbd, &s->pci.irqs[i]);
@@ -636,6 +640,11 @@ static void imx95_pcie_root_class_init(ObjectClass *klass, const void *data)
     dc->user_creatable = false;
 }
 
+static const Property imx95_pcie_host_props[] = {
+    DEFINE_PROP_STRING("bus-name", IMX95PCIEHost, bus_name),
+    DEFINE_PROP_UINT32("domain-nr", IMX95PCIEHost, domain_nr, 0),
+};
+
 static void imx95_pcie_host_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -644,6 +653,7 @@ static void imx95_pcie_host_class_init(ObjectClass *klass, const void *data)
     hc->root_bus_path = imx95_pcie_root_bus_path;
     dc->realize = imx95_pcie_host_realize;
     dc->fw_name = "pci";
+    device_class_set_props(dc, imx95_pcie_host_props);
 }
 
 static const TypeInfo imx95_pcie_types[] = {
