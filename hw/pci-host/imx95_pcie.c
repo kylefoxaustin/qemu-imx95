@@ -65,6 +65,21 @@
 #define APP_PHY_MPLL_STATE              BIT(30)     /* PLL locked (read-only) */
 #define APP_PE0_GEN_CTRL_3              0x1058
 #define APP_PCIE_LTSSM_EN               BIT(0)
+/*
+ * Requester-ID -> stream-ID LUT (used for MSI/SMMU). The driver adds one entry
+ * per enumerated requester-ID: it arms an index by writing ACSCTRL (low 5 bits
+ * = index, RWA bit just selects read mode), reads DATA1 and skips the entry if
+ * VLD (BIT31) is set, else fills DATA1/DATA2 and commits with ACSCTRL=index.
+ * A flat register window makes every index read back the last DATA1 written
+ * (VLD set), so the driver sees the whole 32-entry table as used after the
+ * first device and bails ("All lut already used") - leaving every endpoint
+ * without a stream-ID, so no MSI and no driver binds. Model it as an indexed
+ * table: ACSCTRL latches the index, DATA1/DATA2 read/write that entry.
+ */
+#define APP_PE0_LUT_ACSCTRL             0x1008
+#define APP_PE0_LUT_ENLOC              0x1f        /* index, bits [4:0] */
+#define APP_PE0_LUT_DATA1               0x100c
+#define APP_PE0_LUT_DATA2               0x1010
 
 /* Unrolled iATU region register offsets (within a (dir,index) sub-block). */
 #define ATU_UNR_REGION_CTRL1            0x00
@@ -383,6 +398,13 @@ static uint64_t imx95_pcie_glue_read(void *opaque, hwaddr offset, unsigned size)
     if (offset == APP_PHY_MPLLA_CTRL) {
         val |= APP_PHY_MPLL_STATE;      /* PHY PLL is always locked here */
     }
+    /* LUT data registers read the currently-latched entry. */
+    if (offset == APP_PE0_LUT_DATA1) {
+        return host->lut_data1[host->lut_index];
+    }
+    if (offset == APP_PE0_LUT_DATA2) {
+        return host->lut_data2[host->lut_index];
+    }
     return val;
 }
 
@@ -397,6 +419,14 @@ static void imx95_pcie_glue_write(void *opaque, hwaddr offset, uint64_t val,
     }
     if (offset == APP_PE0_GEN_CTRL_3) {
         host->ltssm_en = !!(val & APP_PCIE_LTSSM_EN);
+    }
+    /* LUT: ACSCTRL latches the index; DATA1/DATA2 fill the latched entry. */
+    if (offset == APP_PE0_LUT_ACSCTRL) {
+        host->lut_index = val & APP_PE0_LUT_ENLOC;
+    } else if (offset == APP_PE0_LUT_DATA1) {
+        host->lut_data1[host->lut_index] = val;
+    } else if (offset == APP_PE0_LUT_DATA2) {
+        host->lut_data2[host->lut_index] = val;
     }
 }
 

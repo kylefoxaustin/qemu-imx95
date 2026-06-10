@@ -62,6 +62,7 @@ struct IMX95PCIERoot {
 };
 
 #define IMX95_PCIE_GLUE_REGS  (0x4000 / 4)  /* "app" SERDES/GPR window */
+#define IMX95_PCIE_LUT_ENTRIES  32          /* requester-ID -> stream-ID LUT */
 
 struct IMX95PCIEHost {
     PCIHostState parent_obj;
@@ -82,6 +83,11 @@ struct IMX95PCIEHost {
 
     uint32_t glue_regs[IMX95_PCIE_GLUE_REGS];
     bool ltssm_en;          /* gates the dbi link-up bit              */
+
+    /* Requester-ID -> stream-ID LUT (ACSCTRL latches the index). */
+    uint32_t lut_data1[IMX95_PCIE_LUT_ENTRIES];
+    uint32_t lut_data2[IMX95_PCIE_LUT_ENTRIES];
+    uint32_t lut_index;
 };
 
 #endif /* IMX95_PCIE_H */
