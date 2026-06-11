@@ -434,6 +434,20 @@ working host data path yet):
   the crossbar's connected sink; the client carries a userspace `link_validate`
   oracle that pins any per-link format mismatch, since the kernel logs it only
   at the invisible `dev_dbg` level.)
+- **NeoISP (camera image signal processor) — brings up.** The i.MX95 ISP
+  (`isp@4ae00000`, `nxp,imx95-b0-neoisp`) is a register-driven V4L2 mem2mem
+  device — debayer / tone / colour pipeline — with two MMIO windows
+  (`registers` @0x4ae00000, `stats` @0x4afe0000) the `neoisp` driver programs
+  directly (no firmware/remoteproc; the separate `nxp,imx95-isp-rproc` accelerator
+  is a different path). The EVK leaves it `status=disabled`; with it enabled the
+  driver binds end to end — ioremaps both windows, builds its regmap, runs the
+  soft-reset handshake, takes the camera power domain + cameramix clocks, requests
+  IRQ 222, and registers its **eight node-groups** of V4L2 nodes
+  (`neoisp-input0/input1/params/frame/ir/stats` each, 48 `/dev/video` nodes) plus
+  the per-group media devices, no external abort (`tests/neoisp/`). The two MMIO
+  windows are already backed by the machine, so this needs no model change. As
+  with the JPEG/Neutron blocks, the proprietary per-pixel ISP compute is the
+  fidelity ceiling; this is the registration bring-up.
 - **Extra SAIs (sai2/4/5) — bring up.** The EVK wires only sai1 + sai3 (above);
   `sai2@4c880000`, `sai4@42660000` and `sai5@42670000` are EVK-disabled. The
   machine now instantiates all five (same `fsl,imx95-sai` IP), so a patched dtb
