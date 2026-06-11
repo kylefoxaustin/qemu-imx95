@@ -197,12 +197,15 @@ chmod +x "$ROOTFS/init"
 need INITRD "$INITRD" "built initramfs"
 
 # --- Launch the daemonized full-device-set guest. -----------------------------
+# usb-kbd is pinned to usb-bus.0 (the ChipIdea USB2 host); a bare -device usb-kbd
+# lands on usb-bus.1 (the DWC3 xHCI), whose roothub does not enumerate cold-plug
+# devices, so the HID never appears in the guest.
 "$QEMU" -M imx95-19x19-evk -m 2G -vnc "$VNC" \
     -kernel "$KERNEL" -dtb "$DTB_PATCHED" -initrd "$INITRD" \
     -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
     -device loader,file="$SM_ELF",cpu-num=6 \
     -device loader,file="$CM7_ELF",cpu-num=7 \
-    -device usb-kbd \
+    -device usb-kbd,bus=usb-bus.0 \
     -nic user -nic user -nic user \
     -serial file:"$SERIAL" -serial null \
     -monitor unix:"$SOCK",server,nowait \
