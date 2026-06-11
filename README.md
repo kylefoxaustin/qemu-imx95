@@ -448,6 +448,20 @@ working host data path yet):
   windows are already backed by the machine, so this needs no model change. As
   with the JPEG/Neutron blocks, the proprietary per-pixel ISP compute is the
   fidelity ceiling; this is the registration bring-up.
+- **OCOTP eFuse + EdgeLock secure-enclave — brings up.** The fuse driver
+  (`fsl-ocotp-fsb-s400`, `efuse@47510000`) reads the SoC's one-time-programmable
+  fuses — partly from the FSB shadow, partly through the **EdgeLock secure-enclave
+  (ELE / "S400") firmware service** — so it only binds once the Linux `fsl-se`
+  HSM interface (`secure-enclave-0`, on `elemu3`) has probed. Both are now up:
+  the ELE message **responder** (`hw/misc/imx95_ele_server.c`) answers the
+  driver's `GET_INFO` / `GET_STATE` / `READ_FUSE` commands, and `elemu3`'s RX
+  interrupt (GIC SPI 24) is delivered so the IRQ-driven `fsl-se` driver wakes
+  (unlike U-Boot, which polls). The HSM secure-enclave configures, the efuse
+  nvmem device (`fsb_s400_fuse0`) registers, and the `eth_mac0/1/2` cells read
+  back real NXP-OUI MAC addresses seeded into the FSB shadow (`tests/ocotp/`).
+  The closed ELE firmware is **not executed** — the responder fakes the message
+  protocol, which is fine because fuse reads are plain data (no keys); the
+  enclave's crypto / secure-boot services stay out of scope.
 - **Extra SAIs (sai2/4/5) — bring up.** The EVK wires only sai1 + sai3 (above);
   `sai2@4c880000`, `sai4@42660000` and `sai5@42670000` are EVK-disabled. The
   machine now instantiates all five (same `fsl,imx95-sai` IP), so a patched dtb
