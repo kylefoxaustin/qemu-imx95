@@ -139,6 +139,44 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
 }
 
 /*
+ * ELE_GET_STATE (0xB2) handler.
+ *
+ * The Linux fsl-se HSM probe reads the firmware/IMEM state. The driver
+ * validates a 4-word (0x10-byte) response and takes state = data[1] & 0xff;
+ * report ELE_IMEM_STATE_OK (0xCA) so it neither reloads nor faults the IMEM.
+ * Response: header(size 4) + status + state + reserved.
+ */
+#define ELE_GET_STATE       0xB2
+#define ELE_IMEM_STATE_OK   0xCA
+static void ele_handle_get_state(IMX95ELEServerState *s, uint8_t command)
+{
+    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 4, command, ELE_RESP_TAG);
+    imx_mu_deliver_rr(s->mu, 0, resp_hdr);
+    imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
+    imx_mu_deliver_rr(s->mu, 2, ELE_IMEM_STATE_OK);
+    imx_mu_deliver_rr(s->mu, 3, 0);
+}
+
+/*
+ * ELE_READ_FUSE (0x97) handler.
+ *
+ * The OCOTP/efuse driver reads the fuse banks that are not in the FSB shadow
+ * via this SE service (read_words_via_s400_api). The driver validates a 3-word
+ * (0x0C-byte) response and takes the fuse word from data[1]; those S400-served
+ * banks are not modelled, so report 0 with a success status (the MAC and most
+ * fuses come from the readable FSB shadow region instead).
+ * Response: header(size 3) + status + fuse value.
+ */
+#define ELE_READ_FUSE_REQ   0x97
+static void ele_handle_read_fuse(IMX95ELEServerState *s, uint8_t command)
+{
+    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 3, command, ELE_RESP_TAG);
+    imx_mu_deliver_rr(s->mu, 0, resp_hdr);
+    imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
+    imx_mu_deliver_rr(s->mu, 2, 0);
+}
+
+/*
  * Generic SUCCESS response for any command we do not specifically
  * handle. 2-word response: header + ELE_SUCCESS_IND.
  */
@@ -163,6 +201,12 @@ static void ele_dispatch(IMX95ELEServerState *s)
     switch (command) {
     case ELE_GET_INFO_REQ:
         ele_handle_get_info(s);
+        return;
+    case ELE_GET_STATE:
+        ele_handle_get_state(s, command);
+        return;
+    case ELE_READ_FUSE_REQ:
+        ele_handle_read_fuse(s, command);
         return;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,

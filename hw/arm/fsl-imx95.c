@@ -1237,6 +1237,21 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                            fsl_imx95_memmap[FSL_IMX95_FSB].size, &error_fatal);
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_FSB].addr, &s->fsb);
+    /*
+     * Seed three NXP-OUI MAC addresses into the FSB OTP shadow so the
+     * fsl-ocotp-fsb-s400 nvmem cells (eth_mac0/1/2 at fuse byte offsets
+     * 0x514/0x1514/0x2514) read real values instead of all-zero. The driver
+     * reads the shadow at efuse_base + fsb_otp_shadow (0x8000), so the cell
+     * at offset N lives at FSB region offset 0x8000 + N.
+     */
+    {
+        uint8_t *fsb = memory_region_get_ram_ptr(&s->fsb);
+        static const unsigned mac_off[] = { 0x514, 0x1514, 0x2514 };
+        for (i = 0; i < ARRAY_SIZE(mac_off); i++) {
+            uint8_t mac[6] = { 0x00, 0x04, 0x9f, 0x95, 0x00, (uint8_t)i };
+            memcpy(fsb + 0x8000 + mac_off[i], mac, sizeof(mac));
+        }
+    }
 
     /*
      * VFCCU (fault collection/control) as RAM. The SM's eMcem_Vfccu_InitCVfccu
@@ -1427,6 +1442,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server2), errp)) {
         return;
     }
+    /*
+     * Wire elemu3's receive IRQ (GIC SPI 24) to the GIC. Unlike U-Boot,
+     * which polls RSR, the Linux fsl-se (EdgeLock secure-enclave) driver is
+     * IRQ-driven: it sends ELE_GET_INFO and waits for the MU RX interrupt.
+     * Without the line the responder's reply lands in RR but the HSM probe
+     * (secure-enclave-0) never wakes -> "failed[-ETIMEDOUT] to fetch SoC
+     * Info" -> the whole se -> OCOTP/efuse chain defers. (Same lesson as the
+     * LPI2C master: a real Linux MU consumer needs the IRQ, not just RR.)
+     */
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->stub_mu[3]), 0,
+                       qdev_get_gpio_in(gicdev, 24));
 
     /*
      * Watchdog 3 (the Wakeup-domain wdog the kernel sees). U-Boot SPL
