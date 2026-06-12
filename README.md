@@ -434,6 +434,19 @@ working host data path yet):
   the crossbar's connected sink; the client carries a userspace `link_validate`
   oracle that pins any per-link format mismatch, since the kernel logs it only
   at the invisible `dev_dbg` level.)
+- **Virtual camera (host-frame source) — functional.** The ISI can scan **real
+  host images** out of the capture pipeline in place of the synthetic test
+  pattern, turning the model into a sensorless camera that feeds a fixed frame
+  sequence to a vision pipeline. A `frames` string property on `imx95.isi`
+  (`-global driver=imx95.isi,property=frames,value=<path>`) points at a
+  directory of `*.raw` frames (lexically sorted) or a single file of
+  back-to-back raw frames; each tick the active channel reads the next frame
+  straight from the host (whole-frame reads) and DMAs it out at the channel's
+  pitch, looping. An undersized frame falls back to the gradient, so the
+  capture geometry must match. `tests/virtual-camera/` feeds a known host frame
+  through the same `ov5640` + V4L2 `STREAMON`/`DQBUF` path and asserts the
+  `DQBUF`'d bytes are the host image, not the gradient — byte-for-byte through
+  the ISI DMA.
 - **NeoISP (camera image signal processor) — brings up.** The i.MX95 ISP
   (`isp@4ae00000`, `nxp,imx95-b0-neoisp`) is a register-driven V4L2 mem2mem
   device — debayer / tone / colour pipeline — with two MMIO windows
