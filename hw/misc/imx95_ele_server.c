@@ -132,7 +132,7 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
                      MEMTXATTRS_UNSPECIFIED);
 
     /* Response: header + status. */
-    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 2,
+    uint32_t resp_hdr = ele_make_header(ELE_HDR_VERSION(s->msg_buf[0]), 2,
                                         ELE_GET_INFO_REQ, ELE_RESP_TAG);
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
@@ -150,7 +150,9 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
 #define ELE_IMEM_STATE_OK   0xCA
 static void ele_handle_get_state(IMX95ELEServerState *s, uint8_t command)
 {
-    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 4, command, ELE_RESP_TAG);
+    uint8_t ver = ELE_HDR_VERSION(s->msg_buf[0]);
+    uint32_t resp_hdr = ele_make_header(ver, 4, command, ELE_RESP_TAG);
+
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
     imx_mu_deliver_rr(s->mu, 2, ELE_IMEM_STATE_OK);
@@ -170,10 +172,80 @@ static void ele_handle_get_state(IMX95ELEServerState *s, uint8_t command)
 #define ELE_READ_FUSE_REQ   0x97
 static void ele_handle_read_fuse(IMX95ELEServerState *s, uint8_t command)
 {
-    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 3, command, ELE_RESP_TAG);
+    uint8_t ver = ELE_HDR_VERSION(s->msg_buf[0]);
+    uint32_t resp_hdr = ele_make_header(ver, 3, command, ELE_RESP_TAG);
+
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
     imx_mu_deliver_rr(s->mu, 2, 0);
+}
+
+/*
+ * ELE_GET_FW_VERSION (0x9D) handler.
+ *
+ * A FW-API command (so the driver wants the FW API version in the response
+ * header - the version is echoed from the request, see ele_dispatch). The
+ * driver validates a 4-word (0x10-byte) response; report a plausible ELE FW
+ * version so "fetch FW version" succeeds instead of warning at probe.
+ * Response: header(size 4) + status + fw version + reserved.
+ */
+#define ELE_GET_FW_VERSION_REQ  0x9D
+static void ele_handle_get_fw_version(IMX95ELEServerState *s, uint8_t command)
+{
+    uint8_t ver = ELE_HDR_VERSION(s->msg_buf[0]);
+    uint32_t resp_hdr = ele_make_header(ver, 4, command, ELE_RESP_TAG);
+
+    imx_mu_deliver_rr(s->mu, 0, resp_hdr);
+    imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
+    imx_mu_deliver_rr(s->mu, 2, 0x00010000);   /* ELE FW version (1.0.0) */
+    imx_mu_deliver_rr(s->mu, 3, 0);
+}
+
+/*
+ * ELE_GET_RANDOM (0xCD) handler.
+ *
+ * The hwrng driver polls this every few seconds; before the version echo it
+ * was the source of the "FW API Vers mismatch (0x6 != 0x7)" console storm.
+ * Request payload is struct ele_rng_msg_data { u16 rsv; u16 flags; u32 data[2] }
+ * after the header, so [1] = rsv|flags, [2] = destination DMA address, [3] =
+ * length. Fill the buffer with non-constant bytes (a model PRNG - NOT
+ * cryptographic) so /dev/hwrng yields varying data, then ack.
+ * Response: 2 words (header + status).
+ */
+#define ELE_GET_RANDOM_REQ  0xCD
+static void ele_handle_get_random(IMX95ELEServerState *s, uint8_t command)
+{
+    uint8_t ver = ELE_HDR_VERSION(s->msg_buf[0]);
+    uint32_t resp_hdr;
+
+    if (s->msg_count >= 4) {
+        static uint32_t st = 0x2545f491;   /* xorshift32 state (model only) */
+        uint64_t addr = s->msg_buf[2];
+        uint32_t len = s->msg_buf[3];
+        uint32_t off;
+
+        if (len > 4096) {
+            len = 4096;                     /* cap a runaway request */
+        }
+        for (off = 0; off < len; ) {
+            uint8_t chunk[64];
+            uint32_t n = MIN(sizeof(chunk), len - off), i;
+
+            for (i = 0; i < n; i++) {
+                st ^= st << 13;
+                st ^= st >> 17;
+                st ^= st << 5;
+                chunk[i] = (uint8_t)st;
+            }
+            dma_memory_write(&address_space_memory, addr + off, chunk, n,
+                             MEMTXATTRS_UNSPECIFIED);
+            off += n;
+        }
+    }
+
+    resp_hdr = ele_make_header(ver, 2, command, ELE_RESP_TAG);
+    imx_mu_deliver_rr(s->mu, 0, resp_hdr);
+    imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
 }
 
 /*
@@ -182,7 +254,7 @@ static void ele_handle_read_fuse(IMX95ELEServerState *s, uint8_t command)
  */
 static void ele_handle_generic_ok(IMX95ELEServerState *s, uint8_t command)
 {
-    uint32_t resp_hdr = ele_make_header(ELE_VERSION, 2,
+    uint32_t resp_hdr = ele_make_header(ELE_HDR_VERSION(s->msg_buf[0]), 2,
                                         command, ELE_RESP_TAG);
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
@@ -207,6 +279,12 @@ static void ele_dispatch(IMX95ELEServerState *s)
         return;
     case ELE_READ_FUSE_REQ:
         ele_handle_read_fuse(s, command);
+        return;
+    case ELE_GET_FW_VERSION_REQ:
+        ele_handle_get_fw_version(s, command);
+        return;
+    case ELE_GET_RANDOM_REQ:
+        ele_handle_get_random(s, command);
         return;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
