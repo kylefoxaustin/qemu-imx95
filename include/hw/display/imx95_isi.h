@@ -40,6 +40,20 @@ struct IMX95IsiState {
     qemu_irq     irq[IMX95_ISI_NUM_CHANNELS];
     uint32_t     regs[IMX95_ISI_NUM_REGS];
     IMX95IsiChan chan[IMX95_ISI_NUM_CHANNELS];
+
+    /*
+     * Optional "virtual camera" host frame source. When the "frames" property
+     * points at a directory of *.raw frames or a file of back-to-back raw
+     * frames, the active channel scans real host images out in place of the
+     * synthetic test pattern, cycling/looping (whole-frame host reads).
+     */
+    char    *frames_path;
+    char   **frame_files;
+    int      n_frame_files;
+    int      frame_index;
+    FILE    *frame_fp;
+    uint8_t *frame_buf;
+    size_t   frame_buf_size;
 };
 
 #endif /* HW_DISPLAY_IMX95_ISI_H */

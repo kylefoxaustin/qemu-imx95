@@ -23,10 +23,13 @@
 #include "qemu/osdep.h"
 #include "hw/display/imx95_isi.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "system/address-spaces.h"
 #include "system/dma.h"
 #include "qemu/timer.h"
+#include "qapi/error.h"
 #include "migration/vmstate.h"
+#include <glob.h>
 
 /* Per-channel register offsets (within a channel's 0x10000 block). */
 #define CHNL_CTRL               0x0000
@@ -81,6 +84,96 @@ static uint64_t imx95_isi_buf_addr(IMX95IsiState *s, int ch, bool buf2)
     return ((uint64_t)(hi & 0xf) << 32) | lo;
 }
 
+static int imx95_isi_pathcmp(const void *a, const void *b)
+{
+    return strcmp(*(const char * const *)a, *(const char * const *)b);
+}
+
+/*
+ * Host frame source ("virtual camera"). The "frames" property points at either
+ * a single file of back-to-back raw frames or a directory of *.raw frames; open
+ * it and, for a directory, build a sorted list. Returns true if configured.
+ */
+static bool imx95_isi_frames_open(IMX95IsiState *s, Error **errp)
+{
+    struct stat st;
+
+    if (!s->frames_path) {
+        return false;
+    }
+    if (stat(s->frames_path, &st) != 0) {
+        error_setg_errno(errp, errno, "ISI: cannot stat frames path '%s'",
+                         s->frames_path);
+        return false;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        g_autofree char *pat =
+            g_strdup_printf("%s/%s", s->frames_path, "*.raw");
+        glob_t gl;
+        int i;
+
+        if (glob(pat, GLOB_NOSORT, NULL, &gl) != 0 || gl.gl_pathc == 0) {
+            globfree(&gl);
+            error_setg(errp, "ISI: no *.raw frames in directory '%s'",
+                       s->frames_path);
+            return false;
+        }
+        s->n_frame_files = gl.gl_pathc;
+        s->frame_files = g_new0(char *, s->n_frame_files);
+        for (i = 0; i < s->n_frame_files; i++) {
+            s->frame_files[i] = g_strdup(gl.gl_pathv[i]);
+        }
+        globfree(&gl);
+        /* deterministic frame order (sorted by name) */
+        qsort(s->frame_files, s->n_frame_files, sizeof(char *),
+              imx95_isi_pathcmp);
+    } else {
+        s->frame_fp = fopen(s->frames_path, "rb");
+        if (!s->frame_fp) {
+            error_setg_errno(errp, errno, "ISI: cannot open frames file '%s'",
+                             s->frames_path);
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Read the next frame (fsz bytes) from the host source into frame_buf, cycling
+ * through the sequence and looping at the end. Returns true on success.
+ */
+static bool imx95_isi_next_frame(IMX95IsiState *s, size_t fsz)
+{
+    if (s->frame_buf_size != fsz) {
+        s->frame_buf = g_realloc(s->frame_buf, fsz);
+        s->frame_buf_size = fsz;
+    }
+
+    if (s->n_frame_files > 0) {                 /* directory of frame files */
+        const char *path = s->frame_files[s->frame_index];
+        gsize len = 0;
+        g_autofree char *data = NULL;
+
+        s->frame_index = (s->frame_index + 1) % s->n_frame_files;
+        if (!g_file_get_contents(path, &data, &len, NULL) || len < fsz) {
+            return false;
+        }
+        memcpy(s->frame_buf, data, fsz);
+        return true;
+    }
+
+    if (s->frame_fp) {                          /* single multi-frame file */
+        size_t got = fread(s->frame_buf, 1, fsz, s->frame_fp);
+
+        if (got < fsz) {                        /* short read: loop to start */
+            rewind(s->frame_fp);
+            got += fread(s->frame_buf + got, 1, fsz - got, s->frame_fp);
+        }
+        return got == fsz;
+    }
+    return false;
+}
+
 /*
  * Generate one moving test-pattern frame into the ping-pong output buffer the
  * hardware would be filling, then raise the frame-stored interrupt.
@@ -110,14 +203,27 @@ static void imx95_isi_frame_tick(void *opaque)
         return;
     }
     if (buf && width && height && pitch) {
+        bool have_host_frame = false;
+
         bpp = pitch / width ? pitch / width : 4;
+        /* Virtual camera: pull the next real host frame, if a source is set. */
+        if (s->frames_path) {
+            have_host_frame =
+                imx95_isi_next_frame(s, (size_t)width * height * bpp);
+        }
         line = g_malloc((size_t)width * bpp);
         for (y = 0; y < height; y++) {
-            for (x = 0; x < width; x++) {
-                /* moving diagonal gradient so consecutive frames differ */
-                uint32_t v = (x + y + c->frame * 4) & 0xff;
-                uint32_t px = 0xff000000u | (v << 16) | (v << 8) | v;
-                memcpy(line + (size_t)x * bpp, &px, bpp < 4 ? bpp : 4);
+            if (have_host_frame) {
+                /* packed source row from the host-supplied frame */
+                memcpy(line, s->frame_buf + (size_t)y * width * bpp,
+                       (size_t)width * bpp);
+            } else {
+                for (x = 0; x < width; x++) {
+                    /* moving diagonal gradient so consecutive frames differ */
+                    uint32_t v = (x + y + c->frame * 4) & 0xff;
+                    uint32_t px = 0xff000000u | (v << 16) | (v << 8) | v;
+                    memcpy(line + (size_t)x * bpp, &px, bpp < 4 ? bpp : 4);
+                }
             }
             dma_memory_write(&address_space_memory, buf + (uint64_t)y * pitch,
                              line, (size_t)width * bpp, MEMTXATTRS_UNSPECIFIED);
@@ -204,7 +310,16 @@ static void imx95_isi_reset(DeviceState *dev)
         s->chan[i].frame = 0;
         qemu_set_irq(s->irq[i], 0);
     }
+    /* Restart the virtual-camera sequence from the first frame. */
+    s->frame_index = 0;
+    if (s->frame_fp) {
+        rewind(s->frame_fp);
+    }
 }
+
+static const Property imx95_isi_props[] = {
+    DEFINE_PROP_STRING("frames", IMX95IsiState, frames_path),
+};
 
 static void imx95_isi_init(Object *obj)
 {
@@ -231,6 +346,26 @@ static void imx95_isi_realize(DeviceState *dev, Error **errp)
                                               imx95_isi_frame_tick,
                                               &s->chan[i]);
     }
+
+    /* Open the host frame source if the "frames" property was given. */
+    if (!imx95_isi_frames_open(s, errp) && *errp) {
+        return;
+    }
+}
+
+static void imx95_isi_finalize(Object *obj)
+{
+    IMX95IsiState *s = IMX95_ISI(obj);
+    int i;
+
+    for (i = 0; i < s->n_frame_files; i++) {
+        g_free(s->frame_files[i]);
+    }
+    g_free(s->frame_files);
+    if (s->frame_fp) {
+        fclose(s->frame_fp);
+    }
+    g_free(s->frame_buf);
 }
 
 static const VMStateDescription vmstate_imx95_isi = {
@@ -251,6 +386,7 @@ static void imx95_isi_class_init(ObjectClass *oc, const void *data)
     dc->realize = imx95_isi_realize;
     device_class_set_legacy_reset(dc, imx95_isi_reset);
     dc->vmsd = &vmstate_imx95_isi;
+    device_class_set_props(dc, imx95_isi_props);
 }
 
 static const TypeInfo imx95_isi_types[] = {
@@ -259,6 +395,7 @@ static const TypeInfo imx95_isi_types[] = {
         .parent         = TYPE_SYS_BUS_DEVICE,
         .instance_size  = sizeof(IMX95IsiState),
         .instance_init  = imx95_isi_init,
+        .instance_finalize = imx95_isi_finalize,
         .class_init     = imx95_isi_class_init,
     },
 };
