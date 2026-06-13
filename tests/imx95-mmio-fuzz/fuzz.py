@@ -21,19 +21,49 @@ MACHINE = os.environ.get("MACHINE", "imx95-19x19-evk")
 SEED = int(os.environ.get("SEED", "1"))
 random.seed(SEED)
 
-# (base, size, name) - one instance per from-scratch device type (same handler
-# across instances, so fuzzing one covers the rest).
+# (base, size, name) - one instance per from-scratch device handler. Includes the
+# stateful/complex handlers (MUs, ELE, uSDHC, LPI2C, eDMA, CCM, BBNSM) where bugs
+# are most likely, not just the simple register files.
 WINDOWS = [
+    # timers / clocks / power / reset
     (0x44290000, 0x30000, "sysctr"),
     (0x44470000, 0x10000, "gpc"),
     (0x44480000, 0x10000, "anatop"),
     (0x44460000, 0x10000, "src"),
+    (0x44450000, 0x10000, "ccm"),
+    (0x44440000, 0x1000,  "bbnsm"),
     (0x444f0000, 0x10000, "aonmix(blk_ctrl_s)"),
+    (0x44210000, 0x10000, "blk_ctrl_ns_anomix"),
+    (0x42420000, 0x10000, "blk_ctrl_wakeupmix"),
+    (0x4c010000, 0x10000, "blk_ctrl_hsiomix"),
     (0x44400000, 0x800,   "xcache_pc"),
     (0x44400800, 0x800,   "xcache_ps"),
+    (0x442e0000, 0x10000, "wdog2"),
     (0x42490000, 0x10000, "wdog3"),
+    # mailboxes / secure enclave (stateful)
+    (0x445b0000, 0x1000,  "sm_mu"),
+    (0x44610000, 0x10000, "m7_sm_mu"),
+    (0x47320000, 0x10000, "mu@47320000"),
+    (0x47350000, 0x10000, "mu@47350000"),
+    (0x47540000, 0x10000, "mu@47540000"),
+    (0x47550000, 0x10000, "mu@47550000"),
+    (0x47520000, 0x10000, "elemu0"),
+    (0x47530000, 0x10000, "elemu1"),
+    # serial / bus / storage controllers (stateful)
     (0x44380000, 0x1000,  "lpuart1"),
+    (0x42530000, 0x10000, "lpi2c1"),
+    (0x44340000, 0x10000, "lpi2c7"),
+    (0x42850000, 0x10000, "usdhc1"),
+    (0x44360000, 0x10000, "lpspi1"),
+    (0x4c200000, 0x1000,  "usb2(chipidea)"),
+    # DMA engines
+    (0x44000000, 0x10000, "edma1"),
+    (0x42000000, 0x10000, "edma2"),
+    (0x42210000, 0x10000, "edma3"),
+    # GPIO
     (0x47400000, 0x10000, "gpio1"),
+    (0x43820000, 0x10000, "gpio3"),
+    # display / media / accelerators
     (0x4b0b0000, 0x10000, "irqsteer"),
     (0x4b400000, 0x100000,"dpu"),
     (0x4ad50000, 0x80000, "isi"),
@@ -42,22 +72,23 @@ WINDOWS = [
     (0x4e090dc0, 0x1000,  "ddr_pmu"),
     (0x4c500000, 0x10000, "jpegdec"),
     (0x4c550000, 0x10000, "jpegenc"),
-    (0x44360000, 0x10000, "lpspi1"),
+    # audio
     (0x443b0000, 0x10000, "sai1"),
     (0x44520000, 0x10000, "micfil"),
     (0x42680000, 0x10000, "xcvr"),
-    (0x44000000, 0x10000, "edma1"),
-    (0x445b0000, 0x1000,  "sm_mu"),
-    (0x47520000, 0x10000, "elemu0"),
 ]
 
 WIDTHS = [(1, "b"), (2, "w"), (4, "l"), (8, "q")]
-VALUES = [0x0, 0xffffffffffffffff, 0xdeadbeefcafef00d, 0x1]
+VALUES = [0x0, 0xffffffffffffffff, 0xdeadbeefcafef00d]
 
 def offsets_for(size):
-    # stepped coverage (cap ~64) + every misalignment + window boundaries
-    step = max(4, (size // 64) & ~3)
-    offs = list(range(0, size, step))
+    # register-granular (step 4) over the low region where registers live, then
+    # capped stepping over the rest, plus every misalignment + window boundaries
+    dense = min(size, 0x800)
+    offs = list(range(0, dense, 4))
+    if size > dense:
+        step = max(4, ((size - dense) // 48) & ~3)
+        offs += list(range(dense, size, step))
     offs += [1, 2, 3, 5, 6, 7]                       # misaligned
     for end in (size - 8, size - 4, size - 2, size - 1):
         if end > 0:
