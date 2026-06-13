@@ -140,6 +140,16 @@ static uint32_t edma_decode_nbytes(uint32_t raw, int32_t *mloff)
     return raw & 0x3fffffff;
 }
 
+/*
+ * Cap a single channel kick's total element transfers. The transfer below runs
+ * synchronously in the MMIO write handler, one element (esize bytes) per loop,
+ * so an arbitrarily large guest-programmed CITER * (NBYTES / esize) would spin
+ * QEMU's main loop and hang the VM. 64M elements is far above any realistic
+ * single-kick eDMA transfer while bounding the worst-case loop to well under a
+ * second; refuse a larger descriptor rather than hang.
+ */
+#define IMX95_EDMA_MAX_XFER_ELEMS (64u * 1024 * 1024)
+
 /* Execute a channel's TCD: move CITER * NBYTES bytes SADDR->DADDR. */
 static void edma_run_channel(IMX95EdmaState *s, int ch)
 {
@@ -166,6 +176,13 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
         citer = 1;
     }
     if (nbytes == 0 || esize == 0 || esize > sizeof(buf)) {
+        return;
+    }
+    if ((uint64_t)citer * (nbytes / esize) > IMX95_EDMA_MAX_XFER_ELEMS) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "imx95-edma: ch%d transfer too large (citer=%u * "
+                      "nbytes=%u / esize=%u elements); refusing to avoid a VM "
+                      "hang\n", ch, citer, nbytes, esize);
         return;
     }
 
