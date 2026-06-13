@@ -167,10 +167,15 @@ static uint64_t xcvr_read(void *opaque, hwaddr offset, unsigned size)
     }
 
     if (offset < IMX95_XCVR_REG_OFF) {
-        uint32_t v = 0, b;
+        uint64_t v = 0;
+        unsigned b;
 
+        /*
+         * size may be up to 8 (firmware load uses 8-byte accesses), so the
+         * accumulator must be 64-bit: a 32-bit << (b*8) for b >= 4 is UB.
+         */
         for (b = 0; b < size && offset + b < IMX95_XCVR_RAM_SIZE; b++) {
-            v |= (uint32_t)s->ram[offset + b] << (b * 8);
+            v |= (uint64_t)s->ram[offset + b] << (b * 8);
         }
         return v;
     }
