@@ -207,9 +207,9 @@ milestone in Scope, above), validated end to end:
 
 **Display, input, audio & media.** The EVK's output and HMI peripherals run
 against stock Linux. Each device below is tagged **functional** (the host
-driver's data path runs end to end) or **brings up** (the driver binds and the
-device registers / enumerates — the registration bar, no working host data path
-yet):
+driver's data path runs end to end — data actually moves) or **brings up** (the
+driver binds and the device registers / enumerates — the registration bar, no
+working host data path yet):
 
 - **DPU display + compositing — functional.** The i.MX 95 DPU
   (`hw/misc/imx95_dpu.c`) reads plane framebuffers out of guest DRAM and
