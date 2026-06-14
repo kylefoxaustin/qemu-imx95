@@ -177,6 +177,10 @@ Run /init as init process
 - **24 h+ stability soak** (A55 + M33 path) — ran past its 24 h target to
   ~36 h: stable memory, data-integrity md5 unchanged across 4274 heartbeats,
   no panics or SCMI timeouts.
+- **24 h "everything-soak"** (`tests/soak-everything/`) — every modelled
+  datapath exercised concurrently (NETC ×3, audio, JPEG, USB-HID, DPU, FlexCAN,
+  virtio-9p, camera, both PCIe RCs, M33 SM + M7) for a full day: 0 anomalies,
+  flat RSS, 1368 in-guest roll-call heartbeats clean.
 - **Two independent third-party robotics stacks ran to convergence** in the
   Linux userspace — cross-built and run by external adopters, not the author:
   **ORB-SLAM3**
@@ -874,6 +878,27 @@ working artifacts — they are not committed to the repo (the directory is
   `tests/sd-emmc/` proving write+readback+persist on both card types. On top of
   that, the NXP `imx-image-full` rootfs mounts read-write from eMMC and systemd
   brings up **Weston** (software-rendered/pixman) on the DPU — `tests/weston/`.
+- **v2.3.0 — robustness hardening + the M33 idle/density fix (on `imx95-netc`).**
+  Two QA fuzzers (`tests/imx95-mmio-fuzz/`): an MMIO register-robustness sweep
+  over the full device surface and an eDMA descriptor fuzzer that builds
+  coherent-but-hostile TCDs. Together they found and fixed two real model bugs —
+  an XCVR undefined-behaviour on 8-byte register-region reads (a 32-bit
+  accumulator shifted ≥32) and an unbounded eDMA channel transfer a guest could
+  turn into a VM hang (now length-bounded). A **24 h "everything-soak"**
+  (`tests/soak-everything/`) ran every modelled datapath concurrently — NETC ×3,
+  audio, JPEG, USB-HID, DPU, FlexCAN, virtio-9p, camera, both PCIe RCs, plus the
+  M33 SM and M7 — for a full day with zero anomalies. And the headline: the
+  **M33 idle/density fix**. An idle board was burning ~1 host core; it was
+  root-caused to an upstream QEMU Cortex-M bug (the WFE *event register* wrongly
+  gating WFI in `arm_cpu_has_work()`, so a Cortex-M that takes an interrupt then
+  idles with `WFI` spins) — reproduced on a stock `mps2-an505` with a 12-line
+  bare-metal program. The fix was already upstream (`6fd2fcdc61b`, cherry-picked)
+  plus a 95-side commit it exposed: the SM/boot drove M33/M7 start/stop via
+  `cs->halted` without the PSCI `power_state`/`halt_reason`, so a running M-core
+  tripped the new assert (`fsl_imx95_set_cpu_run()` keeps them consistent). With
+  the SM built `M=2` (no debug-monitor busy-poll), an idle board drops from
+  ~109 % to ~15 % host-CPU/board; a 25-board A/B flipped the density limiter from
+  CPU-bound (~29 boards) to RAM-bound — a ~7.3× per-board CPU cut.
 
 ## License & credits
 
