@@ -725,6 +725,24 @@ static void fsl_imx95_write_m7_handover(FslImx95State *s)
     stl_le_p(h + 0x1c, M7_HANDOVER_IMG_FLAGS);
 }
 
+/*
+ * Start/stop an M-core (M33 SM, M7), keeping its PSCI power_state and
+ * halt_reason consistent with cs->halted. The SM/boot drives the M33/M7
+ * lifecycle directly (not via the PSCI powerctl path), so we must maintain
+ * these fields ourselves: arm_cpu_has_work() asserts that a PSCI_OFF CPU is
+ * halted for PSCI (HALT_PSCI). Leaving a running M-core at PSCI_OFF was
+ * harmless before the WFI/WFE halt_reason rework but trips that assert after
+ * it (a running core that executes WFI gets halt_reason = HALT_WFI).
+ */
+static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
+{
+    ARMCPU *cpu = ARM_CPU(cs);
+
+    cs->halted = !run;
+    cpu->power_state = run ? PSCI_ON : PSCI_OFF;
+    cpu->env.halt_reason = run ? NOT_HALTED : HALT_PSCI;
+}
+
 static void fsl_imx95_m33_start_bh(void *opaque)
 {
     FslImx95State *s = opaque;
@@ -735,7 +753,7 @@ static void fsl_imx95_m33_start_bh(void *opaque)
         CPUState *cs = CPU(s->m33.cpu);
         /* Place the M7 boot-ROM handover before the SM starts. */
         fsl_imx95_write_m7_handover(s);
-        cs->halted = 0;
+        fsl_imx95_set_cpu_run(cs, true);
         cpu_resume(cs);
     }
 }
@@ -770,7 +788,7 @@ static void fsl_imx95_m7_start_bh(void *opaque)
 
     if (initial_sp != 0 && s->m7.cpu) {
         CPUState *cs = CPU(s->m7.cpu);
-        cs->halted = 0;
+        fsl_imx95_set_cpu_run(cs, true);
         cpu_resume(cs);
     }
 }
@@ -825,13 +843,13 @@ static void fsl_imx95_src_m7_release_handler(void *opaque, int n, int level)
  */
 static void fsl_imx95_m7_power_off_work(CPUState *cs, run_on_cpu_data data)
 {
-    cs->halted = 1;
+    fsl_imx95_set_cpu_run(cs, false);
 }
 
 static void fsl_imx95_m7_power_on_work(CPUState *cs, run_on_cpu_data data)
 {
     cpu_reset(cs);
-    cs->halted = 0;
+    fsl_imx95_set_cpu_run(cs, true);
 }
 
 static void fsl_imx95_m7_power_off_bh(void *opaque)
