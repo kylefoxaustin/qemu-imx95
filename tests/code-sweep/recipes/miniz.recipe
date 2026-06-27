@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# miniz - single-file DEFLATE/zlib implementation. Its example1 compresses a
+# string, decompresses it, checks the length + memcmp against the original, and
+# returns EXIT_FAILURE on any mismatch (prints "Success." otherwise). A compact
+# self-verifying compression round-trip on the A55.
+NAME=miniz
+CATEGORY=compression
+SRC=https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+REF=3.0.2
+
+cs_build() {
+    "$CC" -O2 -static -I. -o "$OUT/miniz_test" examples/example1.c miniz.c \
+        || { echo "  miniz build failed"; return 1; }
+    "$STRIP" "$OUT/miniz_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[miniz] compress/decompress round-trip self-check (example1)"
+out=$(./miniz_test 2>&1); echo "$out" | tail -2
+case "$out" in *Success.*) echo "[miniz] OK";; *) echo "[miniz] FAILED"; exit 1;; esac
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

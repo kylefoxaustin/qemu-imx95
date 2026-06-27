@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# aklomp/base64 - a (SIMD-capable) base64 codec. Its bundled test/test_base64
+# runs known-answer encode/decode vectors across the codec and returns nonzero
+# on any mismatch. On aarch64 the scalar/NEON path is exercised on the A55.
+NAME=base64
+CATEGORY=base64
+SRC=https://github.com/aklomp/base64/archive/refs/tags/v0.5.2.tar.gz
+REF=0.5.2
+
+cs_build() {
+    make CC="$CC" >/dev/null 2>&1            # builds lib/*.o (codec objects)
+    "$CC" -O2 -static -I include -o "$OUT/test_base64" \
+        test/test_base64.c test/codec_supported.c $(find lib -name '*.o') \
+        || { echo "  base64 test build failed"; return 1; }
+    "$STRIP" "$OUT/test_base64" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[base64] run known-answer encode/decode vectors"
+if ./test_base64; then echo "[base64] OK"; else echo "[base64] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

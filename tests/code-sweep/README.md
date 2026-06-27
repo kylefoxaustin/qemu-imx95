@@ -105,7 +105,11 @@ both STATE dirs prints one cross-machine board.
 | `brotli` | compression | compress + decompress round-trip (sha256), CLI cross-built from source glob |
 | `lz4` | compression | compress -9 + decompress round-trip (sha256) |
 | `heatshrink` | compression | heatshrink's own encoder/decoder round-trip suite (greatest framework) |
+| `miniz` | compression | miniz example1 compress/decompress round-trip with memcmp self-check |
 | `pcre2` | regex | pcre2test runs PCRE2's own testinput1, diffed vs the committed testoutput1 (upstream RunTest test 1) |
+| `oniguruma` | regex | Oniguruma's own testc/back/options/regset suites (SUCC/FAIL/ERROR), nonzero unless FAIL+ERROR==0 |
+| `base64` | base64 | aklomp/base64's known-answer encode/decode vectors, nonzero on mismatch |
+| `sds` | string | antirez sds self-test (-DSDS_TEST_MAIN): create/concat/cpy/catfmt/trim/split, requires 0 failed |
 | `expat` | xml | xmlwf accepts a battery of well-formed XML and rejects malformed XML (both paths verified) |
 | `tinyexpr` | math | bundled smoke test (parsing/precedence/functions/closures/pow), returns nonzero on any failed case |
 | `utf8proc` | unicode | utf8proc's own self-contained tests (case-fold/charwidth/iterate/valid/misc), each exits nonzero on mismatch |

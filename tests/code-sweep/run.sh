@@ -87,9 +87,18 @@ for rfile in $RECIPES; do
         fi
 
         ex="$SRCWORK/$NAME"; mkdir -p "$ex"
-        # tar -xf auto-detects gzip/xz/bzip2 (recipes may use any).
-        tar -xf "$tarball" -C "$ex" --strip-components=1 \
-            || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
+        if unzip -l "$tarball" >/dev/null 2>&1; then
+            # zip archive (some projects ship .zip release assets)
+            unzip -q "$tarball" -d "$ex" || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
+            # flatten a single top-level dir to match tar's --strip-components=1
+            sub=$(ls -1 "$ex"); if [ "$(echo "$sub" | wc -l)" = 1 ] && [ -d "$ex/$sub" ]; then
+                mv "$ex/$sub"/* "$ex/$sub"/.[!.]* "$ex/" 2>/dev/null; rmdir "$ex/$sub" 2>/dev/null
+            fi
+        else
+            # tar -xf auto-detects gzip/xz/bzip2 (recipes may use any).
+            tar -xf "$tarball" -C "$ex" --strip-components=1 \
+                || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
+        fi
 
         OUT="$SHARE/items/$NAME"; mkdir -p "$OUT"
         export CC AR STRIP OUT

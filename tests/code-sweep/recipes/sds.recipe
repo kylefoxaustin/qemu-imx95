@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# sds - antirez's Simple Dynamic Strings (the string type from Redis). Compiling
+# with -DSDS_TEST_MAIN turns sds.c into its own test program covering create/
+# concat/cpy/catprintf/catfmt/trim/split/range/MakeRoomFor. It prints a
+# "N tests, N passed, N failed" summary (and always exit 0), so the oracle parses
+# that line and requires 0 failed.
+NAME=sds
+CATEGORY=string
+SRC=https://github.com/antirez/sds/archive/refs/heads/master.tar.gz
+REF=master
+
+cs_build() {
+    "$CC" -O2 -static -DSDS_TEST_MAIN -o "$OUT/sdstest" sds.c \
+        || { echo "  sds build failed"; return 1; }
+    "$STRIP" "$OUT/sdstest" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+out=$(./sdstest 2>&1); echo "$out" | tail -1
+sum=$(echo "$out" | grep -E '[0-9]+ tests, [0-9]+ passed, [0-9]+ failed' | tail -1)
+[ -n "$sum" ] || { echo "[sds] no summary line"; exit 1; }
+case "$sum" in *", 0 failed") echo "[sds] OK";; *) echo "[sds] FAILED: $sum"; exit 1;; esac
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

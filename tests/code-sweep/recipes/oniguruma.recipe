@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Oniguruma - the regex engine behind Ruby/PHP (and jq's regex). We build
+# libonig.a and its own correctness test programs (testc = the big match/no-match
+# battery, plus backref/options/regset suites). Each counts SUCC/FAIL/ERROR and
+# returns nonzero unless FAIL==0 && ERROR==0 - a vendor regex oracle exercising a
+# second, independent regex implementation (alongside pcre2) on the A55.
+NAME=oniguruma
+CATEGORY=regex
+SRC=https://github.com/kkos/oniguruma/releases/download/v6.9.9/onig-6.9.9.tar.gz
+REF=6.9.9
+
+CS_TESTS="testc test_back test_options test_regset"
+
+cs_build() {
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu --disable-shared \
+        CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 || { echo "  configure failed"; return 1; }
+    make -j"$(nproc)" >/dev/null 2>&1
+    LIB=src/.libs/libonig.a
+    [ -f "$LIB" ] || { echo "  libonig.a not built"; return 1; }
+    mkdir -p "$OUT/bin"; built=""
+    for t in $CS_TESTS; do
+        [ -f "test/$t.c" ] || continue
+        if "$CC" -O2 -static -I src -o "$OUT/bin/$t" "test/$t.c" "$LIB" 2>/dev/null; then
+            "$STRIP" "$OUT/bin/$t" 2>/dev/null || true; built="$built $t"
+        fi
+    done
+    [ -n "$built" ] || { echo "  no oniguruma tests built"; return 1; }
+    echo "  built tests:$built"; echo "$built" > "$OUT/.tests"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd)
+fail=0; ran=0
+for t in $(cat "$HERE/.tests"); do
+    [ -x "$HERE/bin/$t" ] || continue
+    ran=$((ran+1))
+    if "$HERE/bin/$t" >/dev/null 2>&1; then echo "[oniguruma] $t OK"
+    else echo "[oniguruma] $t FAILED (rc=$?)"; fail=1; fi
+done
+[ "$ran" -gt 0 ] || { echo "no oniguruma tests"; exit 1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "[oniguruma] OK ($ran regex test suites)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
