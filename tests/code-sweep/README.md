@@ -99,6 +99,7 @@ both STATE dirs prints one cross-machine board.
 |------|----------|--------|
 | `storage-sqlite` | uSDHC / eMMC | sqlite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card; rows diffed vs a host golden |
 | `net-tftp` | ENETC NIC | static busybox brings eth0 up, pulls a 256 KB payload + sha over TFTP from slirp, sha256-verifies (boot patches the dtb so ENETC probes) |
+| `usb-storage` | ChipIdea EHCI + USB BOT | usb-storage enumerates (/dev/sda); 4 MiB bulk write/read round-trip, sha256-verified (attached on usb-bus.0) |
 
 ## Current corpus (CPU tier)
 

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# USB datapath: a usb-storage mass-storage device on the ChipIdea EHCI host
+# (usb-bus.0; the DWC3 xHCI roothub does not enumerate cold-plug). We cross-build
+# a static BusyBox for dd/sha256sum, confirm the device ENUMERATES (/dev/sda
+# appears via the USB BOT class driver), then do a 4 MiB bulk write -> sync ->
+# drop caches -> read-back and sha256-compare. The read is forced off the device,
+# so it exercises both USB bulk-OUT and bulk-IN through the EHCI + mass-storage
+# models end to end.
+#
+# Emits two cross-machine dashboard keys: usb-enum (device enumerated, printed
+# directly as a SOAK marker) and usb-bulk (the round-trip = this item's result).
+NAME=usb-storage
+CATEGORY=usb
+CS_KEY=usb-bulk
+SRC=https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+REF=1.36.1
+
+cs_build() {
+    make defconfig >/dev/null 2>&1
+    for opt in CONFIG_STATIC CONFIG_DD CONFIG_SHA256SUM CONFIG_CUT CONFIG_SYNC; do
+        sed -i "s/^# $opt is not set/$opt=y/; s/^$opt=.*/$opt=y/" .config
+    done
+    yes "" | make oldconfig >/dev/null 2>&1
+    make ARCH=arm64 CROSS_COMPILE="${CC%gcc}" -j"$(nproc)" >/dev/null 2>&1
+    [ -x busybox ] || { echo "  busybox build failed"; return 1; }
+    cp busybox "$OUT/"; "$STRIP" "$OUT/busybox" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd); BB="$HERE/busybox"
+# Wait for the usb-storage device to enumerate (USB BOT -> sd).
+i=0; while [ $i -lt 30 ]; do [ -b /dev/sda ] && break; sleep 1; i=$((i+1)); done
+if [ ! -b /dev/sda ]; then
+    echo "SOAK:SKIP:usb-enum:no /dev/sda"
+    echo "[usb] no usb-storage device enumerated - skipping"; exit 77
+fi
+model=$(cat /sys/block/sda/device/model 2>/dev/null | tr -d ' ')
+echo "[usb] enumerated /dev/sda (model: ${model:-?})"
+echo "SOAK:PASS:usb-enum:sda ${model:-usb}"
+# Bulk round-trip: write a known random pattern, force a re-read off the device.
+"$BB" dd if=/dev/urandom of="$HERE/pat" bs=1M count=4 2>/dev/null
+want=$("$BB" sha256sum "$HERE/pat" | "$BB" cut -d' ' -f1)
+"$BB" dd if="$HERE/pat" of=/dev/sda bs=1M count=4 conv=fsync 2>/dev/null
+"$BB" sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+"$BB" dd if=/dev/sda of="$HERE/back" bs=1M count=4 2>/dev/null
+got=$("$BB" sha256sum "$HERE/back" | "$BB" cut -d' ' -f1)
+rm -f "$HERE/pat" "$HERE/back"
+[ -n "$got" ] && [ "$want" = "$got" ] || { echo "[usb] bulk round-trip mismatch: $got != $want"; exit 1; }
+echo "[usb] OK (4 MiB written+read over USB BOT, sha256 verified)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

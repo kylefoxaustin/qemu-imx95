@@ -89,6 +89,9 @@ EMMC="$WORK/emmc.img"
 truncate -s "${EMMC_MB}M" "$EMMC"
 mke2fs -F -q -t ext4 "$EMMC" >/dev/null 2>&1 || skip "mke2fs failed"
 
+# ---- a blank USB mass-storage disk (for the usb-storage datapath test) -----
+USBIMG="$WORK/usb.img"; truncate -s 64M "$USBIMG"
+
 # ---- TFTP root served by slirp at 10.0.2.2 (for net datapath tests) --------
 TFTPDIR="$WORK/tftp"; mkdir -p "$TFTPDIR"
 head -c 262144 /dev/urandom > "$TFTPDIR/netpayload.bin" 2>/dev/null \
@@ -170,6 +173,8 @@ timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
   -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
   -drive if=none,format=raw,file="$EMMC",id=mmc0 -device emmc,drive=mmc0 \
+  -drive if=none,format=raw,file="$USBIMG",id=usbdisk \
+  -device usb-storage,bus=usb-bus.0,drive=usbdisk \
   -nic user,model=fsl-enetc,tftp="$TFTPDIR" \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
