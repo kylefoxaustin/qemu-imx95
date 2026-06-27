@@ -23,7 +23,7 @@ Detectors that reproduce these verdicts live in `tests/code-sweep/fidelity/`.
 
 | Block | Class | Evidence |
 |-------|-------|----------|
-| **Neutron NPU** | **SILENT-WRONG** | `hw/misc/imx95_neutron.c:119-131` — sets MBOX0=DONE, APPSTATUS INFDONE, raises SPI 318; the output buffer is **not** computed (the source header says so). `/dev/neutron0` binds, so a TFLite/LiteRT inference "completes" with garbage outputs and no error. |
+| **Neutron NPU** | **FLAGGED (can't compute or fault)** | Compute is NXP-proprietary firmware → un-modellable; and the NPU **cannot fault honestly to the guest** because the driver's `poll_result_callback` polls for `DONE` *forever* (no inference-error path) — a non-DONE retcode hangs the guest. So the model must keep acking DONE. Honesty is now exposed to the *operator*: per-inference `LOG_GUEST_ERROR`, and QMP-queryable `qom-get /machine/soc/neutron compute-modelled` (= `false`) + `inferences-acked-uncomputed` (count of RUN cmds completed with uncomputed output). `hw/misc/imx95_neutron.c`. Output is still uncomputed — do not trust NPU results; the farm control-plane can detect it. |
 | **ADC** | **FIXED → COMPUTES (operator-driven)** | Was SILENT-WRONG (hidden constant `0x100+ch*0x111`). Now each channel is a read/write QOM property `adc-ch0..7` settable at runtime via `qom-set /machine/soc/adc adc-ch<N> <value>` — whatever the operator injects is what the guest reads (the model's analog of the board's pin voltage). Default = a documented distinct-per-channel test pattern, so an un-driven channel is deterministic, not a hidden lie. Verified: injected `adc-ch5=2748` → guest `in_voltage5_raw=2748` while undriven channels read their defaults. `hw/misc/imx93_adc.c`. |
 | **DPU 2D blit** | COMPUTES | `hw/dpu/imx95_dpu.c:1093-1266` — copy/fill/blend(Porter-Duff)/scale/rotate/colour-convert all read source + write computed result to guest memory. (Display *scanout* to console is a stub, but the 2D engine is real.) |
 | **eDMA v3/v5** | COMPUTES | `hw/dma/imx95_edma.c:195-210` — actually `address_space_read`→`address_space_write`s the data; DONE/IRQ after the move. |
@@ -36,13 +36,25 @@ Datapaths exercised by the code-sweep peripheral tier (storage/eMMC, ENETC,
 USB-BOT, GPIO, I²C, RTC) are all **COMPUTES** — verified by integrity oracles
 (write→drop-caches→read-back, register round-trips), not just "done" flags.
 
-## Silent-wrong blocks — dev-impact ranking
+## Silent-wrong blocks — status
 
-1. **Neutron NPU** — ML inference is a named farm scenario; silent garbage
-   outputs are the highest-impact lie. (95's analog of MCXN947's PowerQuad.)
-   *Remaining — next fidelity target.*
+1. **Neutron NPU** — **FLAGGED** (was silent). Can't compute (proprietary fw)
+   and can't fault (the driver polls `DONE` forever — see below), so the model
+   keeps acking but now exposes the truth: a loud per-inference log + the
+   QMP-queryable `compute-modelled=false` / `inferences-acked-uncomputed`
+   counter. Real fix (run the model) needs the proprietary firmware/ISA.
 2. ~~**ADC**~~ — **FIXED** (operator-driven conversion values via `qom-set`;
    default is a documented test pattern). No longer a hidden constant.
+
+### Finding for the fleet: NXP's Neutron driver has no error path
+
+`drivers/staging/neutron`'s `poll_result_callback` re-arms its poll timer
+indefinitely and only ever completes on retcode `DONE`; there is **no
+inference-error/timeout→ERROR path**. So a faithful "the accelerator failed"
+cannot be signalled to this driver without hanging the guest. This mirrors the
+i.MX93 Ethos-U finding (the NXP remote-accelerator drivers handle failure
+poorly) — relevant to anyone modelling these blocks: you can model the happy
+path or flag at the operator level, but you cannot honestly fault to the guest.
 
 ## Fixing vs flagging
 

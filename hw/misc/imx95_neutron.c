@@ -80,6 +80,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
 /* mailbox return codes (uapi: the driver keys completion on DONE) */
 #define N_RET_DONE            0xAD0
 
+/* mailbox command in MBOX3 (driver: RUN = run inference). */
+#define N_CMD_RUN             0x269
+
 struct IMX95NeutronState {
     SysBusDevice parent_obj;
     MemoryRegion rctl_iomem;        /* RESETCTRL @0x4ab00000 */
@@ -92,6 +95,16 @@ struct IMX95NeutronState {
     uint32_t regs[NEUTRON_DEV_SIZE / 4];
     bool started;                   /* NPU clocked + firmware "up" */
     bool irq_pending;
+
+    /*
+     * Honesty/telemetry: the NPU acks inferences without computing them (the
+     * compute is proprietary firmware). This counts RUN commands so an operator
+     * can query, via QMP qom-get, how many inferences "completed" with
+     * uncomputed output. The driver has NO inference-error path - it polls for
+     * DONE forever (poll_result_callback) - so the model cannot fault honestly
+     * to the guest without hanging it; this is the honest signal we CAN give.
+     */
+    uint64_t acked_uncomputed;
 };
 
 static inline uint32_t ndev_r(IMX95NeutronState *s, hwaddr off)
@@ -126,9 +139,17 @@ static void neutron_doorbell(IMX95NeutronState *s)
     s->irq_pending = true;
     neutron_update_irq(s);
 
-    qemu_log_mask(LOG_UNIMP,
-                  "imx95-neutron: cmd 0x%x acked (DONE); NPU compute not "
-                  "modelled — inference output is not computed\n", cmd);
+    if (cmd == N_CMD_RUN) {
+        s->acked_uncomputed++;         /* an inference "completed" uncomputed */
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "imx95-neutron: inference #%" PRIu64 " acked (DONE) but "
+                      "NOT computed - output is uncomputed (proprietary NPU "
+                      "firmware not modelled). qom-get .../neutron "
+                      "compute-modelled = false\n", s->acked_uncomputed);
+    } else {
+        qemu_log_mask(LOG_UNIMP,
+                      "imx95-neutron: cmd 0x%x acked (DONE)\n", cmd);
+    }
 }
 
 static uint64_t neutron_rctl_read(void *opaque, hwaddr off, unsigned size)
@@ -231,12 +252,28 @@ static void neutron_reset(DeviceState *dev)
     memset(s->regs, 0, sizeof(s->regs));
     s->started = false;
     s->irq_pending = false;
+    s->acked_uncomputed = 0;
     qemu_set_irq(s->irq, 0);
+}
+
+/* Honest fidelity flag: this NPU does not model the compute. Always false. */
+static bool neutron_get_compute_modelled(Object *obj, Error **errp)
+{
+    return false;
 }
 
 static void neutron_realize(DeviceState *dev, Error **errp)
 {
     IMX95NeutronState *s = IMX95_NEUTRON(dev);
+
+    /*
+     * Runtime-queryable fidelity signal (QMP qom-get): does the NPU actually
+     * compute, and how many inferences have completed with uncomputed output.
+     */
+    object_property_add_bool(OBJECT(dev), "compute-modelled",
+                             neutron_get_compute_modelled, NULL);
+    object_property_add_uint64_ptr(OBJECT(dev), "inferences-acked-uncomputed",
+                                   &s->acked_uncomputed, OBJ_PROP_FLAG_READ);
 
     memory_region_init_io(&s->rctl_iomem, OBJECT(dev), &neutron_rctl_ops, s,
                           "imx95.neutron.resetctrl", RESETCTRL_SIZE);

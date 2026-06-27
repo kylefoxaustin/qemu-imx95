@@ -648,6 +648,13 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         DeviceState *gicdev = DEVICE(&s->gic);
         DeviceState *npu = qdev_new("imx95.neutron");
 
+        /*
+         * Stable QOM path /machine/soc/neutron so an operator/control-plane can
+         * query the NPU's fidelity at runtime (qom-get ... compute-modelled /
+         * inferences-acked-uncomputed) - the NPU acks inferences without
+         * computing (proprietary firmware), so this is the honest signal.
+         */
+        object_property_add_child(OBJECT(s), "neutron", OBJECT(npu));
         if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(npu), errp)) {
             return false;
         }
