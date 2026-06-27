@@ -77,3 +77,4 @@ highest coverage-per-effort, because no expected output has to be hand-curated.
 | `xxhash` | hashing | canonical empty-input vectors (XXH32/64/128/XXH3) + host/guest agreement on a random payload |
 | `sqlite` | database | SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs a host-built golden |
 | `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
+| `cpython` | interpreter | static CPython 3.10 cross-built; runs its own `python -m test` stdlib regression suite (33 CPU-pure modules) in-guest |
