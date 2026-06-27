@@ -13,8 +13,16 @@
  *    checks CALFAIL. We complete instantly (CALBUSY/CALFAIL stay 0).
  *  - conversion: it programs NCMR0 (channel mask), sets MCR.NSTART, waits for
  *    the end-of-conversion interrupt, then reads PCDRn for the sample. On
- *    NSTART we latch ISR.EOC|ECH and raise the IRQ; PCDRn returns a stable
- *    synthetic 12-bit value per channel (there is no analog input to sample).
+ *    NSTART we latch ISR.EOC|ECH and raise the IRQ; PCDRn returns the
+ *    per-channel conversion value.
+ *
+ * Fidelity: there is no analog pin to sample in emulation, so the conversion
+ * value comes from the operator - each channel is a read/write QOM property
+ * "adc-ch0".."adc-ch7" settable at runtime via QMP qom-set (the model's analog
+ * of the board's pin voltage). Whatever the operator injects is what the guest
+ * reads back, so ADC-consuming code sees a faithful, controllable datapath
+ * rather than a hidden constant. The default is a distinct-per-channel test
+ * pattern (0x100 + ch*0x111) so an un-driven channel is still deterministic.
  */
 
 #include "qemu/osdep.h"
@@ -65,6 +73,9 @@ struct IMX93ADCState {
     uint32_t ctr0;
     uint32_t ncmr0;
 
+    /* Per-channel conversion value (operator-settable; see file header). */
+    uint32_t chval[IMX93_ADC_CHANNELS];
+
     qemu_irq irq[IMX93_ADC_NUM_IRQ];
 };
 
@@ -74,8 +85,11 @@ static void imx93_adc_update_irq(IMX93ADCState *s)
     qemu_set_irq(s->irq[2], (s->isr & s->imr & ISR_EOC_ECH) != 0);
 }
 
-/* Stable synthetic 12-bit reading; distinct per channel so a test can tell. */
-static uint32_t imx93_adc_sample(int ch)
+/*
+ * Default per-channel test pattern when the operator hasn't set a value;
+ * distinct per channel so an un-driven channel is still deterministic.
+ */
+static uint32_t imx93_adc_default(int ch)
 {
     return (0x100 + ch * 0x111) & 0xfff;
 }
@@ -87,7 +101,7 @@ static uint64_t imx93_adc_read(void *opaque, hwaddr off, unsigned size)
 
     if (off >= ADC_PCDR0 && off < ADC_PCDR0 + IMX93_ADC_CHANNELS * 4) {
         ch = (off - ADC_PCDR0) / 4;
-        return imx93_adc_sample(ch);
+        return s->chval[ch] & 0xfff;        /* operator-injected conversion */
     }
 
     switch (off) {
@@ -162,6 +176,7 @@ static const MemoryRegionOps imx93_adc_ops = {
 static void imx93_adc_reset(DeviceState *dev)
 {
     IMX93ADCState *s = IMX93_ADC(dev);
+    int ch;
 
     s->mcr = MCR_PWDN;              /* powers up in power-down, like the HW */
     s->isr = 0;
@@ -169,6 +184,9 @@ static void imx93_adc_reset(DeviceState *dev)
     s->cimr0 = 0;
     s->ctr0 = 0;
     s->ncmr0 = 0;
+    for (ch = 0; ch < IMX93_ADC_CHANNELS; ch++) {
+        s->chval[ch] = imx93_adc_default(ch);
+    }
     imx93_adc_update_irq(s);
 }
 
@@ -184,11 +202,21 @@ static void imx93_adc_init(Object *obj)
     for (i = 0; i < IMX93_ADC_NUM_IRQ; i++) {
         sysbus_init_irq(sbd, &s->irq[i]);
     }
+    /*
+     * Per-channel conversion value, settable at runtime via QMP qom-set
+     * (e.g. qom-set <path> adc-ch3 0x555) - the operator drives the "voltage".
+     */
+    for (i = 0; i < IMX93_ADC_CHANNELS; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "adc-ch%d", i);
+        object_property_add_uint32_ptr(obj, name, &s->chval[i],
+                                       OBJ_PROP_FLAG_READWRITE);
+    }
 }
 
 static const VMStateDescription vmstate_imx93_adc = {
     .name = TYPE_IMX93_ADC,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(mcr, IMX93ADCState),
@@ -197,6 +225,7 @@ static const VMStateDescription vmstate_imx93_adc = {
         VMSTATE_UINT32(cimr0, IMX93ADCState),
         VMSTATE_UINT32(ctr0, IMX93ADCState),
         VMSTATE_UINT32(ncmr0, IMX93ADCState),
+        VMSTATE_UINT32_ARRAY_V(chval, IMX93ADCState, IMX93_ADC_CHANNELS, 2),
         VMSTATE_END_OF_LIST()
     },
 };

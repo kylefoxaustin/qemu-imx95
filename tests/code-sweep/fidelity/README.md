@@ -21,7 +21,7 @@ The authoritative per-block record is
 
 | detector | block | current verdict |
 |----------|-------|-----------------|
-| `adc_detect` | i.MX ADC (iio) | **SILENT-WRONG** — returns `0x100+ch*0x111` per channel, invariant (no real conversion) |
+| `adc_detect` | i.MX ADC (iio) | **FIXED → operator-driven.** Undriven channels read a documented default pattern; inject a real value with `qom-set /machine/soc/adc adc-ch<N> <v>` and the guest reads it back (verified ch5=2748). No longer a hidden constant. |
 
 ## Known silent-wrong, detector TODO
 

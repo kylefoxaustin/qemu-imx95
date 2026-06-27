@@ -2208,6 +2208,11 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             SysBusDevice *adc_sbd = SYS_BUS_DEVICE(adc);
             int k;
 
+            /*
+             * Stable QOM path so the operator can inject per-channel ADC
+             * values at runtime: qom-set <soc>/adc adc-ch<N> <value>.
+             */
+            object_property_add_child(OBJECT(s), "adc", OBJECT(adc));
             if (!sysbus_realize_and_unref(adc_sbd, errp)) {
                 return;
             }

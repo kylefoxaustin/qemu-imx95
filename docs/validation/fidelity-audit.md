@@ -24,7 +24,7 @@ Detectors that reproduce these verdicts live in `tests/code-sweep/fidelity/`.
 | Block | Class | Evidence |
 |-------|-------|----------|
 | **Neutron NPU** | **SILENT-WRONG** | `hw/misc/imx95_neutron.c:119-131` — sets MBOX0=DONE, APPSTATUS INFDONE, raises SPI 318; the output buffer is **not** computed (the source header says so). `/dev/neutron0` binds, so a TFLite/LiteRT inference "completes" with garbage outputs and no error. |
-| **ADC** | **SILENT-WRONG** | `hw/misc/imx93_adc.c:77-81,125-128` — returns the constant `0x100+ch*0x111` per channel and raises EOC instantly. Confirmed in-guest: iio `in_voltage0..7_raw` = 256/529/802/1075/1348/1621/1894/2167, invariant on reread. Any sensor/voltage/temp code gets fake constants. |
+| **ADC** | **FIXED → COMPUTES (operator-driven)** | Was SILENT-WRONG (hidden constant `0x100+ch*0x111`). Now each channel is a read/write QOM property `adc-ch0..7` settable at runtime via `qom-set /machine/soc/adc adc-ch<N> <value>` — whatever the operator injects is what the guest reads (the model's analog of the board's pin voltage). Default = a documented distinct-per-channel test pattern, so an un-driven channel is deterministic, not a hidden lie. Verified: injected `adc-ch5=2748` → guest `in_voltage5_raw=2748` while undriven channels read their defaults. `hw/misc/imx93_adc.c`. |
 | **DPU 2D blit** | COMPUTES | `hw/dpu/imx95_dpu.c:1093-1266` — copy/fill/blend(Porter-Duff)/scale/rotate/colour-convert all read source + write computed result to guest memory. (Display *scanout* to console is a stub, but the 2D engine is real.) |
 | **eDMA v3/v5** | COMPUTES | `hw/dma/imx95_edma.c:195-210` — actually `address_space_read`→`address_space_write`s the data; DONE/IRQ after the move. |
 | **JPEG codec** | COMPUTES / honest | `hw/*/imx95_jpeg.c:479-499` — decodes/encodes with libjpeg when `CONFIG_LIBJPEG`; otherwise sets `SLOT_STATUS_ENC_CONFIG_ERR` (honest error), not garbage. |
@@ -40,7 +40,9 @@ USB-BOT, GPIO, I²C, RTC) are all **COMPUTES** — verified by integrity oracles
 
 1. **Neutron NPU** — ML inference is a named farm scenario; silent garbage
    outputs are the highest-impact lie. (95's analog of MCXN947's PowerQuad.)
-2. **ADC** — any analog-sensor-dependent code silently gets constants.
+   *Remaining — next fidelity target.*
+2. ~~**ADC**~~ — **FIXED** (operator-driven conversion values via `qom-set`;
+   default is a documented test pattern). No longer a hidden constant.
 
 ## Fixing vs flagging
 
