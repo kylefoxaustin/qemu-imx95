@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# xz / liblzma - LZMA2 compressor. Autotools static build (libtool needs its own
+# -all-static to actually link static, since the busybox initramfs has no glibc
+# loader). Oracle: compress, verify the .xz stream with the built-in integrity
+# check (xz -t), decompress, sha256-compare. v5.4.5 is pre-dating the 5.6.x
+# build-script backdoor.
+NAME=xz
+CATEGORY=compression
+SRC=https://github.com/tukaani-project/xz/releases/download/v5.4.5/xz-5.4.5.tar.gz
+REF=5.4.5
+
+cs_build() {
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+        --disable-shared --enable-static --disable-nls \
+        CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 \
+        || { echo "  configure failed"; return 1; }
+    make -j"$(nproc)" LDFLAGS="-all-static" >/dev/null 2>&1
+    [ -x src/xz/xz ] || { echo "  xz not built"; return 1; }
+    cp src/xz/xz "$OUT/"; "$STRIP" "$OUT/xz" 2>/dev/null || true
+
+    head -c 300000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null
+    sha256sum "$OUT/payload.bin" | awk '{print $1}' > "$OUT/payload.sha"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+set -e
+echo "[xz] compress -6 / integrity-check (xz -t) / decompress / sha256"
+./xz -zc -6 payload.bin > payload.xz
+./xz -t payload.xz
+./xz -dc payload.xz > payload.out
+want=$(cat payload.sha); got=$(sha256sum payload.out | cut -d' ' -f1)
+[ "$want" = "$got" ] || { echo "round-trip mismatch: $want != $got"; exit 1; }
+echo "[xz] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

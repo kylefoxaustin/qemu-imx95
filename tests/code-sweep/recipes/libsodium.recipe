@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# libsodium - modern crypto library (NaCl/Sodium). We build libsodium.a cross-
+# static, then compile a set of its OWN test/default/*.c programs. Each test uses
+# libsodium's cmptest harness: it reads <name>.exp at runtime and self-verifies,
+# exiting nonzero on any mismatch - so every test is a vendor-authored oracle
+# for one primitive (box/sign/secretbox/aead/scalarmult/hash/...). Real Curve25519
+# /Ed25519/ChaCha20-Poly1305/BLAKE2 math exercised on the A55.
+NAME=libsodium
+CATEGORY=crypto
+SRC=https://github.com/jedisct1/libsodium/releases/download/1.0.19-RELEASE/libsodium-1.0.19.tar.gz
+REF=1.0.19
+
+CS_TESTS="core1 box box2 sign auth hash secretbox secretbox2 \
+ aead_chacha20poly1305 aead_chacha20poly13052 aead_xchacha20poly1305 \
+ scalarmult kdf generichash generichash2 shorthash onetimeauth \
+ stream stream2 codecs sodium_utils"
+
+cs_build() {
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+        --disable-shared --enable-static \
+        CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 \
+        || { echo "  configure failed"; return 1; }
+    make -j"$(nproc)" >/dev/null 2>&1
+    LIB=src/libsodium/.libs/libsodium.a
+    [ -f "$LIB" ] || { echo "  no libsodium.a"; return 1; }
+
+    INC="-I src/libsodium/include -I src/libsodium/include/sodium -I test/quirks"
+    built=""
+    for t in $CS_TESTS; do
+        [ -f "test/default/$t.c" ] && [ -f "test/default/$t.exp" ] || continue
+        if "$CC" -O2 -static -DTEST_NAME="\"$t\"" -DTEST_SRCDIR="\".\"" $INC \
+              -o "$OUT/$t" "test/default/$t.c" "$LIB" 2>/dev/null; then
+            "$STRIP" "$OUT/$t" 2>/dev/null || true
+            cp "test/default/$t.exp" "$OUT/"
+            built="$built $t"
+        else
+            echo "  (skip $t: build failed)"
+        fi
+    done
+    [ -n "$built" ] || { echo "  no tests built"; return 1; }
+    echo "  built tests:$built"
+    echo "$built" > "$OUT/.tests"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Each libsodium test self-checks against its <name>.exp and exits nonzero on
+# mismatch. We run all built tests; any failure fails the item.
+fail=0; ran=0
+for t in $(cat .tests); do
+    [ -x "./$t" ] || continue
+    ran=$((ran+1))
+    if ./"$t" >/dev/null 2>&1; then
+        echo "[libsodium] $t OK"
+    else
+        echo "[libsodium] $t FAILED (rc=$?)"; fail=1
+    fi
+done
+[ "$ran" -gt 0 ] || { echo "no libsodium tests present"; exit 1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "[libsodium] OK ($ran KAT/self-tests)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

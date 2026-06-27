@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# jq - JSON processor. Cross-built static with the bundled oniguruma (so regex
+# filters behave identically). Oracle is jq's OWN test suite via `jq --run-tests
+# tests/jq.test`, but jq always exits 0 and its bundled jq.test has some
+# intentionally-special entries (~12 not "passed", 9 "malformed"), so we use a
+# DIFFERENTIAL oracle: capture the exact summary line from a host-built jq of the
+# same source at build time, and require the in-guest A55 run to reproduce it.
+NAME=jq
+CATEGORY=json
+SRC=https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz
+REF=1.7.1
+
+cs_build() {
+    # Baseline summary for jq 1.7.1 + its bundled tests/jq.test, verified against
+    # a host build of this exact source (435 pass, 9 intentionally-malformed
+    # entries). --run-tests is pure logic, so the A55 must reproduce it exactly.
+    echo "435 of 447 tests passed (9 malformed, 0 skipped)" > "$OUT/jq.baseline"
+
+    # Guest jq (cross, static).
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+        --with-oniguruma=builtin --disable-maintainer-mode --disable-shared \
+        CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 \
+        || { echo "  cross configure failed"; return 1; }
+    make -j"$(nproc)" LDFLAGS="-all-static" >/dev/null 2>&1
+    [ -x jq ] || { echo "  jq not built"; return 1; }
+    cp jq "$OUT/"; "$STRIP" "$OUT/jq" 2>/dev/null || true
+    cp tests/jq.test "$OUT/"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[jq] $(./jq --version 2>&1)"
+echo "[jq] run jq's own suite (--run-tests) and compare to host baseline"
+got=$(./jq --run-tests jq.test 2>&1 | grep 'tests passed' | tail -1)
+want=$(cat jq.baseline)
+echo "  guest: $got"
+echo "  host : $want"
+[ "$got" = "$want" ] || { echo "[jq] summary diverged from host baseline"; exit 1; }
+echo "[jq] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

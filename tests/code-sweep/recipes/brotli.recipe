@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Brotli - Google's compressor (the one behind HTTP Content-Encoding: br). The
+# repo is CMake-first, but the CLI links cleanly from a plain source glob
+# (common/dec/enc + tools/brotli.c), so we skip cmake and cross-compile static
+# directly. Oracle: compress to stdout, decompress, sha256-compare.
+NAME=brotli
+CATEGORY=compression
+SRC=https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz
+REF=1.1.0
+
+cs_build() {
+    "$CC" -O2 -static -I c/include -o "$OUT/brotli" \
+        c/common/*.c c/dec/*.c c/enc/*.c c/tools/brotli.c -lm \
+        || { echo "  brotli build failed"; return 1; }
+    "$STRIP" "$OUT/brotli" 2>/dev/null || true
+
+    head -c 300000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null
+    sha256sum "$OUT/payload.bin" | awk '{print $1}' > "$OUT/payload.sha"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+set -e
+echo "[brotli] compress -q 9 / decompress / sha256"
+./brotli -c -q 9 payload.bin > payload.br
+./brotli -dc payload.br > payload.out
+want=$(cat payload.sha); got=$(sha256sum payload.out | cut -d' ' -f1)
+[ "$want" = "$got" ] || { echo "round-trip mismatch: $want != $got"; exit 1; }
+echo "[brotli] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
