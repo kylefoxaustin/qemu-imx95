@@ -154,53 +154,57 @@ INIT
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.gz"
 
-# ---- boot: run the whole corpus in-guest ----------------------------------
-LOG="$WORK/serial.log"
-echo "=== booting i.MX 95; running corpus in-guest ==="
-timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
-  -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.gz" \
-  -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
-  -device loader,file="$SM_ELF",cpu-num=6 \
-  -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
-  -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
-  -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
+# ---- boot + run, ITERS times (soak); build once, boot many ----------------
+# Outcomes per item: PASS (rc 0) / SKIP (rc 77, first-class) / FAIL (else, incl.
+# 124 = per-case timeout). A per-item tally accumulates across iterations so a
+# soak flags any item that ever flakes.
+declare -A TPASS TSKIP TFAIL
+for i in $ITEMS; do TPASS[$i]=0; TSKIP[$i]=0; TFAIL[$i]=0; done
+soak_fail=""; iter=1
+[ "$ITERS" -gt 1 ] && echo "=== SOAK: $ITERS iterations of the corpus ==="
+while [ "$iter" -le "$ITERS" ]; do
+    LOG="$WORK/serial-$iter.log"
+    echo "=== [iter $iter/$ITERS] booting i.MX 95; running corpus in-guest ==="
+    timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+      -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.gz" \
+      -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+      -device loader,file="$SM_ELF",cpu-num=6 \
+      -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
+      -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
+      -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
-# ---- scoreboard ------------------------------------------------------------
-# Outcomes: PASS (rc 0) / SKIP (rc 77, first-class, doesn't fail the run) /
-# FAIL (any other rc, incl. 124 = per-case timeout) / BLDFAIL (host build).
-echo
-echo "================= CODE-SWEEP SCOREBOARD ================="
-pass=0; skip=0; fail=0; bld=0; failed=""
-for i in $ITEMS; do
-    rcf="$SHARE/results/$i.rc"
-    rc=$( [ -f "$rcf" ] && cat "$rcf" || echo "n/a" )
-    case "$rc" in
-        0)   printf "  PASS  %s\n" "$i"; pass=$((pass+1)) ;;
-        77)  printf "  SKIP  %s (self-skip)\n" "$i"; skip=$((skip+1)) ;;
-        124) printf "  FAIL  %s (timeout >%ss)\n" "$i" "$CASE_TMO"; fail=$((fail+1)); failed="$failed $i" ;;
-        *)   printf "  FAIL  %s (rc=%s)\n" "$i" "$rc"; fail=$((fail+1)); failed="$failed $i" ;;
-    esac
-done
-for b in $FAILED_BUILD; do
-    printf "  BLDFAIL %s (host build)\n" "$b"; bld=$((bld+1))
-done
-echo "--------------------------------------------------------"
-echo "  PASS $pass  SKIP $skip  FAIL $fail  BLDFAIL $bld"
-echo "========================================================"
-
-if ! grep -qa '=== CODE-SWEEP-DONE ===' "$LOG"; then
-    echo "FAIL: guest did not finish (boot timeout/crash). Last serial lines:"
-    tail -n 25 "$LOG"
-    exit 1
-fi
-if [ -n "$failed" ]; then
-    echo "FAIL: failing items:$failed"
-    for i in $failed; do
-        echo "----- $i log -----"; sed -n '1,40p' "$SHARE/results/$i.log" 2>/dev/null
+    ipass=0; iskip=0; ifail=0; ifailed=""
+    for i in $ITEMS; do
+        rcf="$SHARE/results/$i.rc"; rc=$( [ -f "$rcf" ] && cat "$rcf" || echo "n/a" )
+        case "$rc" in
+            0)   ipass=$((ipass+1));   TPASS[$i]=$((TPASS[$i]+1)) ;;
+            77)  iskip=$((iskip+1));   TSKIP[$i]=$((TSKIP[$i]+1)) ;;
+            *)   ifail=$((ifail+1));   TFAIL[$i]=$((TFAIL[$i]+1)); ifailed="$ifailed $i($rc)" ;;
+        esac
     done
+    if ! grep -qa '=== CODE-SWEEP-DONE ===' "$LOG"; then
+        echo "  [iter $iter] FAIL: guest did not finish"; tail -n 15 "$LOG" | sed 's/^/    /'
+        soak_fail="$soak_fail iter$iter(nofinish)"
+    elif [ -n "$ifailed" ]; then
+        echo "  [iter $iter] FAIL:$ifailed"
+        for i in $ifailed; do n=${i%%(*}; echo "    --- $n ---"; sed -n '1,30p' "$SHARE/results/$n.log" 2>/dev/null | sed 's/^/    /'; done
+        soak_fail="$soak_fail iter$iter"
+    else
+        echo "  [iter $iter] PASS $ipass  SKIP $iskip  FAIL 0"
+    fi
+    iter=$((iter+1))
+done
+
+# ---- scoreboard (accumulated over $ITERS) ----------------------------------
+echo
+echo "============== CODE-SWEEP SCOREBOARD ($ITERS iter) =============="
+printf "  %-20s %5s %5s %5s\n" item PASS SKIP FAIL
+for i in $ITEMS; do printf "  %-20s %5s %5s %5s\n" "$i" "${TPASS[$i]}" "${TSKIP[$i]}" "${TFAIL[$i]}"; done
+for b in $FAILED_BUILD; do printf "  %-20s %5s %5s %5s  (BLDFAIL)\n" "$b" 0 0 0; done
+echo "================================================================"
+
+if [ -n "$soak_fail" ] || [ -n "$FAILED_BUILD" ]; then
+    echo "FAIL (soak):$soak_fail${FAILED_BUILD:+ build:$FAILED_BUILD}"
     exit 1
 fi
-[ "$bld" -eq 0 ] || { echo "FAIL: host build failures:$FAILED_BUILD"; exit 1; }
-msg="PASS: $pass item(s) verified in-guest"
-[ "$skip" -gt 0 ] && msg="$msg, $skip skipped"
-echo "$msg"
+echo "PASS: corpus green across $ITERS iteration(s)"

@@ -31,6 +31,7 @@ CROSS=${CROSS:-aarch64-linux-gnu-}
 CC=${CC:-${CROSS}gcc}; AR=${AR:-${CROSS}ar}; STRIP=${STRIP:-${CROSS}strip}
 TMO=${TMO:-900}; CASE_TMO=${CASE_TMO:-300}
 EMMC_MB=${EMMC_MB:-256}
+ITERS=${ITERS:-1}             # soak: build once, boot+run this many times
 CACHE=${CACHE:-$ROOT/build/code-sweep/cache}
 RDIR="$HERE/recipes-peripheral"
 
@@ -167,71 +168,74 @@ INIT
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.gz"
 
-# ---- boot with eMMC + NIC attached ----------------------------------------
-LOG="$WORK/serial.log"
-echo "=== booting i.MX 95 (eMMC + ENETC NIC); running peripheral corpus ==="
-timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
-  -kernel "$IMAGE" -dtb "$DTB_USE" -initrd "$WORK/initrd.gz" \
-  -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
-  -device loader,file="$SM_ELF",cpu-num=6 \
-  -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
-  -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
-  -drive if=none,format=raw,file="$EMMC",id=mmc0 -device emmc,drive=mmc0 \
-  -drive if=none,format=raw,file="$USBIMG",id=usbdisk \
-  -device usb-storage,bus=usb-bus.0,drive=usbdisk \
-  -nic user,model=fsl-enetc,tftp="$TFTPDIR" \
-  -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
-
-# ---- scoreboard ------------------------------------------------------------
-echo
-echo "============ CODE-SWEEP PERIPHERAL SCOREBOARD ============"
-pass=0; skp=0; fail=0; bld=0; failed=""
-for i in $ITEMS; do
-    rcf="$SHARE/results/$i.rc"; rc=$( [ -f "$rcf" ] && cat "$rcf" || echo n/a )
-    case "$rc" in
-        0)   printf "  PASS  %s\n" "$i"; pass=$((pass+1)) ;;
-        77)  printf "  SKIP  %s\n" "$i"; skp=$((skp+1)) ;;
-        124) printf "  FAIL  %s (timeout)\n" "$i"; fail=$((fail+1)); failed="$failed $i" ;;
-        *)   printf "  FAIL  %s (rc=%s)\n" "$i" "$rc"; fail=$((fail+1)); failed="$failed $i" ;;
-    esac
-done
-for b in $FAILED_BUILD; do printf "  BLDFAIL %s\n" "$b"; bld=$((bld+1)); done
-echo "---------------------------------------------------------"
-echo "  PASS $pass  SKIP $skp  FAIL $fail  BLDFAIL $bld"
-echo "========================================================="
-
-# ---- cross-machine dashboard (91emulator's SOAK scorer, drop-in) -----------
-# Parse SOAK:PASS/FAIL/SKIP:<name>:<detail> markers from the boot log into a
-# STATE dir of counter files, then render a function/PASS/FAIL/SKIP table whose
-# <name> keys share the 91/95 namespace so the two boards are diff-able.
+# ---- boot + run, ITERS times (soak); accumulate into one STATE dashboard ----
+# STATE persists across iterations so the 91/95 dashboard shows N-deep tallies
+# (e.g. gpio 20/0/0 after a 20-boot soak). Any iteration with a FAIL fails it.
 STATE="$WORK/state"; mkdir -p "$STATE"
 bump() { local key="$1.$2" n; n=$(cat "$STATE/$key" 2>/dev/null || echo 0); echo $((n+1)) > "$STATE/$key"; }
-while IFS= read -r line; do
-    case "$line" in
-        SOAK:PASS:*) n="${line#SOAK:PASS:}"; bump "${n%%:*}" pass ;;
-        SOAK:FAIL:*) n="${line#SOAK:FAIL:}"; bump "${n%%:*}" fail ;;
-        SOAK:SKIP:*) n="${line#SOAK:SKIP:}"; bump "${n%%:*}" skip ;;
-    esac
-done < <(grep -a '^SOAK:' "$LOG")
-if ls "$STATE"/* >/dev/null 2>&1; then
-    echo
-    echo "=========== cross-machine dashboard (91/95 keys) ========"
-    printf "  %-20s %6s %6s %6s\n" function PASS FAIL SKIP
-    for f in $(ls "$STATE" | sed -E 's/\.(pass|fail|skip)$//' | sort -u); do
-        p=$(cat "$STATE/$f.pass" 2>/dev/null || echo 0)
-        fl=$(cat "$STATE/$f.fail" 2>/dev/null || echo 0)
-        s=$(cat "$STATE/$f.skip" 2>/dev/null || echo 0)
-        printf "  %-20s %6s %6s %6s\n" "$f" "$p" "$fl" "$s"
+soak_fail=""; iter=1
+[ "$ITERS" -gt 1 ] && echo "=== SOAK: $ITERS iterations of the peripheral corpus ==="
+while [ "$iter" -le "$ITERS" ]; do
+    LOG="$WORK/serial-$iter.log"
+    echo "=== [iter $iter/$ITERS] booting i.MX 95 (eMMC + USB + ENETC NIC) ==="
+    timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+      -kernel "$IMAGE" -dtb "$DTB_USE" -initrd "$WORK/initrd.gz" \
+      -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+      -device loader,file="$SM_ELF",cpu-num=6 \
+      -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
+      -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
+      -drive if=none,format=raw,file="$EMMC",id=mmc0 -device emmc,drive=mmc0 \
+      -drive if=none,format=raw,file="$USBIMG",id=usbdisk \
+      -device usb-storage,bus=usb-bus.0,drive=usbdisk \
+      -nic user,model=fsl-enetc,tftp="$TFTPDIR" \
+      -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
+
+    ipass=0; iskp=0; ifail=0; ifailed=""
+    for i in $ITEMS; do
+        rcf="$SHARE/results/$i.rc"; rc=$( [ -f "$rcf" ] && cat "$rcf" || echo n/a )
+        case "$rc" in
+            0)   ipass=$((ipass+1)) ;;
+            77)  iskp=$((iskp+1)) ;;
+            *)   ifail=$((ifail+1)); ifailed="$ifailed $i" ;;
+        esac
     done
-    echo "========================================================="
-    # Stable copy of the markers for a future cross-machine STATE merge.
-    grep -a '^SOAK:' "$LOG" > "$CACHE/../peripheral-soak.log" 2>/dev/null || true
-fi
-grep -qa 'CODE-SWEEP-PERIPHERAL-DONE' "$LOG" || { echo "FAIL: guest did not finish"; tail -n 25 "$LOG"; exit 1; }
-if [ -n "$failed" ]; then
-    echo "FAIL:$failed"
-    for i in $failed; do echo "----- $i -----"; sed -n '1,40p' "$SHARE/results/$i.log"; done
+    # accumulate the in-guest SOAK markers (per-key) into STATE
+    while IFS= read -r line; do
+        case "$line" in
+            SOAK:PASS:*) n="${line#SOAK:PASS:}"; bump "${n%%:*}" pass ;;
+            SOAK:FAIL:*) n="${line#SOAK:FAIL:}"; bump "${n%%:*}" fail ;;
+            SOAK:SKIP:*) n="${line#SOAK:SKIP:}"; bump "${n%%:*}" skip ;;
+        esac
+    done < <(grep -a '^SOAK:' "$LOG")
+    if ! grep -qa 'CODE-SWEEP-PERIPHERAL-DONE' "$LOG"; then
+        echo "  [iter $iter] FAIL: guest did not finish"; tail -n 15 "$LOG" | sed 's/^/    /'
+        soak_fail="$soak_fail iter$iter(nofinish)"
+    elif [ -n "$ifailed" ]; then
+        echo "  [iter $iter] FAIL:$ifailed"
+        for i in $ifailed; do echo "    --- $i ---"; sed -n '1,30p' "$SHARE/results/$i.log" | sed 's/^/    /'; done
+        soak_fail="$soak_fail iter$iter($ifailed )"
+    else
+        echo "  [iter $iter] PASS $ipass  SKIP $iskp  FAIL 0"
+    fi
+    iter=$((iter+1))
+done
+
+# ---- accumulated cross-machine dashboard (91emulator's SOAK scorer) ---------
+echo
+echo "======= peripheral dashboard (91/95 keys, $ITERS iter) ======="
+printf "  %-20s %6s %6s %6s\n" function PASS FAIL SKIP
+for f in $(ls "$STATE" 2>/dev/null | sed -E 's/\.(pass|fail|skip)$//' | sort -u); do
+    p=$(cat "$STATE/$f.pass" 2>/dev/null || echo 0)
+    fl=$(cat "$STATE/$f.fail" 2>/dev/null || echo 0)
+    s=$(cat "$STATE/$f.skip" 2>/dev/null || echo 0)
+    printf "  %-20s %6s %6s %6s\n" "$f" "$p" "$fl" "$s"
+done
+echo "============================================================="
+cat "$STATE"/*.* >/dev/null 2>&1 && cat <(for f in $(ls "$STATE"|sed -E 's/\.(pass|fail|skip)$//'|sort -u); do echo "SOAK:$f:pass=$(cat $STATE/$f.pass 2>/dev/null||echo 0):fail=$(cat $STATE/$f.fail 2>/dev/null||echo 0)"; done) > "$CACHE/../peripheral-soak.log" 2>/dev/null || true
+
+for b in $FAILED_BUILD; do echo "  BLDFAIL $b"; done
+if [ -n "$soak_fail" ] || [ -n "$FAILED_BUILD" ]; then
+    echo "FAIL (soak):$soak_fail${FAILED_BUILD:+ build:$FAILED_BUILD}"
     exit 1
 fi
-[ "$bld" -eq 0 ] || { echo "FAIL: build failures:$FAILED_BUILD"; exit 1; }
-echo "PASS: $pass peripheral item(s) verified on real datapaths${skp:+ ($skp skipped)}"
+echo "PASS: peripheral corpus green across $ITERS iteration(s)"

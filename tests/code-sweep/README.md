@@ -36,7 +36,12 @@ is designed to host it too.
 ```sh
 tests/code-sweep/run.sh                 # all recipes
 tests/code-sweep/run.sh zlib bzip2      # a subset by NAME
+ITERS=20 tests/code-sweep/run.sh        # soak: build once, boot+run 20 times
 ```
+
+**Soak** (`ITERS=N`, both harnesses): builds the corpus once, then boots and
+runs it `N` times, accumulating a per-item PASS/SKIP/FAIL tally — so a flake that
+shows up 1-in-N is caught. Any iteration with a FAIL fails the run.
 
 Required (override via env): `QEMU`, `KBUILD` (Image + dtb), `SM_ELF`, a busybox
 initramfs (`INITRD`), and an aarch64 cross gcc (`CROSS`/`CC`). SKIPs (rc=0) if
