@@ -680,3 +680,81 @@ through to the shell); switching the init to `busybox poweroff -f` (a direct
 `reboot()` syscall) exercises the kernel power-off path and the clean exit.
 A guest image whose `poweroff` defers to a missing init manager won't
 terminate QEMU — standard QEMU behaviour, not an i.MX 95 issue.
+
+---
+
+## Code-sweep — real third-party software on the A55 (2026-06-27)
+
+A breadth campaign distinct from the v1.0 axes above: take real open-source
+projects, **download the source, cross-compile it, run it on the emulated
+i.MX 95, and check the answer against each project's *own* known-good oracle**
+(upstream self-test / round-trip / known-answer test / differential-vs-host
+golden). The point is volume of real-world code proven to execute correctly on
+the model. Harness: `tests/code-sweep/`. Machine-readable per-item registry with
+versions + oracles: [`docs/validation/code-sweep-matrix.yaml`](../validation/code-sweep-matrix.yaml).
+
+Method: cross-compile **statically** on the host (`aarch64-linux-gnu-gcc`; the
+busybox initramfs has no glibc loader), ship binaries + a per-item `runtest.sh`
+into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
+score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
+**non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
+
+**Result: 28/28 PASS** — 27 CPU-tier items + 1 peripheral-tier item.
+Reproduce: `tests/code-sweep/run.sh` (CPU) and
+`tests/code-sweep/run-peripheral.sh` (peripheral).
+
+### CPU tier (computes in core + memory)
+
+| # | Item | Ver | Category | Oracle | Result |
+|---|------|-----|----------|--------|--------|
+| C1 | zlib | 1.3.1 | compression | example self-test + minigzip round-trip (sha256) | PASS |
+| C2 | bzip2 | 1.0.8 | compression | make-test round-trip cmp vs committed refs | PASS |
+| C3 | zstd | 1.5.6 | compression | compress -19 + `zstd -t` + decompress (sha256) | PASS |
+| C4 | xz | 5.4.5 | compression | compress + `xz -t` + decompress (sha256) | PASS |
+| C5 | brotli | 1.1.0 | compression | compress -q9 + decompress round-trip (sha256) | PASS |
+| C6 | lz4 | 1.9.4 | compression | compress -9 + decompress round-trip (sha256) | PASS |
+| C7 | heatshrink | master | compression | own encoder/decoder suite (greatest) | PASS |
+| C8 | miniz | 3.0.2 | compression | example1 round-trip + memcmp self-check | PASS |
+| C9 | crypto-algorithms | master | crypto | 9 KATs (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) | PASS |
+| C10 | libsodium | 1.0.19 | crypto | ~20 of its own test/default self-checks vs `.exp` | PASS |
+| C11 | mbedtls | 3.6.2 | crypto | `selftest` KATs across ~22 suites | PASS |
+| C12 | libtomcrypt | 1.18.2 | crypto | own math-free KAT sub-tests | PASS |
+| C13 | base64 (aklomp) | 0.5.2 | base64 | known-answer encode/decode vectors | PASS |
+| C14 | xxhash | 0.8.2 | hashing | canonical XXH32/64/128/XXH3 vectors + host/guest agreement | PASS |
+| C15 | sqlite | 3.46.1 | database | SQL workload diffed vs host-built golden | PASS |
+| C16 | jq | 1.7.1 | json | `--run-tests` differential vs pinned baseline (435/447) | PASS |
+| C17 | cjson | 1.7.18 | json | 18 of its own Unity test suites | PASS |
+| C18 | pcre2 | 10.43 | regex | testinput1 diffed vs committed testoutput1 (RunTest 1) | PASS |
+| C19 | oniguruma | 6.9.9 | regex | own testc/back/options/regset suites | PASS |
+| C20 | expat | 2.6.2 | xml | xmlwf accept + reject battery | PASS |
+| C21 | tinyexpr | master | math | bundled smoke test | PASS |
+| C22 | utf8proc | 2.9.0 | unicode | own case/charwidth/iterate/valid/misc tests | PASS |
+| C23 | uthash | 2.3.0 | datastruct | 96 programs vs committed `.ans` goldens | PASS |
+| C24 | sds | master | string | SDS_TEST_MAIN self-test (46 tests, 0 failed) | PASS |
+| C25 | lua | 5.4.7 | interpreter | self-test asserts (strings/tables/coroutines/metatables) | PASS |
+| C26 | cpython | 3.10.14 | interpreter | own `python -m test`: 33 stdlib modules | PASS |
+| C27 | ltp-syscalls | 20240524 | syscall | LTP syscall subset: ~250 TPASS (of 323 binaries) | PASS |
+
+Named, model-/build-independent SKIPs (not A55 failures, kept honest):
+utf8proc normtest/graphemetest/iscase (need downloaded Unicode data); CPython
+`_testcapi`/`_ssl`/`_ctypes`/`_decimal` tests; LTP TBROK/TCONF (minimal-initramfs
+environment) + 4 env-only TFAILs.
+
+### Peripheral tier (real hardware datapaths)
+
+| # | Item | Datapath | Oracle | Result |
+|---|------|----------|--------|--------|
+| P1 | storage-sqlite | uSDHC / eMMC (ADMA) | SQLite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card, diffs vs host golden | PASS |
+
+The peripheral harness emits the i.MX91 sweep's shared `SOAK:` markers
+(`storage-emmc` key) so the 91 and 95 dashboards are diff-able. Network
+(`m95-net-enetc`) and USB (`usb-enum`/`usb-bulk`) datapath items are planned next.
+
+### Deferred candidates
+
+Not in the corpus because each needs host-only tooling or a download step that
+breaks the self-contained recipe model: **quickjs** (cross can't exec target
+`qjsc`), **wolfssl** (release lacks `configure`, no autoreconf on host),
+**inih** (multi-config baselines), **json-c** (cmake harness), **mpdecimal**
+(IBM decTest tree via `gettests.sh`), **gmp** (libtool ignores `-all-static`),
+**libyaml** (external test-data wiring).

@@ -8,6 +8,11 @@ with as much real, correctness-checked code as possible.
 Scope is deliberately **CPU + standard-peripheral only** — no GPU/VPU/NPU/ISP
 workloads, since those blocks have no functional model.
 
+**Results of record** (every item, version, oracle, status) are committed at
+[`docs/validation/code-sweep-matrix.yaml`](../../docs/validation/code-sweep-matrix.yaml)
+(machine-readable) and in the "Code-sweep" section of
+[`docs/imx95/validation-report.md`](../../docs/imx95/validation-report.md).
+
 ## How it works
 
 For every recipe in `recipes/`, `run.sh`:

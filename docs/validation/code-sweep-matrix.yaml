@@ -1,0 +1,115 @@
+# i.MX95 QEMU — code-sweep results matrix
+#
+# Real third-party open-source software downloaded, cross-compiled, run ON the
+# emulated i.MX95 (Cortex-A55 + peripherals), and checked against each project's
+# OWN known-good oracle (upstream self-test / round-trip / known-answer test /
+# differential-vs-host golden). This is the per-item registry of what is proven
+# to run correctly on the model; the harness that produces it is tests/code-sweep/.
+#
+# Tiers:
+#   cpu        — computes in CPU + memory only (no accelerator, no peripheral I/O)
+#   peripheral — drives a real hardware datapath (uSDHC/eMMC, ENETC, USB, ...)
+#
+# Reproduce:
+#   tests/code-sweep/run.sh                 # all cpu items (one boot)
+#   tests/code-sweep/run.sh zlib sqlite     # a subset by name
+#   tests/code-sweep/run-peripheral.sh      # peripheral items (eMMC + NIC attached)
+# Each item's runtest.sh exits 0=PASS / 77=SKIP / other=FAIL; the host prints a
+# scoreboard. SKIPs are first-class (a capability the model legitimately lacks).
+#
+# Scope: NON-accelerator only (no GPU/VPU/NPU/ISP — those have no functional model).
+
+board:        imx95-19x19-evk
+qemu_machine: imx95-19x19-evk
+
+environment:
+  model:          imx95-netc @ 9b3e62e359e        # harness branch/commit
+  qemu_binary:    build/qemu-system-aarch64        # built 2026-06-14
+  kernel:         "6.12.49 (imx95 BSP)"
+  sm:             "cfg=mx95evk M=2"
+  cross_toolchain: aarch64-linux-gnu-gcc 11.4.0    # static link; busybox initramfs has no glibc loader
+  delivery:       virtio-9p (host dir -> guest /mnt) ; busybox initramfs ; one boot per run
+  last_run:       2026-06-27
+
+# ---- summary -------------------------------------------------------------
+summary:
+  cpu_items:        27
+  peripheral_items: 1
+  result:           "28/28 PASS"
+
+# ---- CPU tier ------------------------------------------------------------
+cpu:
+  - { name: zlib,             version: 1.3.1,    category: compression, result: pass,
+      oracle: "bundled example self-test + minigzip pipe round-trip (sha256)" }
+  - { name: bzip2,            version: 1.0.8,    category: compression, result: pass,
+      oracle: "upstream make-test round-trip cmp vs committed sample refs" }
+  - { name: zstd,             version: 1.5.6,    category: compression, result: pass,
+      oracle: "compress -19 + 'zstd -t' integrity + decompress (sha256)" }
+  - { name: xz,               version: 5.4.5,    category: compression, result: pass,
+      oracle: "compress + 'xz -t' integrity + decompress round-trip (sha256)" }
+  - { name: brotli,           version: 1.1.0,    category: compression, result: pass,
+      oracle: "compress -q 9 + decompress round-trip (sha256)" }
+  - { name: lz4,              version: 1.9.4,    category: compression, result: pass,
+      oracle: "compress -9 + decompress round-trip (sha256)" }
+  - { name: heatshrink,       version: master,   category: compression, result: pass,
+      oracle: "own encoder/decoder round-trip suite (greatest framework)" }
+  - { name: miniz,            version: 3.0.2,    category: compression, result: pass,
+      oracle: "example1 compress/decompress round-trip with memcmp self-check" }
+  - { name: crypto-algorithms, version: master,  category: crypto,      result: pass,
+      oracle: "9 per-algorithm KATs: sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64" }
+  - { name: libsodium,        version: 1.0.19,   category: crypto,      result: pass,
+      oracle: "~20 of its own test/default programs, each self-checks vs its .exp" }
+  - { name: mbedtls,          version: 3.6.2,    category: crypto,      result: pass,
+      oracle: "selftest KATs across ~22 suites (aes/gcm/ccm/sha*/sha3/des/cmac/chacha20/poly1305/rsa/mpi/camellia/aria/ecp)" }
+  - { name: libtomcrypt,      version: 1.18.2,   category: crypto,      result: pass,
+      oracle: "own math-free KAT sub-tests (store/rotate/misc/cipher_hash/mac/modes)" }
+  - { name: base64,           version: 0.5.2,    category: base64,      result: pass,
+      oracle: "aklomp/base64 known-answer encode/decode vectors" }
+  - { name: xxhash,           version: 0.8.2,    category: hashing,     result: pass,
+      oracle: "canonical empty-input vectors XXH32/64/128/XXH3 + host/guest agreement on random payload" }
+  - { name: sqlite,           version: 3.46.1,   category: database,    result: pass,
+      oracle: "SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs host-built golden" }
+  - { name: jq,               version: 1.7.1,    category: json,        result: pass,
+      oracle: "jq's own --run-tests; differential vs version-pinned host baseline (435/447, 9 malformed)" }
+  - { name: cjson,            version: 1.7.18,   category: json,        result: pass,
+      oracle: "18 of cJSON's own Unity test suites, each nonzero on assert failure" }
+  - { name: pcre2,            version: 10.43,    category: regex,       result: pass,
+      oracle: "pcre2test runs PCRE2's testinput1, diffed vs committed testoutput1 (RunTest test 1)" }
+  - { name: oniguruma,        version: 6.9.9,    category: regex,       result: pass,
+      oracle: "own testc/back/options/regset suites (SUCC/FAIL/ERROR), nonzero unless FAIL+ERROR==0" }
+  - { name: expat,            version: 2.6.2,    category: xml,         result: pass,
+      oracle: "xmlwf accepts a battery of well-formed XML and rejects malformed XML (both paths)" }
+  - { name: tinyexpr,         version: master,   category: math,        result: pass,
+      oracle: "bundled smoke test (parsing/precedence/functions/closures/pow), nonzero on any failed case" }
+  - { name: utf8proc,         version: 2.9.0,    category: unicode,     result: pass,
+      oracle: "own self-contained tests: case-fold/charwidth/iterate/valid/misc"
+,     skipped: "normtest/graphemetest/iscase need downloaded Unicode conformance data" }
+  - { name: uthash,           version: 2.3.0,    category: datastruct,  result: pass,
+      oracle: "full suite: 96 programs, each stdout compared to its committed .ans golden" }
+  - { name: sds,              version: master,   category: string,      result: pass,
+      oracle: "antirez SDS self-test (-DSDS_TEST_MAIN): 46 tests, requires 0 failed" }
+  - { name: lua,              version: 5.4.7,    category: interpreter, result: pass,
+      oracle: "reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables" }
+  - { name: cpython,          version: 3.10.14,  category: interpreter, result: pass,
+      oracle: "static CPython runs its own 'python -m test' on 33 curated CPU-pure stdlib modules"
+,     skipped: "_testcapi tests + test_itertools/test_pickle (parallel-runner); _ssl/_ctypes/_decimal need cross libs" }
+  - { name: ltp-syscalls,     version: 20240524, category: syscall,     result: pass,
+      oracle: "LTP syscall subset: 323 testcase binaries; ~250 TPASS on the A55"
+,     skipped: "TBROK/TCONF counted as SKIP (env: minimal initramfs); 4 env-only TFAILs named in the recipe" }
+
+# ---- peripheral tier (real hardware datapaths) ---------------------------
+# Shared cross-machine dashboard keys (agreed with the i.MX91 sweep): the guest
+# emits SOAK:PASS|FAIL|SKIP:<key>:... so 91 and 95 boards are diff-able.
+peripheral:
+  - { name: storage-sqlite,   key: storage-emmc, version: 3.46.1, datapath: "uSDHC / eMMC (ADMA)", result: pass,
+      oracle: "SQLite writes a 20k-row DB through ext4-on-eMMC, sync, drop caches, re-read off the card, diff vs host golden" }
+
+# ---- deferred (not in the corpus; need host-tools/downloads we avoid in-recipe)
+deferred:
+  - { name: quickjs,   reason: "cross build can't exec the target qjsc to generate repl.c" }
+  - { name: wolfssl,   reason: "release tarball lacks configure; no autoreconf on the build host (redundant w/ 4 crypto batteries)" }
+  - { name: inih,      reason: "multi-config baselines (unittest rebuilt per -D set)" }
+  - { name: json-c,    reason: "cmake-based test harness" }
+  - { name: mpdecimal, reason: "official/additional.decTest are index files; the IBM decTest vector tree is fetched by gettests.sh" }
+  - { name: gmp,       reason: "libtool test harness ignores -all-static (test binaries come out dynamic)" }
+  - { name: libyaml,   reason: "test-data wiring (run-* need external YAML inputs)" }
