@@ -8,6 +8,7 @@
 # produced by a host-built sqlite3 of the same source.
 NAME=storage-sqlite
 CATEGORY=storage
+CS_KEY=storage-emmc          # shared cross-machine dashboard key (91/95 namespace)
 SRC=https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
 REF=3.46.1
 CS_DEFS="-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_ENABLE_JSON1"

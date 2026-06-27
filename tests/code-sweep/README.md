@@ -82,6 +82,14 @@ running `recipes-peripheral/`:
 tests/code-sweep/run-peripheral.sh            # all peripheral recipes
 ```
 
+Each peripheral recipe declares a `CS_KEY` from a **shared cross-machine
+namespace** (agreed with the i.MX91 sweep: `storage-emmc`, `storage-sd`,
+`usb-enum`, `usb-bulk`, `net-*`, `i2c-*`, `audio-*`, `rtc`, `watchdog`, `gpio`;
+95-specific keys are `m95-*`). The guest emits `SOAK:PASS|FAIL|SKIP:<key>:…`
+markers and the host renders a `function/PASS/FAIL/SKIP` dashboard over those
+keys — so the 91 and 95 boards are literally diff-able and a future merge of
+both STATE dirs prints one cross-machine board.
+
 | item | datapath | oracle |
 |------|----------|--------|
 | `storage-sqlite` | uSDHC / eMMC | sqlite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card; rows diffed vs a host golden |

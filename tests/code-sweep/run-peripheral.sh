@@ -61,7 +61,7 @@ echo "=== code-sweep peripheral: building corpus (cross: $CC) ==="
 FAILED_BUILD=""
 for rfile in $RECIPES; do
     (
-        NAME=""; CATEGORY=""; SRC=""; REF=""
+        NAME=""; CATEGORY=""; SRC=""; REF=""; CS_KEY=""
         # shellcheck disable=SC1090
         . "$rfile"
         [ -n "$NAME" ] && [ -n "$SRC" ] || { echo "  bad recipe: $rfile"; exit 3; }
@@ -77,6 +77,7 @@ for rfile in $RECIPES; do
         echo "  build  $NAME"
         ( cd "$ex" && cs_build ) || { echo "  BUILD-FAIL $NAME"; exit 6; }
         [ -x "$OUT/runtest.sh" ] || { echo "  NO-RUNTEST $NAME"; exit 7; }
+        echo "${CS_KEY:-$NAME}" > "$OUT/.key"   # shared cross-machine dashboard key
     ) || FAILED_BUILD="$FAILED_BUILD $(basename "$rfile" .recipe)"
 done
 ITEMS=$(cd "$SHARE/items" && ls 2>/dev/null)
@@ -118,12 +119,20 @@ run_to() { if [ "$TFORM" = new ]; then timeout "$CASE_TMO" "$@"; else timeout -t
 cd /mnt/items || { echo "no items"; /bin/busybox poweroff -f; }
 for d in */; do
     item=${d%/}; [ -x "$item/runtest.sh" ] || continue
-    echo "----8<---- ITEM $item ----8<----"
+    key=$(cat "$item/.key" 2>/dev/null || echo "$item")
+    echo "----8<---- ITEM $item ($key) ----8<----"
     ( cd "$item" && run_to ./runtest.sh ) > "/mnt/results/$item.log" 2>&1
     rc=$?; echo "$rc" > "/mnt/results/$item.rc"
-    cat "/mnt/results/$item.log"; echo "----8<---- $item rc=$rc ----8<----"
+    cat "/mnt/results/$item.log"
+    # Cross-machine scorer marker (91/95 shared format): SOAK:<R>:<name>:<detail>
+    if   [ "$rc" -eq 0 ];  then R=PASS
+    elif [ "$rc" -eq 77 ]; then R=SKIP
+    else R=FAIL; fi
+    echo "SOAK:$R:$key:rc=$rc"
+    echo "----8<---- $item rc=$rc ----8<----"
 done
 sync
+echo "SOAK:BATTERY:DONE"
 echo "=== CODE-SWEEP-PERIPHERAL-DONE ==="
 /bin/busybox poweroff -f
 INIT
@@ -161,6 +170,34 @@ for b in $FAILED_BUILD; do printf "  BLDFAIL %s\n" "$b"; bld=$((bld+1)); done
 echo "---------------------------------------------------------"
 echo "  PASS $pass  SKIP $skp  FAIL $fail  BLDFAIL $bld"
 echo "========================================================="
+
+# ---- cross-machine dashboard (91emulator's SOAK scorer, drop-in) -----------
+# Parse SOAK:PASS/FAIL/SKIP:<name>:<detail> markers from the boot log into a
+# STATE dir of counter files, then render a function/PASS/FAIL/SKIP table whose
+# <name> keys share the 91/95 namespace so the two boards are diff-able.
+STATE="$WORK/state"; mkdir -p "$STATE"
+bump() { local key="$1.$2" n; n=$(cat "$STATE/$key" 2>/dev/null || echo 0); echo $((n+1)) > "$STATE/$key"; }
+while IFS= read -r line; do
+    case "$line" in
+        SOAK:PASS:*) n="${line#SOAK:PASS:}"; bump "${n%%:*}" pass ;;
+        SOAK:FAIL:*) n="${line#SOAK:FAIL:}"; bump "${n%%:*}" fail ;;
+        SOAK:SKIP:*) n="${line#SOAK:SKIP:}"; bump "${n%%:*}" skip ;;
+    esac
+done < <(grep -a '^SOAK:' "$LOG")
+if ls "$STATE"/* >/dev/null 2>&1; then
+    echo
+    echo "=========== cross-machine dashboard (91/95 keys) ========"
+    printf "  %-20s %6s %6s %6s\n" function PASS FAIL SKIP
+    for f in $(ls "$STATE" | sed -E 's/\.(pass|fail|skip)$//' | sort -u); do
+        p=$(cat "$STATE/$f.pass" 2>/dev/null || echo 0)
+        fl=$(cat "$STATE/$f.fail" 2>/dev/null || echo 0)
+        s=$(cat "$STATE/$f.skip" 2>/dev/null || echo 0)
+        printf "  %-20s %6s %6s %6s\n" "$f" "$p" "$fl" "$s"
+    done
+    echo "========================================================="
+    # Stable copy of the markers for a future cross-machine STATE merge.
+    grep -a '^SOAK:' "$LOG" > "$CACHE/../peripheral-soak.log" 2>/dev/null || true
+fi
 grep -qa 'CODE-SWEEP-PERIPHERAL-DONE' "$LOG" || { echo "FAIL: guest did not finish"; tail -n 25 "$LOG"; exit 1; }
 if [ -n "$failed" ]; then
     echo "FAIL:$failed"
