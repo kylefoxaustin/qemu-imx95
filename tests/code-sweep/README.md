@@ -98,6 +98,7 @@ both STATE dirs prints one cross-machine board.
 | item | datapath | oracle |
 |------|----------|--------|
 | `storage-sqlite` | uSDHC / eMMC | sqlite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card; rows diffed vs a host golden |
+| `net-tftp` | ENETC NIC | static busybox brings eth0 up, pulls a 256 KB payload + sha over TFTP from slirp, sha256-verifies (boot patches the dtb so ENETC probes) |
 
 ## Current corpus (CPU tier)
 

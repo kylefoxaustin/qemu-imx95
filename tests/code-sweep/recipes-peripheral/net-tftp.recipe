@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Network datapath: real traffic over the from-scratch ENETC NIC. We cross-build
+# a static BusyBox (itself real third-party code, and the only way to get net
+# tooling into the busybox initramfs, which ships none), bring eth0 up, and pull
+# a random payload + its sha over TFTP from slirp's built-in server at 10.0.2.2,
+# then sha256-verify. This exercises the ENETC TX/RX BD-ring datapath end to end
+# (the payload only verifies if every byte crossed the emulated MAC correctly).
+#
+# The harness (run-peripheral.sh) serves $WORK/tftp via -nic ...,tftp=, so the
+# files netpayload.bin + netpayload.sha appear at 10.0.2.2.
+NAME=net-tftp
+CATEGORY=network
+CS_KEY=m95-net-enetc          # 95 is ENETC (not FEC/eQOS) -> machine-specific key
+SRC=https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+REF=1.36.1
+
+cs_build() {
+    make defconfig >/dev/null 2>&1
+    for opt in CONFIG_STATIC CONFIG_TFTP CONFIG_FEATURE_TFTP_GET \
+               CONFIG_IFCONFIG CONFIG_ROUTE CONFIG_SHA256SUM; do
+        sed -i "s/^# $opt is not set/$opt=y/; s/^$opt=.*/$opt=y/" .config
+    done
+    yes "" | make oldconfig >/dev/null 2>&1
+    make ARCH=arm64 CROSS_COMPILE="${CC%gcc}" -j"$(nproc)" >/dev/null 2>&1
+    [ -x busybox ] || { echo "  busybox build failed"; return 1; }
+    cp busybox "$OUT/"; "$STRIP" "$OUT/busybox" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd); BB="$HERE/busybox"
+# Wait for the ENETC interface to probe.
+i=0; while [ $i -lt 30 ]; do [ -e /sys/class/net/eth0 ] && break; sleep 1; i=$((i+1)); done
+[ -e /sys/class/net/eth0 ] || { echo "[net] no eth0 (ENETC) present - skipping"; exit 77; }
+# Static config matching slirp's network (DHCP would hand out the same .15).
+"$BB" ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up || { echo "[net] ifconfig failed"; exit 1; }
+"$BB" route add default gw 10.0.2.2 2>/dev/null
+echo "[net] eth0 up: $("$BB" ifconfig eth0 | grep -o 'inet addr:[0-9.]*')"
+# Pull the payload + its sha over TFTP from slirp (10.0.2.2) -> ENETC RX/TX.
+cd "$HERE"; rm -f netpayload.bin netpayload.sha
+"$BB" tftp -g -r netpayload.sha 10.0.2.2 || { echo "[net] tftp sha fetch failed"; exit 1; }
+"$BB" tftp -g -r netpayload.bin 10.0.2.2 || { echo "[net] tftp payload fetch failed"; exit 1; }
+want=$(cat netpayload.sha)
+got=$("$BB" sha256sum netpayload.bin | awk '{print $1}')
+[ -n "$got" ] && [ "$want" = "$got" ] || { echo "[net] sha mismatch: $got != $want"; exit 1; }
+echo "[net] OK ($("$BB" wc -c < netpayload.bin) bytes pulled over ENETC, sha256 verified)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

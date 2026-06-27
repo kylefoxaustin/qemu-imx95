@@ -25,6 +25,7 @@ KBUILD=${KBUILD:-$HOME/Documents/linux-imx95-build}
 SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}}
 IMAGE=${IMAGE:-$KBUILD/arch/arm64/boot/Image}
 DTB=${DTB:-$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
+DTC=${DTC:-$KBUILD/scripts/dtc/dtc}
 INITRD=${INITRD:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
 CROSS=${CROSS:-aarch64-linux-gnu-}
 CC=${CC:-${CROSS}gcc}; AR=${AR:-${CROSS}ar}; STRIP=${STRIP:-${CROSS}strip}
@@ -87,7 +88,26 @@ ITEMS=$(cd "$SHARE/items" && ls 2>/dev/null)
 EMMC="$WORK/emmc.img"
 truncate -s "${EMMC_MB}M" "$EMMC"
 mke2fs -F -q -t ext4 "$EMMC" >/dev/null 2>&1 || skip "mke2fs failed"
-echo "=== eMMC: ${EMMC_MB}M ext4 image ready; NIC: -nic user (host=10.0.2.2) ==="
+
+# ---- TFTP root served by slirp at 10.0.2.2 (for net datapath tests) --------
+TFTPDIR="$WORK/tftp"; mkdir -p "$TFTPDIR"
+head -c 262144 /dev/urandom > "$TFTPDIR/netpayload.bin" 2>/dev/null \
+    || dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\0' 'N' > "$TFTPDIR/netpayload.bin"
+sha256sum "$TFTPDIR/netpayload.bin" | awk '{print $1}' > "$TFTPDIR/netpayload.sha"
+echo "=== eMMC: ${EMMC_MB}M ext4 ready; NIC: -nic user (host=10.0.2.2, tftp on) ==="
+
+# ---- patched dtb so the ENETC ports actually probe (fixed MAC + identity
+#      msi-map; the stock nvmem MAC never resolves under emulation). Reuse the
+#      netc test's splice; fall back to the stock dtb if dtc/patch are absent. --
+DTB_USE="$DTB"
+NETC_PATCH="$ROOT/tests/netc/patch-dtb.py"
+if [ -x "$DTC" ] && [ -f "$NETC_PATCH" ] && command -v python3 >/dev/null; then
+    if "$DTC" -I dtb -O dts "$DTB" > "$WORK/base.dts" 2>/dev/null \
+       && python3 "$NETC_PATCH" "$WORK/base.dts" > "$WORK/netc.dts" 2>/dev/null \
+       && "$DTC" -I dts -O dtb -o "$WORK/netc.dtb" "$WORK/netc.dts" 2>/dev/null; then
+        DTB_USE="$WORK/netc.dtb"; echo "=== dtb: ENETC ports patched (fixed MAC + identity msi-map) ==="
+    fi
+fi
 
 # ---- stage the busybox initramfs runner -----------------------------------
 STAGE="$WORK/root"; mkdir -p "$STAGE"
@@ -144,13 +164,13 @@ chmod +x "$STAGE/init"
 LOG="$WORK/serial.log"
 echo "=== booting i.MX 95 (eMMC + ENETC NIC); running peripheral corpus ==="
 timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
-  -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.gz" \
+  -kernel "$IMAGE" -dtb "$DTB_USE" -initrd "$WORK/initrd.gz" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
   -device loader,file="$SM_ELF",cpu-num=6 \
   -fsdev local,id=fsdev0,path="$SHARE",security_model=none \
   -device virtio-9p-device,fsdev=fsdev0,mount_tag=hostshare \
   -drive if=none,format=raw,file="$EMMC",id=mmc0 -device emmc,drive=mmc0 \
-  -nic user,model=fsl-enetc \
+  -nic user,model=fsl-enetc,tftp="$TFTPDIR" \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
 # ---- scoreboard ------------------------------------------------------------

@@ -34,8 +34,8 @@ environment:
 # ---- summary -------------------------------------------------------------
 summary:
   cpu_items:        27
-  peripheral_items: 1
-  result:           "28/28 PASS"
+  peripheral_items: 2
+  result:           "29/29 PASS"
 
 # ---- CPU tier ------------------------------------------------------------
 cpu:
@@ -103,6 +103,9 @@ cpu:
 peripheral:
   - { name: storage-sqlite,   key: storage-emmc, version: 3.46.1, datapath: "uSDHC / eMMC (ADMA)", result: pass,
       oracle: "SQLite writes a 20k-row DB through ext4-on-eMMC, sync, drop caches, re-read off the card, diff vs host golden" }
+  - { name: net-tftp,         key: m95-net-enetc, version: "busybox 1.36.1", datapath: "ENETC NIC (BD-ring TX/RX)", result: pass,
+      oracle: "static busybox brings eth0 up, pulls a 256 KB random payload + its sha over TFTP from slirp (10.0.2.2), sha256-verifies"
+,     note: "boot uses tests/netc/patch-dtb.py (fixed MAC + identity msi-map) so the ENETC ports probe" }
 
 # ---- deferred (not in the corpus; need host-tools/downloads we avoid in-recipe)
 deferred:

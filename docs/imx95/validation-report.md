@@ -699,7 +699,7 @@ into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
 score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
 **non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
 
-**Result: 28/28 PASS** — 27 CPU-tier items + 1 peripheral-tier item.
+**Result: 29/29 PASS** — 27 CPU-tier items + 2 peripheral-tier items.
 Reproduce: `tests/code-sweep/run.sh` (CPU) and
 `tests/code-sweep/run-peripheral.sh` (peripheral).
 
@@ -745,10 +745,12 @@ environment) + 4 env-only TFAILs.
 | # | Item | Datapath | Oracle | Result |
 |---|------|----------|--------|--------|
 | P1 | storage-sqlite | uSDHC / eMMC (ADMA) | SQLite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card, diffs vs host golden | PASS |
+| P2 | net-tftp | ENETC NIC (BD-ring TX/RX) | static busybox brings eth0 up, pulls a 256 KB random payload + its sha over TFTP from slirp (10.0.2.2), sha256-verifies | PASS |
 
 The peripheral harness emits the i.MX91 sweep's shared `SOAK:` markers
-(`storage-emmc` key) so the 91 and 95 dashboards are diff-able. Network
-(`m95-net-enetc`) and USB (`usb-enum`/`usb-bulk`) datapath items are planned next.
+(`storage-emmc`, `m95-net-enetc` keys) so the 91 and 95 dashboards are
+diff-able. The net boot reuses `tests/netc/patch-dtb.py` (fixed MAC + identity
+msi-map) so the ENETC ports probe. USB (`usb-enum`/`usb-bulk`) is planned next.
 
 ### Deferred candidates
 
