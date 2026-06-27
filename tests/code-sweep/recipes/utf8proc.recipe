@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# utf8proc - Unicode normalization / case-folding / grapheme / char-width
+# library. We build libutf8proc.a and its own self-contained test programs
+# (case-folding, char-width, codepoint iteration, validity, misc), each using
+# the bundled test harness and exiting nonzero on a mismatch. The data-file
+# tests (normtest/graphemetest/iscase) need the Unicode conformance data that
+# utf8proc downloads at build time, so they're left out (would need network).
+NAME=utf8proc
+CATEGORY=unicode
+SRC=https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.9.0.tar.gz
+REF=2.9.0
+
+CS_TESTS="case misc charwidth iterate valid"
+
+cs_build() {
+    make -j"$(nproc)" CC="$CC" CFLAGS="-O2" libutf8proc.a >/dev/null 2>&1
+    [ -f libutf8proc.a ] || { echo "  libutf8proc.a not built"; return 1; }
+    mkdir -p "$OUT/bin"; built=""
+    for t in $CS_TESTS; do
+        [ -f "test/$t.c" ] || continue
+        if "$CC" -O2 -static -I. -o "$OUT/bin/$t" \
+              "test/$t.c" test/tests.c libutf8proc.a 2>/dev/null; then
+            "$STRIP" "$OUT/bin/$t" 2>/dev/null || true; built="$built $t"
+        fi
+    done
+    [ -n "$built" ] || { echo "  no utf8proc tests built"; return 1; }
+    echo "  built tests:$built"; echo "$built" > "$OUT/.tests"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd)
+fail=0; ran=0
+for t in $(cat "$HERE/.tests"); do
+    [ -x "$HERE/bin/$t" ] || continue
+    ran=$((ran+1))
+    if "$HERE/bin/$t" >/dev/null 2>&1; then echo "[utf8proc] $t OK"
+    else echo "[utf8proc] $t FAILED (rc=$?)"; fail=1; fi
+done
+[ "$ran" -gt 0 ] || { echo "no utf8proc tests"; exit 1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "[utf8proc] OK ($ran self-tests)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

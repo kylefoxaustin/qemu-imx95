@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# TinyExpr - a small math-expression parser/evaluator. Its bundled smoke.c is a
+# self-checking test (parsing, operator precedence, functions, variables,
+# closures, optimisation, pow, combinatorics) that returns nonzero on any failed
+# case. Exercises the recursive-descent parser + libm float math on the A55.
+NAME=tinyexpr
+CATEGORY=math
+SRC=https://github.com/codeplea/tinyexpr/archive/refs/heads/master.tar.gz
+REF=master
+
+cs_build() {
+    "$CC" -O2 -static -o "$OUT/smoke" smoke.c tinyexpr.c -lm \
+        || { echo "  tinyexpr build failed"; return 1; }
+    "$STRIP" "$OUT/smoke" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[tinyexpr] run bundled smoke test"
+if ./smoke; then echo "[tinyexpr] OK"; else echo "[tinyexpr] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

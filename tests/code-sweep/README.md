@@ -106,6 +106,8 @@ both STATE dirs prints one cross-machine board.
 | `lz4` | compression | compress -9 + decompress round-trip (sha256) |
 | `pcre2` | regex | pcre2test runs PCRE2's own testinput1, diffed vs the committed testoutput1 (upstream RunTest test 1) |
 | `expat` | xml | xmlwf accepts a battery of well-formed XML and rejects malformed XML (both paths verified) |
+| `tinyexpr` | math | bundled smoke test (parsing/precedence/functions/closures/pow), returns nonzero on any failed case |
+| `utf8proc` | unicode | utf8proc's own self-contained tests (case-fold/charwidth/iterate/valid/misc), each exits nonzero on mismatch |
 | `crypto-algorithms` | crypto | B-Con per-algorithm known-answer tests (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) |
 | `libsodium` | crypto | ~20 of libsodium's own test/default programs, each self-checking vs its `.exp` (box/sign/secretbox/aead/scalarmult/…) |
 | `mbedtls` | crypto | Mbed-TLS `selftest` KATs across ~22 suites (aes/gcm/sha/rsa/mpi/ecp/chacha20/…) |
