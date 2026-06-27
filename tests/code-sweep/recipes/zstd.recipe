@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# zstd - Facebook's Zstandard compressor. Simple Makefile, pure C, builds a
+# static CLI cleanly. Oracle: compress at a high level, verify the frame with
+# the built-in integrity check (`zstd -t`), decompress, and sha256-compare.
+NAME=zstd
+CATEGORY=compression
+SRC=https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+REF=1.5.6
+
+cs_build() {
+    make -j"$(nproc)" zstd CC="$CC" MOREFLAGS="-O2" LDFLAGS="-static" >/dev/null 2>&1
+    if   [ -x ./zstd ];          then cp ./zstd "$OUT/"
+    elif [ -x ./programs/zstd ]; then cp ./programs/zstd "$OUT/"
+    else echo "  zstd binary not found"; return 1; fi
+    "$STRIP" "$OUT/zstd" 2>/dev/null || true
+
+    head -c 300000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null
+    sha256sum "$OUT/payload.bin" | awk '{print $1}' > "$OUT/payload.sha"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+set -e
+echo "[zstd] compress -19 / integrity-check / decompress / sha256"
+./zstd -19 -q -f -o payload.zst payload.bin
+./zstd -t payload.zst
+./zstd -d -q -f -o payload.out payload.zst
+want=$(cat payload.sha); got=$(sha256sum payload.out | cut -d' ' -f1)
+[ "$want" = "$got" ] || { echo "round-trip mismatch: $want != $got"; exit 1; }
+echo "[zstd] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

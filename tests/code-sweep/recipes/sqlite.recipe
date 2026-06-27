@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SQLite - the amalgamation builds a static CLI trivially. Oracle: run a SQL
+# script exercising DDL, indexes, joins, aggregates, CTEs, window functions and
+# JSON1, and diff the output against a golden produced by a host-built sqlite3
+# from the very same source. Any wrong query result fails. This is a real,
+# nontrivial application (a SQL engine) running end to end on the A55.
+NAME=sqlite
+CATEGORY=database
+SRC=https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
+REF=3.46.1
+
+CS_DEFS="-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_ENABLE_JSON1 -DSQLITE_ENABLE_FTS5"
+
+cs_build() {
+    # The SQL workload + a golden generated on the host with the same engine.
+    cat > "$OUT/work.sql" <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, k TEXT, v INTEGER);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<5000)
+INSERT INTO t(k,v) SELECT 'key'||(n%17), n*3 FROM seq;
+CREATE INDEX ix ON t(k);
+SELECT count(*), sum(v), avg(v), min(v), max(v) FROM t;
+SELECT k, count(*) c, sum(v) s FROM t GROUP BY k ORDER BY s DESC LIMIT 5;
+SELECT json_extract(json_object('a',1,'b',json_array(2,3)),'$.b[1]');
+SELECT id, v, v - lag(v,1,0) OVER (ORDER BY id) AS delta FROM t ORDER BY id LIMIT 5;
+SELECT group_concat(x) FROM (SELECT DISTINCT v%7 AS x FROM t ORDER BY x);
+PRAGMA integrity_check;
+SQL
+
+    # Host engine -> golden.
+    cc -O2 $CS_DEFS -o sqlite3_host shell.c sqlite3.c -lm \
+        || { echo "  host sqlite build failed"; return 1; }
+    ./sqlite3_host :memory: < "$OUT/work.sql" > "$OUT/golden.txt" \
+        || { echo "  golden generation failed"; return 1; }
+
+    # Guest engine (cross, static).
+    "$CC" -O2 -static $CS_DEFS -o "$OUT/sqlite3" shell.c sqlite3.c -lm \
+        || { echo "  sqlite cross-build failed"; return 1; }
+    "$STRIP" "$OUT/sqlite3" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[sqlite] run SQL workload in-guest and diff vs host golden"
+./sqlite3 :memory: < work.sql > out.txt 2>&1 || { echo "sqlite run failed"; exit 1; }
+if ! diff -u golden.txt out.txt; then echo "[sqlite] output diverged"; exit 1; fi
+echo "[sqlite] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# xxHash - fast non-cryptographic hash. We check the canonical empty-input
+# vectors (stable across all versions) for XXH32/XXH64/XXH128/XXH3, plus a
+# host-vs-guest agreement check on a random payload (golden computed on host
+# with a natively-built xxhsum). Exercises the hash kernels on the A55.
+NAME=xxhash
+CATEGORY=hashing
+SRC=https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.2.tar.gz
+REF=0.8.2
+
+cs_build() {
+    # Guest binary (cross, static).
+    make -j"$(nproc)" xxhsum CC="$CC" CFLAGS="-O2 -static" >/dev/null 2>&1 \
+        || { echo "  xxhsum cross-build failed"; return 1; }
+    cp xxhsum "$OUT/"; "$STRIP" "$OUT/xxhsum" 2>/dev/null || true
+
+    # Host binary, to produce the golden hashes for the random payload.
+    make clean >/dev/null 2>&1 || true
+    make -j"$(nproc)" xxhsum CC="cc" CFLAGS="-O2" >/dev/null 2>&1 \
+        || { echo "  host xxhsum build failed"; return 1; }
+    head -c 250000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null
+    ./xxhsum -H1 "$OUT/payload.bin" | cut -d' ' -f1 > "$OUT/payload.xxh64"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Canonical empty-input vectors (seed 0) - stable across xxHash releases.
+# -H0/1/2 print "<hash>  <file>"; -H3 prints "XXH3 (<file>) = <hash>", so pull
+# the hash as the first hex token of length >= 8 (filenames here have none).
+set -e
+: > empty
+hashof() { ./xxhsum "$1" empty | grep -oE '[0-9a-f]{8,32}' | head -1; }
+check() { # algoflag expected label
+    got=$(hashof "$1")
+    if [ "$got" != "$2" ]; then echo "[xxhash] $3 mismatch: $got != $2"; exit 1; fi
+    echo "[xxhash] $3 empty = $got OK"
+}
+check -H0 02cc5d05                         XXH32
+check -H1 ef46db3751d8e999                 XXH64
+check -H2 99aa06d3014798d86001c324468d497f XXH128
+check -H3 2d06800538d394c2                 XXH3-64
+echo "[xxhash] host/guest agreement on random payload (XXH64)"
+want=$(cat payload.xxh64)
+got=$(./xxhsum -H1 payload.bin | grep -oE '[0-9a-f]{8,32}' | head -1)
+[ "$want" = "$got" ] || { echo "  mismatch: $got != $want"; exit 1; }
+echo "[xxhash] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

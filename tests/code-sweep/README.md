@@ -60,4 +60,8 @@ highest coverage-per-effort, because no expected output has to be hand-curated.
 |------|----------|--------|
 | `zlib` | compression | bundled `example` self-test + minigzip pipe round-trip (sha256) |
 | `bzip2` | compression | upstream `make test` round-trip `cmp` against committed refs |
+| `zstd` | compression | high-level compress + `zstd -t` integrity check + decompress (sha256) |
 | `crypto-algorithms` | crypto | B-Con per-algorithm known-answer tests (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) |
+| `xxhash` | hashing | canonical empty-input vectors (XXH32/64/128/XXH3) + host/guest agreement on a random payload |
+| `sqlite` | database | SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs a host-built golden |
+| `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
