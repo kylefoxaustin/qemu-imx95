@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# heatshrink - a compression library for embedded/low-memory systems. Its
+# dynamic-allocation test suite (built on the "greatest" framework) runs
+# encoder/decoder round-trips across window/lookahead configs and edge cases,
+# returning nonzero on any failure. A small, embedded-flavoured codec exercised
+# on the A55 (fitting target for the i.MX 95).
+NAME=heatshrink
+CATEGORY=compression
+SRC=https://github.com/atomicobject/heatshrink/archive/refs/heads/master.tar.gz
+REF=master
+
+cs_build() {
+    "$CC" -O2 -static -o "$OUT/test_heatshrink" \
+        test_heatshrink_dynamic.c heatshrink_encoder.c heatshrink_decoder.c \
+        || { echo "  heatshrink test build failed"; return 1; }
+    "$STRIP" "$OUT/test_heatshrink" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[heatshrink] run encoder/decoder round-trip suite (greatest)"
+if ./test_heatshrink; then echo "[heatshrink] OK"; else echo "[heatshrink] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

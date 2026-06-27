@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# uthash - the classic header-only hash table / list / etc. for C. Its test suite
+# is ~90 small programs, each with a committed expected-output .ans file: compile
+# testN.c, run it, diff stdout against testN.ans. That's the vendor oracle, and
+# it gives a lot of data-structure coverage (hashing, sorting, deletion, bloom,
+# multi-key) from one header. Header-only, so each test is a self-contained
+# static binary.
+NAME=uthash
+CATEGORY=datastruct
+SRC=https://github.com/troydhanson/uthash/archive/refs/tags/v2.3.0.tar.gz
+REF=2.3.0
+
+cs_build() {
+    mkdir -p "$OUT/bin" "$OUT/ans"; built=""
+    for f in tests/test*.c; do
+        n=$(basename "$f" .c)
+        [ -f "tests/$n.ans" ] || continue        # only tests with a golden
+        if "$CC" -O2 -static -Isrc -o "$OUT/bin/$n" "$f" 2>/dev/null; then
+            "$STRIP" "$OUT/bin/$n" 2>/dev/null || true
+            cp "tests/$n.ans" "$OUT/ans/"; built="$built $n"
+        fi
+    done
+    [ -n "$built" ] || { echo "  no uthash tests built"; return 1; }
+    cp tests/*.dat "$OUT/" 2>/dev/null     # some tests fopen() a data file from cwd
+    echo "  built $(echo $built | wc -w) uthash tests"
+    echo "$built" > "$OUT/.tests"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd)
+fail=0; ran=0; failed=""
+cur="$HERE/.cur.out"   # the item dir is writable 9p; busybox has no /tmp
+for t in $(cat "$HERE/.tests"); do
+    [ -x "$HERE/bin/$t" ] || continue
+    ran=$((ran+1))
+    "$HERE/bin/$t" > "$cur" 2>/dev/null
+    if cmp -s "$cur" "$HERE/ans/$t.ans"; then :
+    else fail=$((fail+1)); failed="$failed $t"; fi
+done
+rm -f "$cur"
+echo "[uthash] ran=$ran pass=$((ran-fail)) fail=$fail"
+[ "$fail" -eq 0 ] || { echo "[uthash] mismatched:$failed"; exit 1; }
+echo "[uthash] OK ($ran tests matched their .ans)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
