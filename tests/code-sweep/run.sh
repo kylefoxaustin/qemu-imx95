@@ -87,7 +87,8 @@ for rfile in $RECIPES; do
         fi
 
         ex="$SRCWORK/$NAME"; mkdir -p "$ex"
-        tar -xzf "$tarball" -C "$ex" --strip-components=1 \
+        # tar -xf auto-detects gzip/xz/bzip2 (recipes may use any).
+        tar -xf "$tarball" -C "$ex" --strip-components=1 \
             || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
 
         OUT="$SHARE/items/$NAME"; mkdir -p "$OUT"

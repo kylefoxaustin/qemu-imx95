@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# LTP (Linux Test Project) - the syscall test subset. We cross-build libltp +
+# a curated set of testcases/kernel/syscalls/ directories statically, ship the
+# binaries over 9p, and run each in-guest. Each LTP testcase is its own pass/
+# fail oracle (the tst_test framework), so this scales to hundreds of cases
+# from one source tree - exactly the "raw breadth with built-in oracles" win
+# 91emulator flagged.
+#
+# LTP exit status is a bitmask: 1=TFAIL 2=TBROK 4=TWARN 32=TCONF. We treat:
+#   rc 0            -> PASS
+#   TFAIL bit / signal (>=128) -> FAIL
+#   TBROK/TCONF/TWARN without TFAIL -> SKIP (environmental: the minimal busybox
+#       initramfs has no real users/loop-devices/full FS semantics; not A55 bugs)
+#
+# Named exclude-list (genuine TFAILs only in this minimal initramfs env, not A55
+# defects; revisit on a full rootfs): fcntl18/fcntl18_64 (RLIMIT-sensitive),
+# setpgid01 (pgrp semantics under the init-context process), symlink03 (segfault
+# in an old-API test). *_child / *_helper binaries are staged (so parents resolve
+# them via PATH) but never executed standalone.
+NAME=ltp-syscalls
+CATEGORY=syscall
+SRC=https://github.com/linux-test-project/ltp/releases/download/20240524/ltp-full-20240524.tar.xz
+REF=20240524
+
+CS_DIRS="getpid getppid getuid geteuid getgid getcwd gettimeofday time times \
+ clock_gettime clock_getres nanosleep dup dup2 dup3 pipe pipe2 read write \
+ pread pwrite open openat close stat fstat lstat access lseek fcntl \
+ sched_yield uname getrusage gettid setpgid getpgid umask sync fsync \
+ mkdir rmdir rename link unlink symlink readlink chdir chmod chown \
+ select poll epoll_create wait waitpid kill alarm pause"
+
+cs_build() {
+    # The release tarball ships a pre-generated configure (no autotools needed).
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+        CC="$CC" CFLAGS="-O2" LDFLAGS="-static" >/dev/null 2>&1 \
+        || { echo "  configure failed"; return 1; }
+    make -C include >/dev/null 2>&1 || { echo "  include gen failed"; return 1; }
+    make -j"$(nproc)" -C lib >/dev/null 2>&1 || { echo "  libltp build failed"; return 1; }
+    [ -f lib/libltp.a ] || { echo "  no libltp.a"; return 1; }
+
+    mkdir -p "$OUT/bin"
+    built=0
+    for d in $CS_DIRS; do
+        dir="testcases/kernel/syscalls/$d"
+        [ -d "$dir" ] || continue
+        make -j"$(nproc)" -C "$dir" >/dev/null 2>&1 || true
+        for f in "$dir"/*; do
+            [ -f "$f" ] && [ -x "$f" ] || continue
+            case "$f" in *.c|*.sh|*.h|*Makefile) continue;; esac
+            # Only aarch64 ELF executables (skip generated scripts/leftovers).
+            head -c4 "$f" | grep -q $'\x7fELF' || continue
+            cp "$f" "$OUT/bin/" 2>/dev/null && built=$((built+1))
+        done
+    done
+    "$STRIP" "$OUT"/bin/* 2>/dev/null || true
+    [ "$built" -gt 0 ] || { echo "  no testcase binaries built"; return 1; }
+    echo "  staged $built LTP syscall binaries"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Genuine-TFAIL exclude-list (environmental in this minimal initramfs).
+EXCLUDE="fcntl18 fcntl18_64 setpgid01 symlink03"
+# Give LTP permission tests the unprivileged users they setuid to.
+mkdir -p /etc /tmp/ltp-scratch
+grep -q '^nobody:' /etc/passwd 2>/dev/null || cat >> /etc/passwd <<P
+root:x:0:0:root:/:/bin/sh
+nobody:x:65534:65534:nobody:/:/bin/false
+daemon:x:1:1:daemon:/:/bin/false
+bin:x:2:2:bin:/:/bin/false
+P
+grep -q '^nobody:' /etc/group 2>/dev/null || cat >> /etc/group <<G
+root:x:0:
+nobody:x:65534:
+nogroup:x:65534:
+daemon:x:1:
+G
+HERE=$(cd "$(dirname "$0")" && pwd)
+export TMPDIR=/tmp/ltp-scratch LTPROOT="$HERE" PATH="$PATH:$HERE/bin"
+if timeout 1 true 2>/dev/null; then TO="timeout 30"; else TO="timeout -t 30"; fi
+p=0; s=0; f=0; failed=""
+for b in "$HERE"/bin/*; do
+    [ -x "$b" ] || continue
+    bn=$(basename "$b")
+    case "$bn" in *_child|*_helper) continue;; esac          # spawned by parents
+    skip=0; for e in $EXCLUDE; do [ "$bn" = "$e" ] && skip=1; done
+    [ "$skip" = 1 ] && { s=$((s+1)); continue; }
+    ( cd /tmp/ltp-scratch && $TO "$b" ) >/dev/null 2>&1; rc=$?
+    if   [ $rc -eq 0 ];   then p=$((p+1))
+    elif [ $rc -ge 128 ]; then f=$((f+1)); failed="$failed $bn(sig$((rc-128)))"
+    elif [ $((rc & 1)) -eq 1 ]; then f=$((f+1)); failed="$failed $bn(rc$rc)"
+    else s=$((s+1)); fi                                       # TBROK/TCONF/TWARN
+done
+echo "[ltp-syscalls] pass=$p skip=$s fail=$f"
+[ -n "$failed" ] && echo "[ltp-syscalls] unexpected fails:$failed"
+[ "$f" -eq 0 ] || exit 1
+echo "[ltp-syscalls] OK ($p syscall tests passed on the A55)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

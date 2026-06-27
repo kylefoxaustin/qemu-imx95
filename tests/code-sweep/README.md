@@ -78,3 +78,4 @@ highest coverage-per-effort, because no expected output has to be hand-curated.
 | `sqlite` | database | SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs a host-built golden |
 | `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
 | `cpython` | interpreter | static CPython 3.10 cross-built; runs its own `python -m test` stdlib regression suite (33 CPU-pure modules) in-guest |
+| `ltp-syscalls` | syscall | LTP syscall subset cross-built static (323 binaries); each testcase is its own oracle — ~250 pass on the A55, TBROK/TCONF counted as SKIP |
