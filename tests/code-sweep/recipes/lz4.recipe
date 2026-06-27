@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# lz4 - fast LZ77 compressor. Plain Makefile, pure C, static cross-build of the
+# CLI. Oracle: compress to stdout, decompress, sha256-compare.
+NAME=lz4
+CATEGORY=compression
+SRC=https://github.com/lz4/lz4/releases/download/v1.9.4/lz4-1.9.4.tar.gz
+REF=1.9.4
+
+cs_build() {
+    make -j"$(nproc)" -C programs lz4 CC="$CC" CFLAGS="-O2 -static" >/dev/null 2>&1
+    [ -x programs/lz4 ] || { echo "  lz4 not built"; return 1; }
+    cp programs/lz4 "$OUT/"; "$STRIP" "$OUT/lz4" 2>/dev/null || true
+
+    head -c 300000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null
+    sha256sum "$OUT/payload.bin" | awk '{print $1}' > "$OUT/payload.sha"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+set -e
+echo "[lz4] compress -9 / decompress / sha256"
+./lz4 -9 -c payload.bin > payload.lz4
+./lz4 -dc payload.lz4 > payload.out
+want=$(cat payload.sha); got=$(sha256sum payload.out | cut -d' ' -f1)
+[ "$want" = "$got" ] || { echo "round-trip mismatch: $want != $got"; exit 1; }
+echo "[lz4] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

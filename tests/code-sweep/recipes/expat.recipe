@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Expat - the XML parser. We cross-build its own xmlwf tool static and use it as
+# the oracle: xmlwf exits 0 for well-formed XML and nonzero for malformed XML, so
+# a battery of valid/invalid documents (nesting, attributes, entities, CDATA,
+# namespaces, UTF-8, plus deliberately-broken ones) exercises the real parser
+# and checks both accept and reject paths on the A55.
+NAME=expat
+CATEGORY=xml
+SRC=https://github.com/libexpat/libexpat/releases/download/R_2_6_2/expat-2.6.2.tar.gz
+REF=2.6.2
+
+cs_build() {
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu --disable-shared \
+        --without-docbook CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 \
+        || { echo "  configure failed"; return 1; }
+    make -j"$(nproc)" LDFLAGS="-all-static" >/dev/null 2>&1
+    [ -x xmlwf/xmlwf ] || { echo "  xmlwf not built"; return 1; }
+    cp xmlwf/xmlwf "$OUT/"; "$STRIP" "$OUT/xmlwf" 2>/dev/null || true
+
+    mkdir -p "$OUT/xml"
+    # Well-formed documents (xmlwf must accept => rc 0).
+    cat > "$OUT/xml/ok1.xml" <<'X'
+<?xml version="1.0" encoding="UTF-8"?>
+<root><a x="1">hello</a><b/><c>&amp;&lt;&gt;</c></root>
+X
+    cat > "$OUT/xml/ok2.xml" <<'X'
+<?xml version="1.0"?>
+<n:doc xmlns:n="urn:x"><n:item id="1"><![CDATA[ <not> & parsed ]]></n:item>
+<n:item id="2">caf\xc3\xa9 \xe2\x9c\x93</n:item></n:doc>
+X
+    printf '<?xml version="1.0"?>\n<r>' > "$OUT/xml/ok3.xml"
+    i=0; while [ $i -lt 500 ]; do printf '<e k="%d">v%d</e>' $i $i >> "$OUT/xml/ok3.xml"; i=$((i+1)); done
+    printf '</r>\n' >> "$OUT/xml/ok3.xml"
+    # Malformed documents (xmlwf must reject => rc != 0).
+    printf '<?xml version="1.0"?>\n<a><b></a></b>\n'      > "$OUT/xml/bad1.xml"  # mismatched
+    printf '<?xml version="1.0"?>\n<a x="1 y="2">z</a>\n'  > "$OUT/xml/bad2.xml"  # bad attr
+    printf '<?xml version="1.0"?>\n<a>&undef;</a>\n'        > "$OUT/xml/bad3.xml"  # undefined entity
+    printf '<root>no decl close\n'                          > "$OUT/xml/bad4.xml"  # unclosed
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+fail=0
+for f in xml/ok*.xml; do
+    if ./xmlwf "$f" >/dev/null 2>&1; then echo "[expat] accept $f OK"
+    else echo "[expat] WRONGLY rejected well-formed $f"; fail=1; fi
+done
+for f in xml/bad*.xml; do
+    if ./xmlwf "$f" >/dev/null 2>&1; then echo "[expat] WRONGLY accepted malformed $f"; fail=1
+    else echo "[expat] reject $f OK"; fi
+done
+[ "$fail" -eq 0 ] || exit 1
+echo "[expat] OK (accept + reject paths verified)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

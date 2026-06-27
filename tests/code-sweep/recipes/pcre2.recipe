@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# PCRE2 - Perl-compatible regular expressions. We cross-build pcre2test static
+# and run it against PCRE2's OWN regression input (testinput1), diffing the
+# result against the committed expected output (testoutput1) - exactly what
+# upstream's RunTest does for test 1. testoutput1 is the vendor's expected output
+# for the default 8-bit build, which is what we cross-build. Exercises the regex
+# compiler + matcher heavily on the A55.
+NAME=pcre2
+CATEGORY=regex
+SRC=https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.43/pcre2-10.43.tar.gz
+REF=10.43
+
+cs_build() {
+    cp testdata/testinput1 testdata/testoutput1 "$OUT/" \
+        || { echo "  testdata missing"; return 1; }
+    mv "$OUT/testoutput1" "$OUT/golden1.txt"
+
+    # Guest pcre2test (cross, static).
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu --disable-shared \
+        CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 || { echo "  cross configure failed"; return 1; }
+    make -j"$(nproc)" pcre2test LDFLAGS="-all-static" >/dev/null 2>&1
+    [ -x pcre2test ] || { echo "  pcre2test not built"; return 1; }
+    cp pcre2test "$OUT/"; "$STRIP" "$OUT/pcre2test" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[pcre2] run PCRE2's own testinput1 and diff vs host golden"
+./pcre2test -q testinput1 > out1.txt 2>&1
+if ! diff -u golden1.txt out1.txt; then echo "[pcre2] regex output diverged"; exit 1; fi
+echo "[pcre2] OK ($(grep -c . out1.txt) output lines matched)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
