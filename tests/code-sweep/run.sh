@@ -39,6 +39,7 @@ CC=${CC:-${CROSS}gcc}
 AR=${AR:-${CROSS}ar}
 STRIP=${STRIP:-${CROSS}strip}
 TMO=${TMO:-600}
+CASE_TMO=${CASE_TMO:-300}   # per-item wall-clock cap inside the guest
 CACHE=${CACHE:-$ROOT/build/code-sweep/cache}
 
 skip() { echo "SKIP: $*"; exit 0; }
@@ -104,10 +105,12 @@ echo "=== built $BUILT item(s):$( for i in $ITEMS; do printf ' %s' "$i"; done) =
 [ -n "$FAILED_BUILD" ] && echo "=== host build failures:$FAILED_BUILD ==="
 
 # ---- stage the busybox initramfs with our in-guest runner -----------------
+# Conventions a runtest.sh may use: exit 0 = PASS, exit 77 = SKIP (autotools
+# convention, e.g. a capability the model legitimately lacks), any other code =
+# FAIL. Each case is wrapped in timeout(1) so one hung case can't eat the run.
 STAGE="$WORK/root"; mkdir -p "$STAGE"
 zcat "$INITRD" | (cd "$STAGE" && cpio -idmu 2>/dev/null)
-cat > "$STAGE/init" <<'INIT'
-#!/bin/busybox sh
+{ echo "#!/bin/busybox sh"; echo "CASE_TMO=$CASE_TMO"; cat <<'INIT'
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devtmpfs dev /dev 2>/dev/null
@@ -118,12 +121,16 @@ sleep 2
 mkdir -p /mnt
 mount -t 9p -o trans=virtio,version=9p2000.L hostshare /mnt 2>&1
 echo "mount rc=$?"
+# busybox timeout takes either "timeout SECS CMD" or "timeout -t SECS CMD";
+# probe once and pick the supported form.
+if timeout 1 true 2>/dev/null; then TFORM=new; else TFORM=old; fi
+run_to() { if [ "$TFORM" = new ]; then timeout "$CASE_TMO" "$@"; else timeout -t "$CASE_TMO" "$@"; fi; }
 cd /mnt/items || { echo "no items dir"; /bin/busybox poweroff -f; }
 for d in */; do
     item=${d%/}
     [ -x "$item/runtest.sh" ] || continue
     echo "----8<---- ITEM $item ----8<----"
-    ( cd "$item" && ./runtest.sh ) > "/mnt/results/$item.log" 2>&1
+    ( cd "$item" && run_to ./runtest.sh ) > "/mnt/results/$item.log" 2>&1
     rc=$?
     echo "$rc" > "/mnt/results/$item.rc"
     cat "/mnt/results/$item.log"
@@ -133,6 +140,7 @@ sync
 echo "=== CODE-SWEEP-DONE ==="
 /bin/busybox poweroff -f
 INIT
+} > "$STAGE/init"
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.gz"
 
@@ -148,25 +156,30 @@ timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
 # ---- scoreboard ------------------------------------------------------------
+# Outcomes: PASS (rc 0) / SKIP (rc 77, first-class, doesn't fail the run) /
+# FAIL (any other rc, incl. 124 = per-case timeout) / BLDFAIL (host build).
 echo
 echo "================= CODE-SWEEP SCOREBOARD ================="
-pass=0; total=0; failed=""
+pass=0; skip=0; fail=0; bld=0; failed=""
 for i in $ITEMS; do
-    total=$((total+1))
     rcf="$SHARE/results/$i.rc"
-    if [ -f "$rcf" ] && [ "$(cat "$rcf")" = "0" ]; then
-        printf "  PASS  %s\n" "$i"; pass=$((pass+1))
-    else
-        rc=$( [ -f "$rcf" ] && cat "$rcf" || echo "n/a" )
-        printf "  FAIL  %s (rc=%s)\n" "$i" "$rc"; failed="$failed $i"
-    fi
+    rc=$( [ -f "$rcf" ] && cat "$rcf" || echo "n/a" )
+    case "$rc" in
+        0)   printf "  PASS  %s\n" "$i"; pass=$((pass+1)) ;;
+        77)  printf "  SKIP  %s (self-skip)\n" "$i"; skip=$((skip+1)) ;;
+        124) printf "  FAIL  %s (timeout >%ss)\n" "$i" "$CASE_TMO"; fail=$((fail+1)); failed="$failed $i" ;;
+        *)   printf "  FAIL  %s (rc=%s)\n" "$i" "$rc"; fail=$((fail+1)); failed="$failed $i" ;;
+    esac
+done
+for b in $FAILED_BUILD; do
+    printf "  BLDFAIL %s (host build)\n" "$b"; bld=$((bld+1))
 done
 echo "--------------------------------------------------------"
-echo "  $pass/$total passed"
+echo "  PASS $pass  SKIP $skip  FAIL $fail  BLDFAIL $bld"
 echo "========================================================"
 
 if ! grep -qa '=== CODE-SWEEP-DONE ===' "$LOG"; then
-    echo "FAIL: guest did not finish (timeout/crash). Last serial lines:"
+    echo "FAIL: guest did not finish (boot timeout/crash). Last serial lines:"
     tail -n 25 "$LOG"
     exit 1
 fi
@@ -177,4 +190,7 @@ if [ -n "$failed" ]; then
     done
     exit 1
 fi
-echo "PASS: all $total corpus item(s) built on host and verified in-guest"
+[ "$bld" -eq 0 ] || { echo "FAIL: host build failures:$FAILED_BUILD"; exit 1; }
+msg="PASS: $pass item(s) verified in-guest"
+[ "$skip" -gt 0 ] && msg="$msg, $skip skipped"
+echo "$msg"

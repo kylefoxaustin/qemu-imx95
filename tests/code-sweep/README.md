@@ -47,9 +47,21 @@ Drop a `recipes/<name>.recipe` file. It is sourced in a subshell and must set:
   - `OUT` — the per-item staging dir
 
 `cs_build` must place runnable artifacts into `$OUT` and write an executable
-`$OUT/runtest.sh` that runs **entirely in the guest** and **exits 0 on pass**.
-Carry the oracle inside `runtest.sh` (the upstream self-test, a round-trip hash
-compare, a KAT verdict, etc.) so a wrong byte anywhere fails.
+`$OUT/runtest.sh` that runs **entirely in the guest**. Carry the oracle inside
+`runtest.sh` (the upstream self-test, a round-trip hash compare, a KAT verdict,
+etc.) so a wrong byte anywhere fails.
+
+**Exit-code convention** (per the runtest.sh):
+- `0` — PASS
+- `77` — SKIP (autotools convention): a first-class outcome for a capability the
+  *model* legitimately lacks (RNG-hw, crypto-accel, perf counters, GPU/VPU/NPU).
+  A SKIP does **not** fail the run — use it instead of letting such a case FAIL,
+  so the pass rate stays honest. Prefer naming the reason in the log.
+- anything else — FAIL.
+
+Each case is wrapped in `timeout` in the guest (`CASE_TMO`, default 300s) so a
+single hung case under TCG can't eat the whole run; a timed-out case is a FAIL.
+A host-side build failure is reported separately as `BLDFAIL`.
 
 Pick programs whose correctness oracle ships with the source — that's the
 highest coverage-per-effort, because no expected output has to be hand-curated.
