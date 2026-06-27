@@ -100,8 +100,11 @@ tests/code-sweep/run-peripheral.sh            # all peripheral recipes
 | `expat` | xml | xmlwf accepts a battery of well-formed XML and rejects malformed XML (both paths verified) |
 | `crypto-algorithms` | crypto | B-Con per-algorithm known-answer tests (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) |
 | `libsodium` | crypto | ~20 of libsodium's own test/default programs, each self-checking vs its `.exp` (box/sign/secretbox/aead/scalarmult/…) |
+| `mbedtls` | crypto | Mbed-TLS `selftest` KATs across ~22 suites (aes/gcm/sha/rsa/mpi/ecp/chacha20/…) |
+| `libtomcrypt` | crypto | LibTomCrypt's own math-free KAT sub-tests (cipher/hash/MAC/modes/store/misc) |
 | `xxhash` | hashing | canonical empty-input vectors (XXH32/64/128/XXH3) + host/guest agreement on a random payload |
 | `jq` | json | jq's own `--run-tests` suite; differential oracle — A55 must reproduce the version-pinned host baseline (435/447, 9 malformed) |
+| `cjson` | json | cJSON's own Unity test suites (parse/print/compare/minify/misc/add), each exits nonzero on assert failure |
 | `sqlite` | database | SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs a host-built golden |
 | `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
 | `cpython` | interpreter | static CPython 3.10 cross-built; runs its own `python -m test` stdlib regression suite (33 CPU-pure modules) in-guest |

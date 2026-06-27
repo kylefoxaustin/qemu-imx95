@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Mbed-TLS - the TLS/crypto library. Its `selftest` program runs the library's
+# own known-answer self-tests across a wide span of primitives (AES, GCM, the
+# SHA family, MD5, RSA, the big-number/MPI core, ECP/Curve25519, HMAC-DRBG, ...)
+# and returns the failure count. One static binary = a broad vendor crypto KAT
+# oracle exercising real bignum/EC math on the A55.
+NAME=mbedtls
+CATEGORY=crypto
+SRC=https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2
+REF=3.6.2
+
+cs_build() {
+    # The release tarball ships generated files; lib+programs build without the
+    # test framework/python.
+    make -j"$(nproc)" CC="$CC" CFLAGS="-O2 -static" lib programs >/dev/null 2>&1
+    ST=programs/test/selftest
+    [ -x "$ST" ] || { echo "  selftest not built"; return 1; }
+    cp "$ST" "$OUT/selftest"; "$STRIP" "$OUT/selftest" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[mbedtls] run library self-tests (KATs)"
+# Curated set of self-tests: symmetric, hashes, DRBG, MPI/bignum, and EC.
+# (Full `selftest` with no args also runs them all; naming keeps it bounded.)
+if ./selftest md5 ripemd160 sha1 sha256 sha512 sha3 des aes gcm ccm cmac \
+       chacha20 poly1305 base64 mpi rsa camellia aria ctr_drbg hmac_drbg \
+       ecp ecjpake; then
+    echo "[mbedtls] OK"
+else
+    echo "[mbedtls] FAILED (rc=$?)"; exit 1
+fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

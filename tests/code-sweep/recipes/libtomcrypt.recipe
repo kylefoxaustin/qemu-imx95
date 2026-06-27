@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# LibTomCrypt - portable crypto toolkit. Its `test` binary runs a built-in
+# known-answer-test battery and takes a single sub-test name as argv[1]. We run
+# the math-free sub-tests (ciphers, hashes, MACs, chaining modes, key store,
+# misc/base64/CRC) - each returns EXIT_FAILURE on any KAT mismatch. The PK
+# sub-tests need a bignum backend (libtommath) and are out of scope here (RSA/
+# ECC/MPI math is already covered by mbedtls + libsodium). A static vendor KAT
+# oracle for symmetric crypto on the A55.
+NAME=libtomcrypt
+CATEGORY=crypto
+SRC=https://github.com/libtom/libtomcrypt/releases/download/v1.18.2/crypt-1.18.2.tar.xz
+REF=1.18.2
+
+cs_build() {
+    make -j"$(nproc)" CC="$CC" CFLAGS="-O2 -DLTC_NO_TEST_DBG" LDFLAGS="-static" test \
+        >/dev/null 2>&1
+    [ -x test ] || { echo "  libtomcrypt test not built"; return 1; }
+    cp test "$OUT/ltc_test"; "$STRIP" "$OUT/ltc_test" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Math-free sub-tests (each is a separate KAT battery; argv[1] selects one).
+fail=0; ran=0
+for t in store_test rotate_test misc_test cipher_hash_test mac_test modes_test; do
+    ran=$((ran+1))
+    if ./ltc_test "$t" >/dev/null 2>&1; then echo "[libtomcrypt] $t OK"
+    else echo "[libtomcrypt] $t FAILED (rc=$?)"; fail=1; fi
+done
+[ "$fail" -eq 0 ] || exit 1
+echo "[libtomcrypt] OK ($ran KAT sub-tests)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

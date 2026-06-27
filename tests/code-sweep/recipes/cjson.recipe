@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# cJSON - ultralight JSON parser. Its real oracle is the Unity-based suite under
+# tests/ (the root test.c is just a demo). Each tests/<x>.c #includes ../cJSON.c
+# directly and runs Unity assertions, exiting nonzero on any failure. We build
+# every such test as its own static binary and run them all in-guest.
+NAME=cjson
+CATEGORY=json
+SRC=https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz
+REF=1.7.18
+
+CS_TESTS="parse_examples parse_number parse_hex4 parse_string parse_array \
+ parse_object parse_value parse_with_opts print_string print_number \
+ print_array print_object print_value misc_tests compare_tests minify_tests \
+ cjson_add readme_examples"
+
+cs_build() {
+    mkdir -p "$OUT/bin"
+    built=""
+    for t in $CS_TESTS; do
+        [ -f "tests/$t.c" ] || continue
+        # tests #include ../cJSON.c themselves -> only add unity.c.
+        if "$CC" -O2 -static -I. -Itests -o "$OUT/bin/$t" \
+              "tests/$t.c" tests/unity/src/unity.c 2>/dev/null; then
+            "$STRIP" "$OUT/bin/$t" 2>/dev/null || true
+            built="$built $t"
+        fi
+    done
+    [ -n "$built" ] || { echo "  no cJSON tests built"; return 1; }
+    # Some tests read fixtures relative to cwd.
+    [ -d tests/inputs ] && cp -a tests/inputs "$OUT/" 2>/dev/null
+    echo "  built tests:$built"
+    echo "$built" > "$OUT/.tests"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd)
+cd "$HERE"   # so tests find ./inputs/
+fail=0; ran=0
+for t in $(cat .tests); do
+    [ -x "bin/$t" ] || continue
+    ran=$((ran+1))
+    if ./"bin/$t" >/dev/null 2>&1; then echo "[cjson] $t OK"
+    else echo "[cjson] $t FAILED (rc=$?)"; fail=1; fi
+done
+[ "$ran" -gt 0 ] || { echo "no cJSON tests"; exit 1; }
+[ "$fail" -eq 0 ] || exit 1
+echo "[cjson] OK ($ran Unity test suites)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
