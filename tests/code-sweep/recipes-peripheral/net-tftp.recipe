@@ -35,10 +35,19 @@ i=0; while [ $i -lt 30 ]; do [ -e /sys/class/net/eth0 ] && break; sleep 1; i=$((
 "$BB" ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up || { echo "[net] ifconfig failed"; exit 1; }
 "$BB" route add default gw 10.0.2.2 2>/dev/null
 echo "[net] eth0 up: $("$BB" ifconfig eth0 | grep -o 'inet addr:[0-9.]*')"
-# Pull the payload + its sha over TFTP from slirp (10.0.2.2) -> ENETC RX/TX.
+# Let the link/ARP settle: the first UDP after link-up can be dropped (ARP
+# resolution), so settle briefly and retry each fetch a few times.
+sleep 2
 cd "$HERE"; rm -f netpayload.bin netpayload.sha
-"$BB" tftp -g -r netpayload.sha 10.0.2.2 || { echo "[net] tftp sha fetch failed"; exit 1; }
-"$BB" tftp -g -r netpayload.bin 10.0.2.2 || { echo "[net] tftp payload fetch failed"; exit 1; }
+fetch() {  # retry tftp GET (tolerate first-packet/ARP-warmup loss)
+    n=0; while [ $n -lt 4 ]; do
+        "$BB" tftp -g -r "$1" 10.0.2.2 && [ -s "$1" ] && return 0
+        n=$((n+1)); echo "[net] tftp $1 retry $n"; sleep 2
+    done
+    return 1
+}
+fetch netpayload.sha || { echo "[net] tftp sha fetch failed"; exit 1; }
+fetch netpayload.bin || { echo "[net] tftp payload fetch failed"; exit 1; }
 want=$(cat netpayload.sha)
 got=$("$BB" sha256sum netpayload.bin | awk '{print $1}')
 [ -n "$got" ] && [ "$want" = "$got" ] || { echo "[net] sha mismatch: $got != $want"; exit 1; }

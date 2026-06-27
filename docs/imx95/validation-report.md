@@ -761,6 +761,17 @@ ChipIdea EHCI host — the DWC3 xHCI roothub does not enumerate cold-plug). Audi
 is not covered: no soundcards probe on this minimal boot (the SAI/codec path
 needs the audio test's dedicated setup).
 
+### Soak (ITERS=N: build once, boot+run N times)
+
+The campaign's soak earned its keep again. **CPU ×3** (all 27 items, three
+boots) = 81/81, every item 3/0/0 — zero flakiness across cpython, the LTP
+syscall battery, and the rest. **Peripheral ×10** (all 7 datapaths) = 8 of 9
+keys 10/0/0, but it caught a **1-in-10 flake in net-tftp**: eth0 came up, then
+the *first* TFTP GET timed out — the classic "first UDP after link-up lost to
+ARP/link warmup" race (seen on real HW too, not a model-correctness bug). Fix:
+a short settle after `ifconfig up` + retry each fetch up to 4×; a follow-up
+**net soak ×12 = 12/12**. A single full run would have shown green and hidden it.
+
 ### Deferred candidates
 
 Not in the corpus because each needs host-only tooling or a download step that
