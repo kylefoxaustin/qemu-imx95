@@ -100,6 +100,10 @@ both STATE dirs prints one cross-machine board.
 | `storage-sqlite` | uSDHC / eMMC | sqlite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card; rows diffed vs a host golden |
 | `net-tftp` | ENETC NIC | static busybox brings eth0 up, pulls a 256 KB payload + sha over TFTP from slirp, sha256-verifies (boot patches the dtb so ENETC probes) |
 | `usb-storage` | ChipIdea EHCI + USB BOT | usb-storage enumerates (/dev/sda); 4 MiB bulk write/read round-trip, sha256-verified (attached on usb-bus.0) |
+| `gpio` | imx95_gpio SoC GPIO | enumerate 10 gpiochips + SoC output→read loopback (set 1→read 1, set 0→read 0) |
+| `i2c` | LPI2C + WM8962 codec | slave ACK (i2c-scan) + 16-bit register write→read-back round-trip (i2c-rw) |
+| `rtc` | SCMI BBM RTC | set a known time, read it back (RTC_SET_TIME/RTC_RD_TIME) |
+| `watchdog` | i.MX watchdog | identity/timeout query + keepalive; magic-close disarms |
 
 ## Current corpus (CPU tier)
 

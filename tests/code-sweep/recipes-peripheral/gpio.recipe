@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# GPIO datapath: the SoC GPIO controllers (43810000-43850000.gpio = imx95_gpio).
+# Enumerate the gpiochips (chardev GPIO_GET_CHIPINFO), then drive a real
+# output->read loopback on a SoC chip: request a line as output=1 and read it
+# back (1), set it to 0 and read back (0). The readback only tracks if the model
+# reflects the data register on read. No source fetch.
+NAME=gpio
+CATEGORY=gpio
+CS_KEY=gpio
+
+cs_build() {
+    cat > gpio_test.c <<'C'
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/gpio.h>
+/* drive line `off` on a chip as output and read it back */
+static int loop(const char*dev,unsigned off){
+    int fd=open(dev,O_RDONLY); if(fd<0) return -1;
+    struct gpio_v2_line_request req; memset(&req,0,sizeof req);
+    req.num_lines=1; req.offsets[0]=off; req.config.flags=GPIO_V2_LINE_FLAG_OUTPUT;
+    req.config.num_attrs=1; req.config.attrs[0].mask=1;
+    req.config.attrs[0].attr.id=GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES;
+    req.config.attrs[0].attr.values=1;
+    if(ioctl(fd,GPIO_V2_GET_LINE_IOCTL,&req)<0){ close(fd); return -2; }
+    struct gpio_v2_line_values v; v.mask=1; v.bits=0;
+    ioctl(req.fd,GPIO_V2_LINE_GET_VALUES_IOCTL,&v); int hi=v.bits&1;
+    struct gpio_v2_line_config c; memset(&c,0,sizeof c); c.flags=GPIO_V2_LINE_FLAG_OUTPUT;
+    c.num_attrs=1; c.attrs[0].mask=1;
+    c.attrs[0].attr.id=GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES; c.attrs[0].attr.values=0;
+    ioctl(req.fd,GPIO_V2_LINE_SET_CONFIG_IOCTL,&c);
+    v.mask=1; v.bits=1; ioctl(req.fd,GPIO_V2_LINE_GET_VALUES_IOCTL,&v); int lo=v.bits&1;
+    close(req.fd); close(fd);
+    printf("gpio loop %s.%u: out=1->%d out=0->%d\n",dev,off,hi,lo);
+    return (hi==1 && lo==0) ? 0 : 1;
+}
+int main(void){
+    char p[64]; int chips=0,i;
+    for(i=0;i<10;i++){ sprintf(p,"/dev/gpiochip%d",i); int fd=open(p,O_RDONLY); if(fd<0)continue;
+        struct gpiochip_info ci;
+        if(ioctl(fd,GPIO_GET_CHIPINFO_IOCTL,&ci)==0){ chips++;
+            printf("gpiochip%d %s lines=%u\n",i,ci.label,ci.lines); }
+        close(fd); }
+    if(chips==0){ printf("gpio: no gpiochips\n"); return 77; }   /* skip */
+    /* SoC GPIO controllers are the 32-line 4381/4382/4384/4385 chips. */
+    int r=loop("/dev/gpiochip3",5);
+    if(r<0) r=loop("/dev/gpiochip4",5);
+    printf("gpio: chips=%d loopback=%s\n",chips, r==0?"PASS":"FAIL");
+    return r==0 ? 0 : 1;
+}
+C
+    "$CC" -O2 -static -o "$OUT/gpio_test" gpio_test.c || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/gpio_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[gpio] enumerate gpiochips + SoC output->read loopback"
+./gpio_test; rc=$?
+[ $rc -eq 0 ] && echo "[gpio] OK" || { [ $rc -eq 77 ] && echo "[gpio] no gpiochips"; }
+exit $rc
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

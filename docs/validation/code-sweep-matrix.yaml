@@ -34,8 +34,8 @@ environment:
 # ---- summary -------------------------------------------------------------
 summary:
   cpu_items:        27
-  peripheral_items: 3
-  result:           "30/30 PASS"
+  peripheral_items: 7
+  result:           "34/34 PASS"
 
 # ---- CPU tier ------------------------------------------------------------
 cpu:
@@ -109,6 +109,14 @@ peripheral:
   - { name: usb-storage,      key: usb-bulk, also_key: usb-enum, version: "busybox 1.36.1", datapath: "ChipIdea EHCI (usb-bus.0) + usb-storage BOT", result: pass,
       oracle: "usb-storage enumerates (/dev/sda); 4 MiB bulk write -> sync -> drop caches -> read-back, sha256-verified (bulk OUT + IN)"
 ,     note: "attached on usb-bus.0 (ChipIdea EHCI); the DWC3 xHCI roothub does not enumerate cold-plug" }
+  - { name: gpio,             key: gpio, datapath: "imx95_gpio SoC GPIO (4381xxxx.gpio)", result: pass,
+      oracle: "enumerate 10 gpiochips (chardev) + SoC output->read loopback: set line out=1 read 1, out=0 read 0" }
+  - { name: i2c,              key: i2c-rw, also_key: i2c-scan, datapath: "LPI2C master + WM8962 @0x1a on i2c-3", result: pass,
+      oracle: "i2c-scan: slave ACKs a read; i2c-rw: 16-bit register write->read-back round-trips (0x00ab / 0x0123) via I2C_RDWR" }
+  - { name: rtc,              key: rtc, datapath: "SCMI BBM RTC (/dev/rtc0)", result: pass,
+      oracle: "RTC_SET_TIME a known wall-clock + RTC_RD_TIME read-back matches (2s slop)" }
+  - { name: watchdog,         key: watchdog, datapath: "i.MX watchdog (/dev/watchdog)", result: pass,
+      oracle: "WDIOC_GETSUPPORT identity + GETTIMEOUT + KEEPALIVE succeed; magic-close disarms (no reset)" }
 
 # ---- deferred (not in the corpus; need host-tools/downloads we avoid in-recipe)
 deferred:

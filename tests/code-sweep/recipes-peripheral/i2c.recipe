@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# I2C datapath: the LPI2C master + a real slave (the WM8962 codec @ 0x1a on
+# i2c-3). Two checks -> two shared dashboard keys:
+#   i2c-scan : the slave ACKs a read (the LPI2C master + addressing works)
+#   i2c-rw   : a 16-bit register write -> read-back round-trips on the WM8962
+#              regfile (write 0x00ab to reg 0x01, read it back == 0x00ab)
+# No source fetch (i2c-tools can't address the WM8962's 16-bit registers; this
+# uses the I2C_RDWR UABI directly).
+NAME=i2c
+CATEGORY=i2c
+CS_KEY=i2c-rw          # i2c-scan is emitted as its own SOAK marker by runtest
+
+cs_build() {
+    cat > i2c_test.c <<'C'
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/i2c.h>
+#include <linux/i2c-dev.h>
+#define ADDR 0x1a
+static int rd(int fd,unsigned reg,unsigned*val){
+    unsigned char a[2]={reg>>8,reg&0xff},d[2];
+    struct i2c_msg m[2]={{ADDR,0,2,a},{ADDR,I2C_M_RD,2,d}};
+    struct i2c_rdwr_ioctl_data x={m,2};
+    if(ioctl(fd,I2C_RDWR,&x)<0)return -1; *val=(d[0]<<8)|d[1]; return 0;
+}
+static int wr(int fd,unsigned reg,unsigned val){
+    unsigned char b[4]={reg>>8,reg&0xff,val>>8,val&0xff};
+    struct i2c_msg m={ADDR,0,4,b}; struct i2c_rdwr_ioctl_data x={&m,1};
+    return ioctl(fd,I2C_RDWR,&x);
+}
+int main(void){
+    int fd=open("/dev/i2c-3",O_RDWR);
+    if(fd<0){ printf("i2c: open /dev/i2c-3 failed\n"); return 77; }   /* skip */
+    if(ioctl(fd,I2C_SLAVE,ADDR)<0){ printf("i2c: set slave failed\n"); return 77; }
+    unsigned char b;
+    int scan = (read(fd,&b,1)==1);          /* slave ACKs a byte read */
+    printf("i2c-scan: %s (0x%02x)\n", scan?"PASS":"FAIL", ADDR);
+    /* 16-bit register round-trip on the WM8962 regfile */
+    unsigned v=0xdead; int rw=0;
+    if(wr(fd,0x01,0x00ab)>=0 && rd(fd,0x01,&v)==0 && v==0x00ab){
+        if(wr(fd,0x01,0x0123)>=0 && rd(fd,0x01,&v)==0 && v==0x0123) rw=1;
+    }
+    printf("i2c-rw: %s (reg0x01 readback=0x%04x)\n", rw?"PASS":"FAIL", v);
+    close(fd);
+    return (scan && rw) ? 0 : 1;
+}
+C
+    "$CC" -O2 -static -o "$OUT/i2c_test" i2c_test.c || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/i2c_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[i2c] LPI2C scan (WM8962 ack) + 16-bit register round-trip"
+out=$(./i2c_test 2>&1); rc=$?; echo "$out"
+# emit the i2c-scan dashboard key from the sub-result (i2c-rw is this item's rc)
+if echo "$out" | grep -q 'i2c-scan: PASS'; then echo "SOAK:PASS:i2c-scan:0x1a ack"
+else echo "SOAK:FAIL:i2c-scan:no ack"; fi
+[ $rc -eq 77 ] && { echo "[i2c] no /dev/i2c-3"; echo "SOAK:SKIP:i2c-scan:no bus"; exit 77; }
+[ $rc -eq 0 ] && echo "[i2c] OK"
+exit $rc
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

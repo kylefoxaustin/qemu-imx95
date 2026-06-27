@@ -699,7 +699,7 @@ into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
 score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
 **non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
 
-**Result: 30/30 PASS** — 27 CPU-tier items + 3 peripheral-tier items.
+**Result: 34/34 PASS** — 27 CPU-tier items + 7 peripheral-tier items.
 Reproduce: `tests/code-sweep/run.sh` (CPU) and
 `tests/code-sweep/run-peripheral.sh` (peripheral).
 
@@ -747,13 +747,19 @@ environment) + 4 env-only TFAILs.
 | P1 | storage-sqlite | uSDHC / eMMC (ADMA) | SQLite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card, diffs vs host golden | PASS |
 | P2 | net-tftp | ENETC NIC (BD-ring TX/RX) | static busybox brings eth0 up, pulls a 256 KB random payload + its sha over TFTP from slirp (10.0.2.2), sha256-verifies | PASS |
 | P3 | usb-storage | ChipIdea EHCI + usb-storage BOT | device enumerates (/dev/sda); 4 MiB bulk write → sync → drop caches → read-back, sha256-verified | PASS |
+| P4 | gpio | imx95_gpio SoC GPIO | enumerate 10 gpiochips + SoC output→read loopback (set 1→read 1, set 0→read 0) | PASS |
+| P5 | i2c | LPI2C + WM8962 @0x1a | slave ACKs (i2c-scan) + 16-bit register write→read-back round-trip (i2c-rw) | PASS |
+| P6 | rtc | SCMI BBM RTC | set a known time, read it back (RTC_SET_TIME/RTC_RD_TIME) | PASS |
+| P7 | watchdog | i.MX watchdog | identity/timeout query + keepalive succeed; magic-close disarms | PASS |
 
-The peripheral harness emits the i.MX91 sweep's shared `SOAK:` markers
-(`storage-emmc`, `m95-net-enetc`, `usb-enum`, `usb-bulk` keys) so the 91 and 95
-dashboards are diff-able. The net boot reuses `tests/netc/patch-dtb.py` (fixed
-MAC + identity msi-map) so the ENETC ports probe; the usb device is attached on
-`usb-bus.0` (the ChipIdea EHCI host — the DWC3 xHCI roothub does not enumerate
-cold-plug). i2c / audio / rtc datapath items could follow the same pattern.
+The peripheral harness emits the i.MX91 sweep's shared `SOAK:` markers (keys:
+`storage-emmc`, `m95-net-enetc`, `usb-enum`, `usb-bulk`, `gpio`, `i2c-scan`,
+`i2c-rw`, `rtc`, `watchdog`) so the 91 and 95 dashboards are diff-able — all 9
+green in one boot. The net boot reuses `tests/netc/patch-dtb.py` (fixed MAC +
+identity msi-map) so the ENETC ports probe; usb attaches on `usb-bus.0` (the
+ChipIdea EHCI host — the DWC3 xHCI roothub does not enumerate cold-plug). Audio
+is not covered: no soundcards probe on this minimal boot (the SAI/codec path
+needs the audio test's dedicated setup).
 
 ### Deferred candidates
 

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# RTC datapath: the SCMI BBM RTC (scmi-imx-bbm-rtc, /dev/rtc0). Set a known
+# wall-clock time via RTC_SET_TIME and read it back via RTC_RD_TIME - the value
+# only round-trips if the SCMI BBM RTC protocol path works end to end. No source
+# fetch; cs_build compiles a small kernel-UABI test.
+NAME=rtc
+CATEGORY=rtc
+CS_KEY=rtc
+
+cs_build() {
+    cat > rtc_test.c <<'C'
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/rtc.h>
+int main(void){
+    int fd=open("/dev/rtc0",O_RDWR);
+    if(fd<0){ printf("rtc: open /dev/rtc0 failed\n"); return 77; }   /* skip */
+    struct rtc_time r;
+    if(ioctl(fd,RTC_RD_TIME,&r)==0)
+        printf("rtc initial: %04d-%02d-%02d %02d:%02d:%02d\n",
+               r.tm_year+1900,r.tm_mon+1,r.tm_mday,r.tm_hour,r.tm_min,r.tm_sec);
+    struct rtc_time s={.tm_year=125,.tm_mon=5,.tm_mday=15,.tm_hour=12,.tm_min=30,.tm_sec=45};
+    if(ioctl(fd,RTC_SET_TIME,&s)<0){ printf("rtc: RTC_SET_TIME failed\n"); return 1; }
+    struct rtc_time b;
+    if(ioctl(fd,RTC_RD_TIME,&b)<0){ printf("rtc: RTC_RD_TIME failed\n"); return 1; }
+    printf("rtc readback: %04d-%02d-%02d %02d:%02d:%02d\n",
+           b.tm_year+1900,b.tm_mon+1,b.tm_mday,b.tm_hour,b.tm_min,b.tm_sec);
+    /* allow a 2s slop in case the second rolled over between set and read */
+    int ok = b.tm_year==125 && b.tm_mon==5 && b.tm_mday==15 &&
+             b.tm_hour==12 && b.tm_min==30 && (b.tm_sec>=45 && b.tm_sec<=47);
+    printf("rtc: %s\n", ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+C
+    "$CC" -O2 -static -o "$OUT/rtc_test" rtc_test.c || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/rtc_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[rtc] set a known time and read it back (SCMI BBM RTC)"
+./rtc_test; rc=$?
+[ $rc -eq 0 ] && echo "[rtc] OK" || { [ $rc -eq 77 ] && echo "[rtc] no /dev/rtc0"; }
+exit $rc
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

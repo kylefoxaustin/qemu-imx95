@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Watchdog datapath: the i.MX watchdog (/dev/watchdog). Query its identity +
+# timeout (WDIOC_GETSUPPORT / WDIOC_GETTIMEOUT), pet it (WDIOC_KEEPALIVE), then
+# magic-close ('V') so the timer stops and never resets the machine. Verifies the
+# WDT register/ioctl path responds. No source fetch.
+NAME=watchdog
+CATEGORY=watchdog
+CS_KEY=watchdog
+
+cs_build() {
+    cat > wdt_test.c <<'C'
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/watchdog.h>
+int main(void){
+    int fd=open("/dev/watchdog",O_RDWR);
+    if(fd<0){ printf("wdt: open /dev/watchdog failed\n"); return 77; }   /* skip */
+    struct watchdog_info wi; memset(&wi,0,sizeof wi);
+    int ok=1;
+    if(ioctl(fd,WDIOC_GETSUPPORT,&wi)==0)
+        printf("wdt identity: %s options=0x%x\n", wi.identity, wi.options);
+    else { printf("wdt: GETSUPPORT failed\n"); ok=0; }
+    if(strlen((char*)wi.identity)==0){ printf("wdt: empty identity\n"); ok=0; }
+    int to=0; if(ioctl(fd,WDIOC_GETTIMEOUT,&to)==0) printf("wdt timeout=%ds\n",to);
+    else { printf("wdt: GETTIMEOUT failed\n"); ok=0; }
+    if(to<=0){ printf("wdt: nonsensical timeout\n"); ok=0; }
+    int opt=0;
+    if(ioctl(fd,WDIOC_KEEPALIVE,&opt)<0){ printf("wdt: KEEPALIVE failed\n"); ok=0; }
+    else printf("wdt: keepalive ok\n");
+    if(write(fd,"V",1)!=1){}   /* magic close: disarm */
+    close(fd);
+    printf("wdt: %s\n", ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+C
+    "$CC" -O2 -static -o "$OUT/wdt_test" wdt_test.c || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/wdt_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[watchdog] query identity/timeout, keepalive, magic-close"
+./wdt_test; rc=$?
+[ $rc -eq 0 ] && echo "[watchdog] OK" || { [ $rc -eq 77 ] && echo "[watchdog] no /dev/watchdog"; }
+exit $rc
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

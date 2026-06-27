@@ -65,15 +65,19 @@ for rfile in $RECIPES; do
         NAME=""; CATEGORY=""; SRC=""; REF=""; CS_KEY=""
         # shellcheck disable=SC1090
         . "$rfile"
-        [ -n "$NAME" ] && [ -n "$SRC" ] || { echo "  bad recipe: $rfile"; exit 3; }
-        tarball="$CACHE/$NAME-$REF.tar.gz"
-        if [ ! -s "$tarball" ]; then
-            echo "  fetch  $NAME ($REF)"
-            curl -fsSL "$SRC" -o "$tarball.tmp" && mv "$tarball.tmp" "$tarball" \
-                || { echo "  FETCH-FAIL $NAME"; exit 4; }
-        fi
+        [ -n "$NAME" ] || { echo "  bad recipe: $rfile"; exit 3; }
         ex="$SRCWORK/$NAME"; mkdir -p "$ex"
-        tar -xf "$tarball" -C "$ex" --strip-components=1 || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
+        # SRC is optional: a no-source recipe (e.g. a small kernel-UABI datapath
+        # test) compiles an inline C program in cs_build instead of fetching.
+        if [ -n "$SRC" ]; then
+            tarball="$CACHE/$NAME-$REF.tar.gz"
+            if [ ! -s "$tarball" ]; then
+                echo "  fetch  $NAME ($REF)"
+                curl -fsSL "$SRC" -o "$tarball.tmp" && mv "$tarball.tmp" "$tarball" \
+                    || { echo "  FETCH-FAIL $NAME"; exit 4; }
+            fi
+            tar -xf "$tarball" -C "$ex" --strip-components=1 || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
+        fi
         OUT="$SHARE/items/$NAME"; mkdir -p "$OUT"; export CC AR STRIP OUT
         echo "  build  $NAME"
         ( cd "$ex" && cs_build ) || { echo "  BUILD-FAIL $NAME"; exit 6; }
