@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# zlib - the canonical DEFLATE library. Its bundled `example` binary is a
+# self-contained correctness test (deflate/inflate round-trips, gzip API,
+# dictionaries, flush modes) that exits non-zero on any mismatch. We also do a
+# minigzip pipe round-trip with a host-side golden hash compared in-guest.
+NAME=zlib
+CATEGORY=compression
+SRC=https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz
+REF=v1.3.1
+
+cs_build() {
+    # cwd = extracted source; OUT = per-item staging dir; CC/AR set by run.sh.
+    CHOST=aarch64-linux-gnu CC="$CC" CFLAGS="-O2 -static" \
+        ./configure --static >/dev/null
+    make -j"$(nproc)" libz.a example minigzip >/dev/null
+    "$STRIP" example minigzip 2>/dev/null || true
+    cp example minigzip "$OUT/"
+
+    # A golden payload + its sha, verified after a compress|decompress round-trip
+    # inside the guest. Build the reference hash on the host now.
+    head -c 200000 /dev/urandom > "$OUT/payload.bin" 2>/dev/null || \
+        dd if=/dev/zero bs=1000 count=200 2>/dev/null | tr '\0' 'A' > "$OUT/payload.bin"
+    sha256sum "$OUT/payload.bin" | awk '{print $1}' > "$OUT/payload.sha"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Exit 0 = pass. Runs entirely in the guest.
+set -e
+echo "[zlib] bundled self-test (example)"
+./example
+echo "[zlib] minigzip pipe round-trip"
+./minigzip < payload.bin | ./minigzip -d > payload.out
+want=$(cat payload.sha)
+got=$(sha256sum payload.out | cut -d' ' -f1)
+[ "$want" = "$got" ] || { echo "round-trip hash mismatch: $want != $got"; exit 1; }
+echo "[zlib] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

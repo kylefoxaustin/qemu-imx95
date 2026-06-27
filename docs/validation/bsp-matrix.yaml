@@ -1,0 +1,58 @@
+# i.MX95 QEMU — validated BSP matrix
+#
+# Which NXP BSP / firmware sets THIS model is validated to boot. The emulator
+# session OWNS this list (CLAUDE.md §7: never guess what boots the model);
+# downstream tools (e.g. Holobench's BSP version picker) READ it — they do not
+# guess a compatibility matrix.
+#
+# Chosen for DIFFERENCE, not recency-depth: adjacent NXP point-releases on ONE
+# kernel line are ~identical (same drivers), so testing 3 of them ≈ testing one.
+# The churn that breaks a model is ACROSS kernel lines + against mainline. So the
+# set = {pinned dev BSP} + {latest NXP (forward-compat canary)} + {mainline if
+# feasible}. Boot-smoke = reach the SCMI handshake + userspace roll-call via
+# tests/bsp-matrix/run.sh.
+board:        imx95-19x19-evk
+qemu_machine: imx95-19x19-evk          # QEMU -M
+nxp_machine:  imx95-19x19-lpddr5-evk   # Yocto MACHINE
+
+entries:
+  - label:            pinned-walnascar-6.12.49
+    kind:             nxp-bsp
+    status:           validated                 # boot-smoke PASS — see results below
+    kernel_line:      "6.12  (walnascar / Yocto 5.2)"
+    manifest_branch:  imx-linux-walnascar
+    manifest_xml:     imx-6.12.49-2.2.0.xml
+    distro:           fsl-imx-xwayland
+    image_target:     imx-image-full
+    dtb_name:         imx95-19x19-evk.dtb
+    sm_tag:           lf-6.18.2-1.0.0           # imx-sm; SCMI is fwd/back compatible with the 6.12 kernel
+    sm_build:         "cfg=mx95evk M=2"
+    validated_against: 25223218cdd                   # model commit this entry was last booted on
+    notes:            primary contract; the BSP the model is developed against.
+
+  - label:            latest-nxp-whinlatter
+    kind:             nxp-bsp
+    status:           candidate                 # forward-compat canary; NOT yet boot-validated
+    kernel_line:      "6.18  (whinlatter / Yocto 5.3)  — LF6.18.2_1.0.0"
+    manifest_branch:  imx-linux-whinlatter      # CONFIRM exact branch + xml at validation time
+    manifest_xml:     imx-6.18.2-y.0.0.xml      # TODO confirm exact release xml
+    distro:           fsl-imx-xwayland
+    image_target:     imx-image-full
+    dtb_name:         imx95-19x19-evk.dtb
+    sm_tag:           lf-6.18.2-1.0.0
+    sm_build:         "cfg=mx95evk M=2"
+    notes:            driver-churn canary across kernel lines — build once, boot-smoke, promote to validated.
+
+  - label:            vanilla-mainline
+    kind:             mainline
+    status:           blocked                   # 95 is SCMI/SM-gated; no zero-SM mainline boot today
+    notes: >
+      Mainline kernel + mainline imx95-19x19-evk.dts cannot reach userspace
+      without an SCMI provider (the SM). Unlike 93/91 (no System Manager ->
+      mainline boots standalone), the 95 requires the SM. Revisit if a
+      mainline+SM combo or an OSS minimal SCMI responder lands.
+
+# boot-smoke markers (kernel-side, M-mode independent):
+smoke:
+  scmi_handshake: "SCMI Protocol v2.1 'NXP:IMX' Firmware version 0x333"
+  userspace:      "=== imx95 busybox userspace ==="

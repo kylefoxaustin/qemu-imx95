@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# B-Con/crypto-algorithms - pure-C reference implementations, each shipping a
+# *_test.c with embedded known-answer vectors. main() prints SUCCEEDED/FAILED.
+# Zero external deps and no vector generation step, so every algorithm is a
+# self-contained KAT that cross-compiles statically without friction. We build
+# one binary per algorithm => several corpus items from one source tree.
+NAME=crypto-algorithms
+CATEGORY=crypto
+SRC=https://github.com/B-Con/crypto-algorithms/archive/refs/heads/master.tar.gz
+REF=master
+
+# Algorithms whose <algo>.c + <algo>_test.c pair links cleanly.
+CS_ALGOS="sha256 sha1 md5 md2 aes des blowfish arcfour base64"
+
+cs_build() {
+    for a in $CS_ALGOS; do
+        [ -f "$a.c" ] && [ -f "${a}_test.c" ] || continue
+        "$CC" -O2 -static -o "$OUT/$a" "$a.c" "${a}_test.c" >/dev/null 2>&1 \
+            || { echo "  (skip $a: build failed)"; continue; }
+        "$STRIP" "$OUT/$a" 2>/dev/null || true
+    done
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Each binary prints "<ALGO> tests: SUCCEEDED" (or FAILED) and exits 0.
+# We treat a FAILED, a missing SUCCEEDED, or a crash as failure.
+fail=0; ran=0
+for bin in sha256 sha1 md5 md2 aes des blowfish arcfour base64; do
+    [ -x "./$bin" ] || continue
+    ran=$((ran+1))
+    out=$(./"$bin" 2>&1) || { echo "[$bin] crashed rc=$?"; fail=1; continue; }
+    echo "$out"
+    case "$out" in
+        *FAILED*)             echo "[$bin] KAT FAILED"; fail=1 ;;
+        *SUCCEEDED*|*PASSED*) : ;;
+        *)                    echo "[$bin] no verdict line"; fail=1 ;;
+    esac
+done
+[ "$ran" -gt 0 ] || { echo "no crypto binaries present"; exit 1; }
+[ $fail -eq 0 ] || exit 1
+echo "[crypto-algorithms] OK ($ran algorithms)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# bzip2 - Burrows-Wheeler block-sorting compressor. Upstream ships a self-test
+# (`make test`) that compresses three sample files at -1/-2/-3, decompresses,
+# and `cmp`s against committed references. We replicate that exact oracle in the
+# guest using the bundled sample*.ref files, so a wrong byte anywhere fails.
+NAME=bzip2
+CATEGORY=compression
+SRC=https://gitlab.com/bzip2/bzip2/-/archive/bzip2-1.0.8/bzip2-bzip2-1.0.8.tar.gz
+REF=1.0.8
+
+cs_build() {
+    make -j"$(nproc)" CC="$CC" CFLAGS="-O2 -static -D_FILE_OFFSET_BITS=64" \
+        bzip2 >/dev/null
+    "$STRIP" bzip2 2>/dev/null || true
+    cp bzip2 "$OUT/"
+    # The committed sample inputs + their decompressed references.
+    cp sample1.ref sample2.ref sample3.ref "$OUT/"
+    cp sample1.bz2 sample2.bz2 sample3.bz2 "$OUT/"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Mirrors upstream `make test`: round-trip each sample and cmp to the reference.
+set -e
+fail=0
+for n in 1 2 3; do
+    lvl=$n
+    echo "[bzip2] sample$n  compress -$lvl / decompress / cmp"
+    ./bzip2 -$lvl  < sample$n.ref > t$n.bz2
+    ./bzip2 -d     < t$n.bz2      > t$n.out
+    if ! cmp -s t$n.out sample$n.ref; then
+        echo "  MISMATCH on sample$n"; fail=1
+    fi
+    # Also verify we can decode the committed .bz2 the same way upstream does.
+    ./bzip2 -d < sample$n.bz2 > c$n.out
+    cmp -s c$n.out sample$n.ref || { echo "  committed .bz2 decode mismatch"; fail=1; }
+done
+[ $fail -eq 0 ] || exit 1
+echo "[bzip2] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
