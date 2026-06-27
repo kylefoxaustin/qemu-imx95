@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Storage datapath: a real application (SQLite) writing its database THROUGH an
+# ext4 filesystem on the emulated eMMC, then reading it back after dropping the
+# page cache - so the read is forced to come off the card via the uSDHC ADMA
+# path, not RAM. Combines a real app + a real filesystem + the SD/eMMC write+read
+# datapath (the one that had the "Card stuck being busy" multi-block bugs). The
+# oracle is differential: the rows read back off the eMMC must match a golden
+# produced by a host-built sqlite3 of the same source.
+NAME=storage-sqlite
+CATEGORY=storage
+SRC=https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
+REF=3.46.1
+CS_DEFS="-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_ENABLE_JSON1"
+
+cs_build() {
+    cat > "$OUT/work.sql" <<'SQL'
+PRAGMA journal_mode=DELETE;
+PRAGMA synchronous=FULL;
+CREATE TABLE t(id INTEGER PRIMARY KEY, k TEXT, v INTEGER);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<20000)
+INSERT INTO t(k,v) SELECT 'key'||(n%29), n*7 FROM seq;
+CREATE INDEX ix ON t(k);
+SQL
+    cat > "$OUT/query.sql" <<'SQL'
+SELECT count(*), sum(v), avg(v), min(v), max(v) FROM t;
+SELECT k, count(*) c, sum(v) s FROM t GROUP BY k ORDER BY s DESC, k LIMIT 8;
+PRAGMA integrity_check;
+SQL
+    # Host golden: build the DB then run the read queries (same engine).
+    cc -O2 $CS_DEFS -o sqlite3_host shell.c sqlite3.c -lm \
+        || { echo "  host sqlite build failed"; return 1; }
+    G="$OUT/golden.db"
+    ./sqlite3_host "$G" < "$OUT/work.sql" >/dev/null 2>&1
+    ./sqlite3_host "$G" < "$OUT/query.sql" > "$OUT/golden.txt" 2>&1
+    rm -f "$G"
+    [ -s "$OUT/golden.txt" ] || { echo "  golden gen failed"; return 1; }
+
+    "$CC" -O2 -static $CS_DEFS -o "$OUT/sqlite3" shell.c sqlite3.c -lm \
+        || { echo "  cross sqlite build failed"; return 1; }
+    "$STRIP" "$OUT/sqlite3" 2>/dev/null || true
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+# Skip cleanly if the harness couldn't mount the eMMC card.
+if ! touch /data/.w 2>/dev/null; then
+    echo "[storage] /data (eMMC) not writable - skipping"; exit 77
+fi
+rm -f /data/.w
+HERE=$(cd "$(dirname "$0")" && pwd)
+D=/data/csweep; rm -rf "$D"; mkdir -p "$D"; DB="$D/test.db"
+echo "[storage] write 20k-row DB to ext4-on-eMMC (synchronous=FULL)"
+"$HERE/sqlite3" "$DB" < "$HERE/work.sql" || { echo "build DB failed"; exit 1; }
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null   # force reads off the card
+echo "[storage] re-read from eMMC and diff vs host golden"
+"$HERE/sqlite3" "$DB" < "$HERE/query.sql" > "$D/out.txt" 2>&1
+if ! diff -u "$HERE/golden.txt" "$D/out.txt"; then
+    echo "[storage] DB read back from eMMC diverged from golden"; exit 1
+fi
+ls -l "$DB" | awk '{print "[storage] db size on eMMC:", $5, "bytes"}'
+rm -rf "$D"; sync
+echo "[storage] OK (sqlite DB round-tripped through the uSDHC datapath)"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

@@ -66,7 +66,27 @@ A host-side build failure is reported separately as `BLDFAIL`.
 Pick programs whose correctness oracle ships with the source — that's the
 highest coverage-per-effort, because no expected output has to be hand-curated.
 
-## Current corpus
+## Peripheral tier (`run-peripheral.sh`)
+
+A second harness that runs real code against the machine's actual **peripheral
+datapaths**, not just the CPU — per the MCXN947 sweep's lesson that real drivers
++ real apps surface model bugs synthetic word-aligned tests never hit. The
+machine boots with extra devices attached and the guest wires them up before
+running `recipes-peripheral/`:
+
+- an **eMMC** card (ext4, host-pre-formatted) on the uSDHC controller, mounted at
+  `/data` — exercises the SD/eMMC write+read ADMA path
+- **user networking** on the ENETC NIC (slirp; host at 10.0.2.2)
+
+```sh
+tests/code-sweep/run-peripheral.sh            # all peripheral recipes
+```
+
+| item | datapath | oracle |
+|------|----------|--------|
+| `storage-sqlite` | uSDHC / eMMC | sqlite writes a 20k-row DB through ext4-on-eMMC, drops caches, re-reads off the card; rows diffed vs a host golden |
+
+## Current corpus (CPU tier)
 
 | item | category | oracle |
 |------|----------|--------|
