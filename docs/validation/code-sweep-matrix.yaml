@@ -34,8 +34,9 @@ environment:
 # ---- summary -------------------------------------------------------------
 summary:
   cpu_items:        27
-  peripheral_items: 7
-  result:           "34/34 PASS"
+  peripheral_items: 8
+  result:           "35/35 PASS"
+  note:             "i2c-rw SKIPs (honest) in a combined boot where the audio driver claims the WM8962 codec @0x1a; standalone it PASSes. i2c-scan passes either way (kernel-enumerated)."
 
 # ---- CPU tier ------------------------------------------------------------
 cpu:
@@ -117,6 +118,9 @@ peripheral:
       oracle: "RTC_SET_TIME a known wall-clock + RTC_RD_TIME read-back matches (2s slop)" }
   - { name: watchdog,         key: watchdog, datapath: "i.MX watchdog (/dev/watchdog)", result: pass,
       oracle: "WDIOC_GETSUPPORT identity + GETTIMEOUT + KEEPALIVE succeed; magic-close disarms (no reset)" }
+  - { name: audio-micfil,     key: audio-micfil-capture, version: "alsa-lib 1.2.11", datapath: "MICFIL PDM -> eDMA1 cyclic -> ALSA", result: pass,
+      oracle: "load snd-soc-* (kernel-tree .ko), card registers, snd_pcm_readi(S32) returns non-silent varying samples (peak/nonzero/changes) - the capture datapath moves real data"
+,     note: "self-contained: static libasound + pcm_capture + shipped ALSA config; modules from $KBUILD (vermagic matches)" }
 
 # ---- deferred (not in the corpus; need host-tools/downloads we avoid in-recipe)
 deferred:

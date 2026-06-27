@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Audio capture datapath: the MICFIL (PDM mic) card. The MICFIL model synthesises
+# a sawtooth into its data FIFO and pulses a DMA request at the watermark; a
+# cyclic eDMA1 channel moves DATACH0 into the ALSA ring, so snd_pcm_readi()
+# returns non-silent, varying S32 samples - the capture path actually MOVES data,
+# not just registers the card. This is the integrity oracle: a working datapath
+# yields a real (peak/nonzero/varying) signal, a broken one yields silence.
+#
+# Self-contained: cross-builds a STATIC libasound + the pcm_capture client (no
+# BSP rootfs needed), and stages the snd-soc-* modules from the booted kernel's
+# OWN build tree ($KBUILD) so their vermagic matches the Image. SKIPs in-guest if
+# the modules/card aren't present (e.g. KBUILD has no .ko).
+NAME=audio-micfil
+CATEGORY=audio
+CS_KEY=audio-micfil-capture
+SRC=https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.11.tar.bz2
+REF=1.2.11
+
+# snd-soc modules in dependency order (SND/SND_SOC core is built-in =y).
+CS_MODS="snd-soc-fsl-utils imx-pcm-dma snd-soc-fsl-sai snd-soc-fsl-micfil \
+ snd-soc-wm8962 snd-soc-dmic snd-soc-imx-audmux snd-soc-fsl-asoc-card \
+ snd-soc-imx-card"
+
+cs_build() {
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+        --enable-static --disable-shared --disable-python --disable-topology \
+        --disable-ucm --without-debug CC="$CC" CFLAGS=-O2 >/dev/null 2>&1 \
+        || { echo "  alsa-lib configure failed"; return 1; }
+    make -j"$(nproc)" >/dev/null 2>&1
+    LASOUND=src/.libs/libasound.a
+    [ -f "$LASOUND" ] || { echo "  libasound.a not built"; return 1; }
+    "$CC" -O2 -static -I include -o "$OUT/pcm_capture" \
+        "$ROOT/tests/audio/pcm_capture.c" "$LASOUND" -lm -ldl -lpthread \
+        || { echo "  pcm_capture link failed"; return 1; }
+    "$STRIP" "$OUT/pcm_capture" 2>/dev/null || true
+
+    # libasound needs its config tree (alsa.conf + pcm/cards/ctl) to resolve
+    # even "hw:" device names; ship it and point ALSA_CONFIG_DIR at it in-guest.
+    cp -a src/conf "$OUT/alsa-conf" 2>/dev/null || { echo "  no alsa conf tree"; return 1; }
+
+    # Stage the snd-soc modules from the kernel build tree (vermagic matches).
+    mkdir -p "$OUT/mods"; staged=""
+    for m in $CS_MODS; do
+        f=$(find "$KBUILD" -name "$m.ko" 2>/dev/null | head -1)
+        [ -n "$f" ] && { cp "$f" "$OUT/mods/"; staged="$staged $m"; }
+    done
+    echo "$CS_MODS" > "$OUT/.modorder"
+    echo "  staged modules:$staged"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+HERE=$(cd "$(dirname "$0")" && pwd)
+export ALSA_CONFIG_DIR="$HERE/alsa-conf"   # libasound config tree (shipped)
+# Load the ASoC drivers in dependency order (best-effort).
+for m in $(cat "$HERE/.modorder"); do
+    [ -f "$HERE/mods/$m.ko" ] && insmod "$HERE/mods/$m.ko" 2>/dev/null
+done
+sleep 1
+[ -e /proc/asound/cards ] || { echo "[audio] no ALSA - skipping"; exit 77; }
+cat /proc/asound/cards
+card=$(awk '/micfil/{print $1}' /proc/asound/cards 2>/dev/null | head -1)
+if [ -z "$card" ]; then echo "[audio] no micfil card (modules absent?) - skipping"; exit 77; fi
+echo "[audio] micfil card = $card; capturing S32"
+ok=1
+for ch in 2 1 8; do
+    if "$HERE/pcm_capture" "hw:$card,0" 4096 S32 "$ch"; then ok=0; break; fi
+done
+[ "$ok" = 0 ] && { echo "[audio] OK (MICFIL capture non-silent over eDMA)"; exit 0; }
+echo "[audio] capture FAILED"; exit 1
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

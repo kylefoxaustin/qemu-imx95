@@ -109,6 +109,7 @@ both STATE dirs prints one cross-machine board.
 | `i2c` | LPI2C + WM8962 codec | slave ACK (i2c-scan) + 16-bit register write→read-back round-trip (i2c-rw) |
 | `rtc` | SCMI BBM RTC | set a known time, read it back (RTC_SET_TIME/RTC_RD_TIME) |
 | `watchdog` | i.MX watchdog | identity/timeout query + keepalive; magic-close disarms |
+| `audio-micfil` | MICFIL PDM → eDMA → ALSA | loads snd-soc-* (kernel-tree .ko); `snd_pcm_readi(S32)` returns non-silent varying samples (static libasound, shipped ALSA config) |
 
 ## Current corpus (CPU tier)
 

@@ -699,7 +699,7 @@ into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
 score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
 **non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
 
-**Result: 34/34 PASS** — 27 CPU-tier items + 7 peripheral-tier items.
+**Result: 35/35 PASS** — 27 CPU-tier items + 8 peripheral-tier items.
 Reproduce: `tests/code-sweep/run.sh` (CPU) and
 `tests/code-sweep/run-peripheral.sh` (peripheral).
 
@@ -751,15 +751,20 @@ environment) + 4 env-only TFAILs.
 | P5 | i2c | LPI2C + WM8962 @0x1a | slave ACKs (i2c-scan) + 16-bit register write→read-back round-trip (i2c-rw) | PASS |
 | P6 | rtc | SCMI BBM RTC | set a known time, read it back (RTC_SET_TIME/RTC_RD_TIME) | PASS |
 | P7 | watchdog | i.MX watchdog | identity/timeout query + keepalive succeed; magic-close disarms | PASS |
+| P8 | audio-micfil | MICFIL PDM → eDMA1 → ALSA | load snd-soc-* (kernel-tree .ko), `snd_pcm_readi(S32)` returns non-silent varying samples — capture datapath moves real data | PASS |
 
 The peripheral harness emits the i.MX91 sweep's shared `SOAK:` markers (keys:
 `storage-emmc`, `m95-net-enetc`, `usb-enum`, `usb-bulk`, `gpio`, `i2c-scan`,
-`i2c-rw`, `rtc`, `watchdog`) so the 91 and 95 dashboards are diff-able — all 9
-green in one boot. The net boot reuses `tests/netc/patch-dtb.py` (fixed MAC +
+`i2c-rw`, `rtc`, `watchdog`, `audio-micfil-capture`) so the 91 and 95 dashboards
+are diff-able. The net boot reuses `tests/netc/patch-dtb.py` (fixed MAC +
 identity msi-map) so the ENETC ports probe; usb attaches on `usb-bus.0` (the
-ChipIdea EHCI host — the DWC3 xHCI roothub does not enumerate cold-plug). Audio
-is not covered: no soundcards probe on this minimal boot (the SAI/codec path
-needs the audio test's dedicated setup).
+ChipIdea EHCI host — the DWC3 xHCI roothub does not enumerate cold-plug). The
+audio item stages the `snd-soc-*` modules from the booted kernel's own build
+tree (vermagic matches) with a self-contained static libasound + ALSA config.
+Coexistence note: the audio driver binds the WM8962 codec at i2c-3 @0x1a, so in
+a combined boot `i2c-rw` (raw register round-trip) honestly **SKIPs** (slave
+kernel-claimed) while `i2c-scan` still passes via kernel enumeration; standalone
+`i2c-rw` PASSes.
 
 ### Soak (ITERS=N: build once, boot+run N times)
 

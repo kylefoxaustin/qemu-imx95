@@ -14,6 +14,7 @@ cs_build() {
     cat > i2c_test.c <<'C'
 #include <stdio.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/i2c.h>
@@ -32,16 +33,30 @@ static int wr(int fd,unsigned reg,unsigned val){
 }
 int main(void){
     int fd=open("/dev/i2c-3",O_RDWR);
-    if(fd<0){ printf("i2c: open /dev/i2c-3 failed\n"); return 77; }   /* skip */
-    if(ioctl(fd,I2C_SLAVE,ADDR)<0){ printf("i2c: set slave failed\n"); return 77; }
+    if(fd<0){ printf("i2c-scan: FAIL (no /dev/i2c-3)\ni2c-rw: SKIP\n"); return 1; }
+    /*
+     * i2c-scan: prove the LPI2C master enumerated the WM8962 @0x1a, EITHER by a
+     * raw ACK (when the addr is free) OR by the kernel having bound it (sysfs
+     * 3-001a) - so the scan passes whether or not the audio driver claims it.
+     */
+    int claimed = (ioctl(fd,I2C_SLAVE,ADDR) < 0 && errno == EBUSY);
+    int enumerated = (access("/sys/bus/i2c/devices/3-001a", F_OK) == 0);
     unsigned char b;
-    int scan = (read(fd,&b,1)==1);          /* slave ACKs a byte read */
-    printf("i2c-scan: %s (0x%02x)\n", scan?"PASS":"FAIL", ADDR);
-    /* 16-bit register round-trip on the WM8962 regfile */
+    int ack = !claimed && (read(fd,&b,1)==1);
+    int scan = ack || enumerated;
+    printf("i2c-scan: %s (0x%02x %s)\n", scan?"PASS":"FAIL", ADDR,
+           ack?"raw-ack":enumerated?"kernel-enumerated":"absent");
+    /*
+     * i2c-rw: a 16-bit register write->read round-trip on the WM8962 regfile.
+     * Only possible when the addr is free; if a driver (snd-soc-wm8962) owns it,
+     * the raw path is -EBUSY -> SKIP honestly (the master works; the slave is
+     * just kernel-claimed).
+     */
+    if(claimed){ printf("i2c-rw: SKIP (0x%02x claimed by a driver)\n", ADDR);
+                 close(fd); return scan ? 77 : 1; }
     unsigned v=0xdead; int rw=0;
-    if(wr(fd,0x01,0x00ab)>=0 && rd(fd,0x01,&v)==0 && v==0x00ab){
+    if(wr(fd,0x01,0x00ab)>=0 && rd(fd,0x01,&v)==0 && v==0x00ab)
         if(wr(fd,0x01,0x0123)>=0 && rd(fd,0x01,&v)==0 && v==0x0123) rw=1;
-    }
     printf("i2c-rw: %s (reg0x01 readback=0x%04x)\n", rw?"PASS":"FAIL", v);
     close(fd);
     return (scan && rw) ? 0 : 1;
@@ -51,13 +66,17 @@ C
     "$STRIP" "$OUT/i2c_test" 2>/dev/null || true
     cat > "$OUT/runtest.sh" <<'GUEST'
 #!/bin/sh
-echo "[i2c] LPI2C scan (WM8962 ack) + 16-bit register round-trip"
+echo "[i2c] LPI2C scan (WM8962 enumerated) + 16-bit register round-trip"
 out=$(./i2c_test 2>&1); rc=$?; echo "$out"
-# emit the i2c-scan dashboard key from the sub-result (i2c-rw is this item's rc)
-if echo "$out" | grep -q 'i2c-scan: PASS'; then echo "SOAK:PASS:i2c-scan:0x1a ack"
-else echo "SOAK:FAIL:i2c-scan:no ack"; fi
-[ $rc -eq 77 ] && { echo "[i2c] no /dev/i2c-3"; echo "SOAK:SKIP:i2c-scan:no bus"; exit 77; }
-[ $rc -eq 0 ] && echo "[i2c] OK"
+# i2c-scan dashboard key (emitted once here); i2c-rw is this item's rc, which
+# the harness turns into SOAK:<R>:i2c-rw (0=PASS / 77=SKIP-claimed / else FAIL).
+if echo "$out" | grep -q 'i2c-scan: PASS'; then echo "SOAK:PASS:i2c-scan:enumerated"
+else echo "SOAK:FAIL:i2c-scan:absent"; fi
+case $rc in
+    0)  echo "[i2c] OK" ;;
+    77) echo "[i2c] i2c-rw skipped (0x1a claimed by a driver)" ;;
+    *)  echo "[i2c] FAILED" ;;
+esac
 exit $rc
 GUEST
     chmod +x "$OUT/runtest.sh"

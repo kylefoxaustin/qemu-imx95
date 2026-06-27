@@ -79,7 +79,7 @@ for rfile in $RECIPES; do
             fi
             tar -xf "$tarball" -C "$ex" --strip-components=1 || { echo "  EXTRACT-FAIL $NAME"; exit 5; }
         fi
-        OUT="$SHARE/items/$NAME"; mkdir -p "$OUT"; export CC AR STRIP OUT
+        OUT="$SHARE/items/$NAME"; mkdir -p "$OUT"; export CC AR STRIP OUT KBUILD ROOT
         echo "  build  $NAME"
         ( cd "$ex" && cs_build ) || { echo "  BUILD-FAIL $NAME"; exit 6; }
         [ -x "$OUT/runtest.sh" ] || { echo "  NO-RUNTEST $NAME"; exit 7; }
