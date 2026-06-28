@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QOI - the "Quite OK Image" codec (single-header). We compile a small round-trip
+# driver against qoi.h: encode a deterministic RGBA image, decode it back, and
+# byte-compare (plus dimensions). A real lossless image codec exercised on the
+# A55; any encode/decode mismatch fails.
+NAME=qoi
+CATEGORY=image
+SRC=https://github.com/phoboslab/qoi/archive/refs/heads/master.tar.gz
+REF=master
+
+cs_build() {
+    cat > qoi_roundtrip.c <<'C'
+#define QOI_IMPLEMENTATION
+#include "qoi.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(void) {
+    int w = 800, h = 600, ch = 4, n = w * h * ch, i, len;
+    unsigned char *px = malloc(n);
+    for (i = 0; i < n; i++) {
+        px[i] = (unsigned char)((i * 37 + 13) ^ (i >> 5)); /* deterministic */
+    }
+    qoi_desc d = { w, h, ch, QOI_SRGB };
+    void *enc = qoi_encode(px, &d, &len);
+    if (!enc) { printf("qoi: encode failed\n"); return 1; }
+    qoi_desc d2;
+    unsigned char *dec = qoi_decode(enc, len, &d2, ch);
+    if (!dec) { printf("qoi: decode failed\n"); return 1; }
+    if (d2.width != (unsigned)w || d2.height != (unsigned)h) {
+        printf("qoi: dim mismatch %ux%u\n", d2.width, d2.height); return 1;
+    }
+    if (memcmp(px, dec, n)) { printf("qoi: data mismatch\n"); return 1; }
+    printf("qoi: round-trip OK (%d px -> %d bytes -> exact)\n", w * h, len);
+    return 0;
+}
+C
+    "$CC" -O2 -static -I. -o "$OUT/qoi_roundtrip" qoi_roundtrip.c \
+        || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/qoi_roundtrip" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[qoi] encode/decode round-trip of a deterministic RGBA image"
+if ./qoi_roundtrip; then echo "[qoi] OK"; else echo "[qoi] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

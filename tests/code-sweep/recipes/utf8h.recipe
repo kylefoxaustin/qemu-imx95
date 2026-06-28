@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# utf8.h - sheredom's single-header UTF-8 string library. Its test suite
+# (utest.h) exercises utf8len/cmp/chr/str/case-fold/validation across multibyte
+# sequences; returns nonzero on failure. A second Unicode lib alongside utf8proc.
+NAME=utf8h
+CATEGORY=unicode
+SRC=https://github.com/sheredom/utf8.h/archive/refs/heads/master.tar.gz
+REF=master
+cs_build() {
+    "$CC" -O2 -static -I. -o "$OUT/utf8_test" test/main.c \
+        || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/utf8_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[utf8.h] run sheredom utf8.h utest suite"
+if ./utf8_test; then echo "[utf8.h] OK"; else echo "[utf8.h] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# http-parser - Node.js's HTTP/1.x request/response parser. Its bundled test.c
+# runs a large battery of request/response/url parse cases (chunked, pipelining,
+# upgrade, edge cases) and returns nonzero on any mismatch. Single-file parser +
+# test, static cross-build. Exercises a real protocol state machine on the A55.
+NAME=http-parser
+CATEGORY=protocol
+SRC=https://github.com/nodejs/http-parser/archive/refs/tags/v2.9.4.tar.gz
+REF=2.9.4
+cs_build() {
+    "$CC" -O2 -static -o "$OUT/htest" http_parser.c test.c \
+        || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/htest" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[http-parser] run the bundled request/response parse battery"
+if ./htest; then echo "[http-parser] OK"; else echo "[http-parser] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

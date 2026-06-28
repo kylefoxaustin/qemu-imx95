@@ -123,6 +123,8 @@ both STATE dirs prints one cross-machine board.
 | `lz4` | compression | compress -9 + decompress round-trip (sha256) |
 | `heatshrink` | compression | heatshrink's own encoder/decoder round-trip suite (greatest framework) |
 | `miniz` | compression | miniz example1 compress/decompress round-trip with memcmp self-check |
+| `libpng` | image | libpng `pngtest` read→re-encode→compare of a committed PNG (zlib cross-built in-recipe) |
+| `qoi` | image | QOI encode→decode round-trip of a deterministic RGBA image, exact byte compare |
 | `pcre2` | regex | pcre2test runs PCRE2's own testinput1, diffed vs the committed testoutput1 (upstream RunTest test 1) |
 | `oniguruma` | regex | Oniguruma's own testc/back/options/regset suites (SUCC/FAIL/ERROR), nonzero unless FAIL+ERROR==0 |
 | `base64` | base64 | aklomp/base64's known-answer encode/decode vectors, nonzero on mismatch |
@@ -130,6 +132,7 @@ both STATE dirs prints one cross-machine board.
 | `expat` | xml | xmlwf accepts a battery of well-formed XML and rejects malformed XML (both paths verified) |
 | `tinyexpr` | math | bundled smoke test (parsing/precedence/functions/closures/pow), returns nonzero on any failed case |
 | `utf8proc` | unicode | utf8proc's own self-contained tests (case-fold/charwidth/iterate/valid/misc), each exits nonzero on mismatch |
+| `utf8h` | unicode | sheredom utf8.h utest suite (len/cmp/chr/case-fold/validation over multibyte) |
 | `uthash` | datastruct | uthash's full test suite — 96 programs, each stdout compared to its committed `.ans` golden |
 | `crypto-algorithms` | crypto | B-Con per-algorithm known-answer tests (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) |
 | `libsodium` | crypto | ~20 of libsodium's own test/default programs, each self-checking vs its `.exp` (box/sign/secretbox/aead/scalarmult/…) |
@@ -138,6 +141,8 @@ both STATE dirs prints one cross-machine board.
 | `xxhash` | hashing | canonical empty-input vectors (XXH32/64/128/XXH3) + host/guest agreement on a random payload |
 | `jq` | json | jq's own `--run-tests` suite; differential oracle — A55 must reproduce the version-pinned host baseline (435/447, 9 malformed) |
 | `cjson` | json | cJSON's own Unity test suites (parse/print/compare/minify/misc/add), each exits nonzero on assert failure |
+| `jsonh` | json | sheredom json.h utest suite (a 3rd independent JSON parser) |
+| `http-parser` | protocol | Node's HTTP/1.x parser bundled test.c (requests/responses/url/chunked/upgrade edge cases) |
 | `sqlite` | database | SQL workload (DDL/index/join/aggregate/CTE/window/JSON1) diffed vs a host-built golden |
 | `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
 | `cpython` | interpreter | static CPython 3.10 cross-built; runs its own `python -m test` stdlib regression suite (33 CPU-pure modules) in-guest |

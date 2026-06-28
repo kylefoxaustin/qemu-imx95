@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# json.h - sheredom's single-header JSON parser. Its test suite (utest.h) parses
+# a range of documents and asserts the resulting DOM; returns nonzero on failure.
+# A third independent JSON implementation alongside jq and cJSON.
+NAME=jsonh
+CATEGORY=json
+SRC=https://github.com/sheredom/json.h/archive/refs/heads/master.tar.gz
+REF=master
+cs_build() {
+    "$CC" -O2 -static -I. -o "$OUT/jsonh_test" test/main.c \
+        || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/jsonh_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[json.h] run sheredom json.h utest suite"
+if ./jsonh_test; then echo "[json.h] OK"; else echo "[json.h] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# libpng - the reference PNG codec. Its bundled pngtest reads a committed PNG,
+# writes it back out, and byte-compares the re-encoded image to verify the full
+# decode+encode datapath; returns nonzero on mismatch. libpng needs zlib, which
+# this recipe cross-builds first (self-contained). A real image codec + DEFLATE
+# stack exercised on the A55.
+NAME=libpng
+CATEGORY=image
+SRC=https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.43.tar.gz
+REF=1.6.43
+
+cs_build() {
+    # zlib first (libpng depends on it); fetch + static cross-build alongside.
+    curl -fsSL https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz \
+        -o zlib.tgz 2>/dev/null || { echo "  zlib fetch failed"; return 1; }
+    mkdir -p zlib && tar -xf zlib.tgz -C zlib --strip-components=1
+    ( cd zlib && CHOST=aarch64-linux-gnu CC="$CC" CFLAGS="-O2" ./configure --static \
+        >/dev/null 2>&1 && make -j"$(nproc)" libz.a >/dev/null 2>&1 )
+    [ -f zlib/libz.a ] || { echo "  zlib build failed"; return 1; }
+    ZL="$PWD/zlib"
+
+    ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu --disable-shared \
+        CC="$CC" CFLAGS="-O2 -I$ZL" CPPFLAGS="-I$ZL" LDFLAGS="-L$ZL" >/dev/null 2>&1 \
+        || { echo "  libpng configure failed"; return 1; }
+    make -j"$(nproc)" pngtest LDFLAGS="-all-static -L$ZL" >/dev/null 2>&1
+    [ -x pngtest ] || { echo "  pngtest not built"; return 1; }
+    cp pngtest "$OUT/"; "$STRIP" "$OUT/pngtest" 2>/dev/null || true
+    cp pngtest.png "$OUT/"
+
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[libpng] pngtest: read -> re-encode -> compare a committed PNG"
+out=$(./pngtest pngtest.png 2>&1); rc=$?; echo "$out" | tail -3
+[ $rc -eq 0 ] || { echo "[libpng] FAILED (rc=$rc)"; exit 1; }
+case "$out" in *"libpng passes test"*|*PASS*) echo "[libpng] OK";; *) echo "[libpng] no pass marker"; exit 1;; esac
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

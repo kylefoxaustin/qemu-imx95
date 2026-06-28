@@ -33,9 +33,9 @@ environment:
 
 # ---- summary -------------------------------------------------------------
 summary:
-  cpu_items:        27
+  cpu_items:        32
   peripheral_items: 8
-  result:           "35/35 PASS"
+  result:           "40/40 PASS"
   note:             "i2c-rw SKIPs (honest) in a combined boot where the audio driver claims the WM8962 codec @0x1a; standalone it PASSes. i2c-scan passes either way (kernel-enumerated)."
 
 # ---- CPU tier ------------------------------------------------------------
@@ -94,6 +94,16 @@ cpu:
   - { name: cpython,          version: 3.10.14,  category: interpreter, result: pass,
       oracle: "static CPython runs its own 'python -m test' on 33 curated CPU-pure stdlib modules"
 ,     skipped: "_testcapi tests + test_itertools/test_pickle (parallel-runner); _ssl/_ctypes/_decimal need cross libs" }
+  - { name: libpng,           version: 1.6.43,   category: image,       result: pass,
+      oracle: "pngtest reads a committed PNG, re-encodes, byte-compares; zlib cross-built in-recipe" }
+  - { name: qoi,              version: master,   category: image,       result: pass,
+      oracle: "encode->decode round-trip of a deterministic 800x600 RGBA image, exact byte compare" }
+  - { name: http-parser,      version: 2.9.4,    category: protocol,    result: pass,
+      oracle: "Node's HTTP/1.x parser bundled test.c battery (requests/responses/url/chunked/upgrade)" }
+  - { name: jsonh,            version: master,   category: json,        result: pass,
+      oracle: "sheredom json.h utest suite (3rd independent JSON parser)" }
+  - { name: utf8h,            version: master,   category: unicode,     result: pass,
+      oracle: "sheredom utf8.h utest suite (len/cmp/chr/case-fold/validation over multibyte)" }
   - { name: ltp-syscalls,     version: 20240524, category: syscall,     result: pass,
       oracle: "LTP syscall subset: 323 testcase binaries; ~250 TPASS on the A55"
 ,     skipped: "TBROK/TCONF counted as SKIP (env: minimal initramfs); 4 env-only TFAILs named in the recipe" }
@@ -131,3 +141,4 @@ deferred:
   - { name: mpdecimal, reason: "official/additional.decTest are index files; the IBM decTest vector tree is fetched by gettests.sh" }
   - { name: gmp,       reason: "libtool test harness ignores -all-static (test binaries come out dynamic)" }
   - { name: libyaml,   reason: "test-data wiring (run-* need external YAML inputs)" }
+  - { name: libtommath, reason: "its self-test deterministically dies right after 'TEST mp_cnt_lsb' on aarch64 (same point at 300s and 1500s, so not a timeout); needs gdb triage - could be a real find or a libtommath-on-aarch64 quirk" }

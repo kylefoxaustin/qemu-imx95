@@ -40,6 +40,7 @@ AR=${AR:-${CROSS}ar}
 STRIP=${STRIP:-${CROSS}strip}
 TMO=${TMO:-600}
 CASE_TMO=${CASE_TMO:-300}   # per-item wall-clock cap inside the guest
+ITERS=${ITERS:-1}          # soak: build once, boot+run this many times
 CACHE=${CACHE:-$ROOT/build/code-sweep/cache}
 
 skip() { echo "SKIP: $*"; exit 0; }
