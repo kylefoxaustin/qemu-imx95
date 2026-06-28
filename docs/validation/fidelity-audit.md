@@ -69,10 +69,28 @@ path." That was **too strong** — corrected here after reading
   hanging** it.
 
 So the precise rule for modelling these NXP remote-accelerators: you cannot fault
-via the *completion* retcode (it hangs), **but you can fault via the side-band
-error_code** if the driver plumbs one to userspace. The i.MX 95 model uses
-exactly this (`neutron-uncomputed-errcode`). Worth re-checking the i.MX 93
-Ethos-U for an analogous side-band before concluding "can't fault to the guest."
+via the *completion* retcode (it hangs), **but you can fault via a separate,
+non-gating error/status field** if the driver plumbs one to userspace. The
+i.MX 95 model uses exactly this (`neutron-uncomputed-errcode`).
+
+**Confirmed two-way taxonomy** (i.MX 93 checked its Ethos-U after this finding —
+2026-06-28): NXP remote-accelerator drivers split by *what gates completion*, and
+that decides where the honest fault goes:
+
+- **Neutron-style — completion gates on a polled retcode** (MBOX0 == DONE).
+  A non-DONE retcode hangs, so you MUST fault via a *side-band* field
+  (Neutron: MBOX1 `error_code`, read after DONE, surfaced via the ioctl).
+- **Ethos-style — completion gates on response *arrival*** (the `INFERENCE_RSP`
+  rpmsg). `ethosu_inference_rsp()` maps `rsp->status` for every value then
+  *unconditionally* sets done+wake, so the response's own `status` is **in-band
+  but non-gating** — a `STATUS_ERROR` completes exactly like success and
+  userspace reads it via the `INFERENCE_STATUS` ioctl. Here you fault via that
+  in-band status field directly; no side-band needed.
+
+Either way the honest fault is a *non-gating* status channel, never the
+completion signal. (The i.MX 93 model is adding opt-in honest-fault on the same
+default-faithful pattern, for unsupported opcodes/elementwise sub-ops it had been
+silently no-opping.)
 
 ## Fixing vs flagging
 
