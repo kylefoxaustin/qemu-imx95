@@ -134,6 +134,8 @@ both STATE dirs prints one cross-machine board.
 | `utf8proc` | unicode | utf8proc's own self-contained tests (case-fold/charwidth/iterate/valid/misc), each exits nonzero on mismatch |
 | `utf8h` | unicode | sheredom utf8.h utest suite (len/cmp/chr/case-fold/validation over multibyte) |
 | `uthash` | datastruct | uthash's full test suite — 96 programs, each stdout compared to its committed `.ans` golden |
+| `hashmaph` | datastruct | sheredom hashmap.h utest suite (put/get/remove/iterate/rehash/collision) |
+| `tomlc99` | config | tomlc99 bundled unittest + a real TOML parse oracle (string/int/array verified) |
 | `crypto-algorithms` | crypto | B-Con per-algorithm known-answer tests (sha256/sha1/md5/md2/aes/des/blowfish/arcfour/base64) |
 | `libsodium` | crypto | ~20 of libsodium's own test/default programs, each self-checking vs its `.exp` (box/sign/secretbox/aead/scalarmult/…) |
 | `mbedtls` | crypto | Mbed-TLS `selftest` KATs across ~22 suites (aes/gcm/sha/rsa/mpi/ecp/chacha20/…) |

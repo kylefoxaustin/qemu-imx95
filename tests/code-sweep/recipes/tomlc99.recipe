@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# tomlc99 - a C99 TOML parser. We run the bundled unittest (t1: UCS<->UTF-8) plus
+# a real parse oracle: parse a TOML document and verify a string, an int, and an
+# array element via the toml API. Any wrong parse fails. Exercises the parser on
+# the A55.
+NAME=tomlc99
+CATEGORY=config
+SRC=https://github.com/cktan/tomlc99/archive/refs/heads/master.tar.gz
+REF=master
+
+cs_build() {
+    "$CC" -O2 -static -I. -o "$OUT/t1" unittest/t1.c toml.c \
+        || { echo "  unittest build failed"; return 1; }
+    cat > toml_parse_test.c <<'C'
+#include "toml.h"
+#include <stdio.h>
+#include <string.h>
+static const char *doc =
+    "title = \"hello\"\n"
+    "[server]\n"
+    "port = 8080\n"
+    "hosts = [ \"alpha\", \"beta\", \"gamma\" ]\n";
+int main(void) {
+    char err[200];
+    toml_table_t *t = toml_parse((char *)doc, err, sizeof err);
+    if (!t) { printf("toml: parse failed: %s\n", err); return 1; }
+    toml_datum_t title = toml_string_in(t, "title");
+    toml_table_t *srv = toml_table_in(t, "server");
+    if (!title.ok || strcmp(title.u.s, "hello")) { printf("toml: title wrong\n"); return 1; }
+    if (!srv) { printf("toml: no [server]\n"); return 1; }
+    toml_datum_t port = toml_int_in(srv, "port");
+    if (!port.ok || port.u.i != 8080) { printf("toml: port wrong\n"); return 1; }
+    toml_array_t *hosts = toml_array_in(srv, "hosts");
+    if (!hosts || toml_array_nelem(hosts) != 3) { printf("toml: hosts count wrong\n"); return 1; }
+    toml_datum_t h2 = toml_string_at(hosts, 2);
+    if (!h2.ok || strcmp(h2.u.s, "gamma")) { printf("toml: hosts[2] wrong\n"); return 1; }
+    printf("toml: parse OK (title/port/array verified)\n");
+    return 0;
+}
+C
+    "$CC" -O2 -static -I. -o "$OUT/toml_parse_test" toml_parse_test.c toml.c \
+        || { echo "  parse-test build failed"; return 1; }
+    "$STRIP" "$OUT/t1" "$OUT/toml_parse_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[tomlc99] bundled unittest (t1) + a real TOML parse oracle"
+./t1 || { echo "[tomlc99] t1 FAILED"; exit 1; }
+./toml_parse_test || { echo "[tomlc99] parse FAILED"; exit 1; }
+echo "[tomlc99] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

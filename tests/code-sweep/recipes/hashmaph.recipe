@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# hashmap.h - sheredom's single-header open-addressing hash map. Its test suite
+# (utest.h) exercises put/get/remove/iterate/rehash/collision paths and returns
+# nonzero on failure. A data-structure workout on the A55.
+NAME=hashmaph
+CATEGORY=datastruct
+SRC=https://github.com/sheredom/hashmap.h/archive/refs/heads/master.tar.gz
+REF=master
+cs_build() {
+    "$CC" -O2 -static -I. -o "$OUT/hashmap_test" test/main.c \
+        || { echo "  build failed"; return 1; }
+    "$STRIP" "$OUT/hashmap_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[hashmap.h] run sheredom hashmap.h utest suite"
+if ./hashmap_test; then echo "[hashmap.h] OK"; else echo "[hashmap.h] FAILED (rc=$?)"; exit 1; fi
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
