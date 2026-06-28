@@ -28,7 +28,7 @@ Detectors that reproduce these verdicts live in `tests/code-sweep/fidelity/`.
 | **DPU 2D blit** | COMPUTES | `hw/dpu/imx95_dpu.c:1093-1266` — copy/fill/blend(Porter-Duff)/scale/rotate/colour-convert all read source + write computed result to guest memory. (Display *scanout* to console is a stub, but the 2D engine is real.) |
 | **eDMA v3/v5** | COMPUTES | `hw/dma/imx95_edma.c:195-210` — actually `address_space_read`→`address_space_write`s the data; DONE/IRQ after the move. |
 | **JPEG codec** | COMPUTES / honest | `hw/*/imx95_jpeg.c:479-499` — decodes/encodes with libjpeg when `CONFIG_LIBJPEG`; otherwise sets `SLOT_STATUS_ENC_CONFIG_ERR` (honest error), not garbage. |
-| **ELE / Sentinel** | honest | `hw/misc/imx95_ele_server.c` — specific handlers (GET_INFO/STATE/FW_VERSION) return plausible data; unhandled cmds return an explicit generic SUCCESS (logged), not garbage. `GET_RANDOM` is honest pseudo-random (not CAAM/TRNG-quality). |
+| **ELE / Sentinel** | honest (RNG hardened) | `hw/misc/imx95_ele_server.c` — specific handlers (GET_INFO/STATE/FW_VERSION) return plausible data; unhandled cmds return an explicit generic SUCCESS (logged), not garbage. `GET_RANDOM` (feeds the guest's `ele-trng` /dev/hwrng) was a **static-seeded xorshift32 → identical bytes every boot** (a silent-wrong for any consumer trusting that entropy); now uses `qemu_guest_getrandom_nofail()` = host CSPRNG, genuinely unpredictable (deterministic only under `-seed`). Verified guest-visible: /dev/hwrng differs across boots. |
 | **Mali GPU** | FAULTS (honest) | rejects probe with EINVAL — GL code fails fast, not silently. |
 | **Amphion VPU** | ABSENT (honest) | logging-stub MMIO, not probed — no false "decoded" frames. |
 

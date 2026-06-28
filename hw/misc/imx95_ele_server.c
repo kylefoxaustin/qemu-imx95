@@ -29,6 +29,7 @@
 #include "qemu/log.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
+#include "qemu/guest-random.h"
 #include "qapi/error.h"
 #include "hw/misc/imx95_ele_server.h"
 #include "hw/core/qdev-properties.h"
@@ -208,8 +209,13 @@ static void ele_handle_get_fw_version(IMX95ELEServerState *s, uint8_t command)
  * was the source of the "FW API Vers mismatch (0x6 != 0x7)" console storm.
  * Request payload is struct ele_rng_msg_data { u16 rsv; u16 flags; u32 data[2] }
  * after the header, so [1] = rsv|flags, [2] = destination DMA address, [3] =
- * length. Fill the buffer with non-constant bytes (a model PRNG - NOT
- * cryptographic) so /dev/hwrng yields varying data, then ack.
+ * length. Fill the buffer with real entropy from QEMU's guest-random source,
+ * then ack. qemu_guest_getrandom() draws from the host CSPRNG by default (so
+ * the guest's /dev/hwrng gets genuinely unpredictable bytes, faithful to the
+ * real ELE TRNG); it is deterministic ONLY when the user passes -seed, the
+ * standard QEMU knob for reproducible runs. (The previous model used a static
+ * xorshift32, which returned the identical sequence on every boot - a silent
+ * wrong answer for any consumer that trusts this entropy.)
  * Response: 2 words (header + status).
  */
 #define ELE_GET_RANDOM_REQ  0xCD
@@ -219,7 +225,6 @@ static void ele_handle_get_random(IMX95ELEServerState *s, uint8_t command)
     uint32_t resp_hdr;
 
     if (s->msg_count >= 4) {
-        static uint32_t st = 0x2545f491;   /* xorshift32 state (model only) */
         uint64_t addr = s->msg_buf[2];
         uint32_t len = s->msg_buf[3];
         uint32_t off;
@@ -229,14 +234,9 @@ static void ele_handle_get_random(IMX95ELEServerState *s, uint8_t command)
         }
         for (off = 0; off < len; ) {
             uint8_t chunk[64];
-            uint32_t n = MIN(sizeof(chunk), len - off), i;
+            uint32_t n = MIN(sizeof(chunk), len - off);
 
-            for (i = 0; i < n; i++) {
-                st ^= st << 13;
-                st ^= st >> 17;
-                st ^= st << 5;
-                chunk[i] = (uint8_t)st;
-            }
+            qemu_guest_getrandom_nofail(chunk, n);
             dma_memory_write(&address_space_memory, addr + off, chunk, n,
                              MEMTXATTRS_UNSPECIFIED);
             off += n;
