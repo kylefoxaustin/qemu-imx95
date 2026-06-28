@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# libtommath - a portable, free, arbitrary-precision integer library. We build
+# its bundled self-test demo (demo/test.c) static and run the FULL suite on the
+# A55: add/sub/mul (incl. karatsuba + toom-cook), div, mod, gcd, lcm, prime
+# tests, montgomery/barrett/dr reduction, pack/unpack, fread/fwrite, etc. Each
+# sub-test is its own known-answer oracle and prints "Tests OK/NOP/FAIL: a/b/c";
+# any wrong bignum result is a nonzero FAIL count. Exercises the integer ALU hard.
+#
+# NOTE: demo/test.c's mp_fread_fwrite case calls tmpfile() with no NULL-check, so
+# the suite needs a writable /tmp in the guest (the busybox initramfs has none by
+# default). runtest.sh provides one -- this is a harness-environment requirement,
+# not a fidelity gap: with /tmp present the A55 passes 42/42 cleanly.
+NAME=libtommath
+CATEGORY=math
+SRC=https://github.com/libtom/libtommath/archive/refs/tags/v1.3.0.tar.gz
+REF=v1.3.0
+
+cs_build() {
+    # Canonical build: the makefile builds libtommath.a then links the test demo.
+    make -j"$(nproc)" CC="$CC" AR="$AR" CFLAGS="-O2 -static" test >/dev/null 2>&1 \
+        || { echo "  libtommath 'make test' failed"; return 1; }
+    [ -x ./test ] || { echo "  test binary not produced"; return 1; }
+    cp ./test "$OUT/ltm_test"
+    "$STRIP" "$OUT/ltm_test" 2>/dev/null || true
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[libtommath] full bignum self-test suite (demo/test.c)"
+# mp_fread_fwrite needs a writable /tmp for tmpfile(); the initramfs lacks one.
+mkdir -p /tmp 2>/dev/null
+[ -w /tmp ] || mount -t tmpfs tmpfs /tmp 2>/dev/null
+if ! ( : > /tmp/.ltmw ) 2>/dev/null; then
+    echo "[libtommath] no writable /tmp (tmpfile would crash); SKIP"
+    exit 77
+fi
+rm -f /tmp/.ltmw
+./ltm_test > /tmp/ltm.out 2>&1; rc=$?
+tail -1 /tmp/ltm.out
+if [ "$rc" -ne 0 ]; then echo "[libtommath] FAILED rc=$rc"; exit 1; fi
+# require a summary with FAIL count 0
+if ! grep -qE 'Tests OK/NOP/FAIL: [0-9]+/[0-9]+/0$' /tmp/ltm.out; then
+    echo "[libtommath] no clean OK/NOP/FAIL:.../0 summary"; exit 1
+fi
+echo "[libtommath] OK"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}

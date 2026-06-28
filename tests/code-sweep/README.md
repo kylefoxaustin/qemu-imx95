@@ -149,3 +149,5 @@ both STATE dirs prints one cross-machine board.
 | `lua` | interpreter | reference interpreter runs a self-test asserting strings/tables/int-float/closures/coroutines/metatables |
 | `cpython` | interpreter | static CPython 3.10 cross-built; runs its own `python -m test` stdlib regression suite (33 CPU-pure modules) in-guest |
 | `ltp-syscalls` | syscall | LTP syscall subset cross-built static (323 binaries); each testcase is its own oracle — ~250 pass on the A55, TBROK/TCONF counted as SKIP |
+| `libtommath` | math | libtommath's bundled bignum self-test (demo/test.c) — 42 sub-tests (add/mul incl. karatsuba+toom, div, mod, gcd, reductions, pack, fread/fwrite); requires `OK/NOP/FAIL=…/…/0` |
+| `mongoose` | network | Cesanta mongoose's `unit_test` (1321 assertions: crypto/json/url/printf/http-parse/multipart/chunked/range/websocket/packed-fs + loopback HTTP file-serve); `-DLOCALHOST_ONLY` excludes 3 live-internet integration tests |

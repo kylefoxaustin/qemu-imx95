@@ -699,7 +699,7 @@ into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
 score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
 **non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
 
-**Result: 35/35 PASS** — 27 CPU-tier items + 8 peripheral-tier items.
+**Result: 44/44 PASS** — 36 CPU-tier items + 8 peripheral-tier items.
 Reproduce: `tests/code-sweep/run.sh` (CPU) and
 `tests/code-sweep/run-peripheral.sh` (peripheral).
 
@@ -734,11 +734,22 @@ Reproduce: `tests/code-sweep/run.sh` (CPU) and
 | C25 | lua | 5.4.7 | interpreter | self-test asserts (strings/tables/coroutines/metatables) | PASS |
 | C26 | cpython | 3.10.14 | interpreter | own `python -m test`: 33 stdlib modules | PASS |
 | C27 | ltp-syscalls | 20240524 | syscall | LTP syscall subset: ~250 TPASS (of 323 binaries) | PASS |
+| C28 | libpng | 1.6.43 | image | `pngtest` read→re-encode→compare of a committed PNG | PASS |
+| C29 | qoi | master | image | QOI encode→decode round-trip, exact byte compare | PASS |
+| C30 | http-parser | 2.9.4 | protocol | Node's HTTP/1.x parser bundled test.c (req/resp/url/chunked/upgrade) | PASS |
+| C31 | jsonh | master | json | sheredom json.h utest suite (3rd independent JSON parser) | PASS |
+| C32 | utf8h | master | unicode | sheredom utf8.h utest suite (len/cmp/chr/case-fold/validation) | PASS |
+| C33 | hashmaph | master | datastruct | sheredom hashmap.h utest suite (put/get/remove/iterate/rehash) | PASS |
+| C34 | tomlc99 | master | config | bundled unittest (UCS↔UTF-8) + a real TOML parse oracle | PASS |
+| C35 | libtommath | 1.3.0 | math | bundled bignum self-test: 42 sub-tests (add/mul incl. karatsuba+toom, div, mod, gcd, reductions, pack, fread/fwrite), OK/NOP/FAIL=42/0/0 | PASS |
+| C36 | mongoose | 7.14 | network | bundled `unit_test`: 1321 assertions (crypto/json/url/printf/http-parse/multipart/chunked/range/websocket/packed-fs + loopback HTTP file-serve) | PASS |
 
 Named, model-/build-independent SKIPs (not A55 failures, kept honest):
 utf8proc normtest/graphemetest/iscase (need downloaded Unicode data); CPython
 `_testcapi`/`_ssl`/`_ctypes`/`_decimal` tests; LTP TBROK/TCONF (minimal-initramfs
-environment) + 4 env-only TFAILs.
+environment) + 4 env-only TFAILs; mongoose built `-DLOCALHOST_ONLY` to exclude its
+3 live-internet integration tests (SNTP→NTP, MQTT→broker.hivemq.com,
+HTTP-client→cesanta.com) — external-host deps, not deterministic offline oracles.
 
 ### Peripheral tier (real hardware datapaths)
 

@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# mongoose - Cesanta's embedded HTTP/WebSocket/MQTT networking library. We run
+# its bundled unit_test (test/unit_test.c) on the A55: 1300+ assertions covering
+# crypto (md5/sha1/base64/crc32), JSON, string/URL/printf formatting, the HTTP
+# parser, multipart/chunked/range handling, websockets, the packed-fs, and a full
+# HTTP file-serving round-trip over the loopback interface. Each assertion is its
+# own oracle; the run prints "SUCCESS. Total tests: N" only if every one passes.
+#
+# Built with mongoose's own -DLOCALHOST_ONLY knob, which excludes the three
+# tests that reach LIVE INTERNET services (SNTP -> NTP server, MQTT ->
+# broker.hivemq.com, HTTP client -> cesanta.com): those are integration tests
+# against external hosts, not deterministic offline oracles, so they're out of
+# scope for a self-contained corpus item. Everything offline runs and must pass.
+#
+# Fixtures: the suite compares its packed-fs blobs against the on-disk originals
+# and serves a web-root, so we ship test/{Makefile,fuzz.c,data,dirtest}. It also
+# needs a writable /tmp (tmpfile) and the loopback interface up (see runtest.sh).
+NAME=mongoose
+CATEGORY=network
+SRC=https://github.com/cesanta/mongoose/archive/refs/tags/7.14.tar.gz
+REF=7.14
+
+cs_build() {
+    cd test || { echo "  no test/ dir"; return 1; }
+    # 1) host 'pack' tool generates packed_fs.c from the fixture file set
+    local HOSTCC="${HOSTCC:-cc}"
+    "$HOSTCC" -O2 -I. pack.c -o pack || { echo "  host pack build failed"; return 1; }
+    ./pack Makefile data/ssi.h fuzz.c data/a.txt data/range.txt data/ca.pem \
+        certs/ca.crt certs/server.crt certs/server.key certs/client.key \
+        certs/client.crt > packed_fs.c || { echo "  pack run failed"; return 1; }
+    # 2) cross-compile the test static; unbuffered stdout so a FAILURE survives abort()
+    sed '0,/int main(void) {/s//int main(void) { setvbuf(stdout,0,_IONBF,0); setvbuf(stderr,0,_IONBF,0);/' \
+        unit_test.c > unit_test_cs.c
+    local DEFS="-DMG_MAX_HTTP_HEADERS=7 -DMG_ENABLE_LINES -DMG_ENABLE_PACKED_FS=1 \
+-DMG_ENABLE_SSI=1 -DMG_ENABLE_ASSERT=1 -DMG_TLS=MG_TLS_NONE -DLOCALHOST_ONLY"
+    # shellcheck disable=SC2086
+    "$CC" -O2 -static $DEFS -I. mongoose.c unit_test_cs.c packed_fs.c -o "$OUT/unit_test" \
+        || { echo "  cross unit_test build failed"; return 1; }
+    "$STRIP" "$OUT/unit_test" 2>/dev/null || true
+    # 3) stage fixtures the suite reads at runtime (dereference dirtest's symlinks)
+    cp Makefile "$OUT/Makefile"
+    cp -L fuzz.c "$OUT/fuzz.c" 2>/dev/null || cp fuzz.c "$OUT/fuzz.c"
+    cp -rL data "$OUT/data"
+    cp -rL dirtest "$OUT/dirtest"
+    cat > "$OUT/runtest.sh" <<'GUEST'
+#!/bin/sh
+echo "[mongoose] offline unit_test suite (v7.14, LOCALHOST_ONLY)"
+mkdir -p /tmp 2>/dev/null
+[ -w /tmp ] || mount -t tmpfs tmpfs /tmp 2>/dev/null
+# loopback HTTP tests need lo up + a localhost entry (LOCALHOST is case-folded)
+ip link set lo up 2>/dev/null || ifconfig lo 127.0.0.1 up 2>/dev/null
+[ -s /etc/hosts ] || echo "127.0.0.1 localhost LOCALHOST" > /etc/hosts
+V=0 ./unit_test > mg.out 2>&1; rc=$?
+tail -1 mg.out
+if [ "$rc" -ne 0 ] || ! grep -q 'SUCCESS. Total tests' mg.out; then
+    echo "[mongoose] FAILED rc=$rc"; grep -a FAILURE mg.out | head; exit 1
+fi
+echo "[mongoose] OK ($(grep -oE 'Total tests: [0-9]+' mg.out))"
+GUEST
+    chmod +x "$OUT/runtest.sh"
+}
