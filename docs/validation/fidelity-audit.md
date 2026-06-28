@@ -23,7 +23,7 @@ Detectors that reproduce these verdicts live in `tests/code-sweep/fidelity/`.
 
 | Block | Class | Evidence |
 |-------|-------|----------|
-| **Neutron NPU** | **FLAGGED (can't compute or fault)** | Compute is NXP-proprietary firmware → un-modellable; and the NPU **cannot fault honestly to the guest** because the driver's `poll_result_callback` polls for `DONE` *forever* (no inference-error path) — a non-DONE retcode hangs the guest. So the model must keep acking DONE. Honesty is now exposed to the *operator*: per-inference `LOG_GUEST_ERROR`, and QMP-queryable `qom-get /machine/soc/neutron compute-modelled` (= `false`) + `inferences-acked-uncomputed` (count of RUN cmds completed with uncomputed output). `hw/misc/imx95_neutron.c`. Output is still uncomputed — do not trust NPU results; the farm control-plane can detect it. |
+| **Neutron NPU** | **FLAGGED (default) → can FAULT-honestly to the guest (operator opt-in)** | Compute is NXP-proprietary firmware → un-modellable. The model keeps acking `DONE` (completion gates only on MBOX0, so it must). Two honesty layers: (1) *operator*: per-inference `LOG_GUEST_ERROR` + QMP `qom-get /machine/soc/neutron compute-modelled` (= `false`) + `inferences-acked-uncomputed`. (2) *guest*: the driver reads an `error_code` from **MBOX1** *after* `DONE` and surfaces it to userspace via `NEUTRON_IOCTL_INFERENCE_STATE` — and that read does **not** gate completion. So `qom-set /machine/soc/neutron neutron-uncomputed-errcode <nonzero>` makes the model return that recognisable error_code on every uncomputed inference: a guest-visible "did not compute" fault, **without hanging** the driver. Default 0 = faithful to silicon (happy-path success). Output is still uncomputed — do not trust NPU results — but the guest can now be told. `hw/misc/imx95_neutron.c`. |
 | **ADC** | **FIXED → COMPUTES (operator-driven)** | Was SILENT-WRONG (hidden constant `0x100+ch*0x111`). Now each channel is a read/write QOM property `adc-ch0..7` settable at runtime via `qom-set /machine/soc/adc adc-ch<N> <value>` — whatever the operator injects is what the guest reads (the model's analog of the board's pin voltage). Default = a documented distinct-per-channel test pattern, so an un-driven channel is deterministic, not a hidden lie. Verified: injected `adc-ch5=2748` → guest `in_voltage5_raw=2748` while undriven channels read their defaults. `hw/misc/imx93_adc.c`. |
 | **DPU 2D blit** | COMPUTES | `hw/dpu/imx95_dpu.c:1093-1266` — copy/fill/blend(Porter-Duff)/scale/rotate/colour-convert all read source + write computed result to guest memory. (Display *scanout* to console is a stub, but the 2D engine is real.) |
 | **eDMA v3/v5** | COMPUTES | `hw/dma/imx95_edma.c:195-210` — actually `address_space_read`→`address_space_write`s the data; DONE/IRQ after the move. |
@@ -38,23 +38,41 @@ USB-BOT, GPIO, I²C, RTC) are all **COMPUTES** — verified by integrity oracles
 
 ## Silent-wrong blocks — status
 
-1. **Neutron NPU** — **FLAGGED** (was silent). Can't compute (proprietary fw)
-   and can't fault (the driver polls `DONE` forever — see below), so the model
-   keeps acking but now exposes the truth: a loud per-inference log + the
-   QMP-queryable `compute-modelled=false` / `inferences-acked-uncomputed`
-   counter. Real fix (run the model) needs the proprietary firmware/ISA.
+1. **Neutron NPU** — **FLAGGED → can FAULT-honestly to the guest (opt-in)**
+   (was silent). Can't compute (proprietary fw), so the model keeps acking
+   `DONE`. Honesty: a loud per-inference log + QMP `compute-modelled=false` /
+   `inferences-acked-uncomputed` (operator level), **and** an operator opt-in
+   `neutron-uncomputed-errcode` property that returns a non-zero error_code in
+   MBOX1 — surfaced to the guest app by the driver (see the corrected fleet
+   finding below) — so a guest that checks inference state learns it didn't
+   compute. Default 0 keeps the happy path faithful. Real fix (run the model)
+   needs the proprietary firmware/ISA.
 2. ~~**ADC**~~ — **FIXED** (operator-driven conversion values via `qom-set`;
    default is a documented test pattern). No longer a hidden constant.
 
-### Finding for the fleet: NXP's Neutron driver has no error path
+### Finding for the fleet: Neutron's error channel is MBOX1, not the completion path (corrected)
 
-`drivers/staging/neutron`'s `poll_result_callback` re-arms its poll timer
-indefinitely and only ever completes on retcode `DONE`; there is **no
-inference-error/timeout→ERROR path**. So a faithful "the accelerator failed"
-cannot be signalled to this driver without hanging the guest. This mirrors the
-i.MX93 Ethos-U finding (the NXP remote-accelerator drivers handle failure
-poorly) — relevant to anyone modelling these blocks: you can model the happy
-path or flag at the operator level, but you cannot honestly fault to the guest.
+An earlier version of this audit claimed the NXP Neutron driver "has no error
+path." That was **too strong** — corrected here after reading
+`drivers/staging/neutron`:
+
+- **Completion** is gated *only* on MBOX0 == `DONE` (0xAD0):
+  `poll_result_callback` re-arms its poll timer forever and only completes on
+  `DONE`, and the IRQ path checks only `retcode == DONE`. A non-DONE *retcode*
+  in MBOX0 **does** hang the guest — so the model must keep acking DONE. (This
+  is the part the old finding got right.)
+- **But there is a separate guest-visible error channel:** after completion the
+  driver reads an `error_code` from **MBOX1** and copies it to userspace in
+  `struct neutron_uapi_result_status.error_code` via the
+  `NEUTRON_IOCTL_INFERENCE_STATE` ioctl. This read does **not** gate completion,
+  so a non-zero MBOX1 alongside MBOX0 == `DONE` reaches the app **without
+  hanging** it.
+
+So the precise rule for modelling these NXP remote-accelerators: you cannot fault
+via the *completion* retcode (it hangs), **but you can fault via the side-band
+error_code** if the driver plumbs one to userspace. The i.MX 95 model uses
+exactly this (`neutron-uncomputed-errcode`). Worth re-checking the i.MX 93
+Ethos-U for an analogous side-band before concluding "can't fault to the guest."
 
 ## Fixing vs flagging
 

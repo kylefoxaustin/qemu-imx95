@@ -26,6 +26,15 @@
  *
  * So inferences run end to end but return uncomputed output — a "brings up"
  * model, not a functional NPU. See docs/imx95/known-limitations.md.
+ *
+ * Because the output is uncomputed, a guest that trusts NPU results gets a
+ * silent wrong answer. Completion gates only on MBOX0 == DONE, but the driver
+ * also reads an error_code from MBOX1 and surfaces it to userspace
+ * (NEUTRON_IOCTL_INFERENCE_STATE). So the model offers an operator opt-in:
+ * the "neutron-uncomputed-errcode" property (default 0 = faithful success)
+ * makes the model return a recognisable non-zero error_code in MBOX1 for every
+ * uncomputed inference (an honest, guest-visible fault) without hanging the
+ * driver. See docs/validation/fidelity-audit.md.
  */
 
 #include "qemu/osdep.h"
@@ -64,7 +73,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
 #define N_BASEDDRH            0x208
 #define N_TAIL                0x234
 #define N_HEAD                0x238
-#define N_MBOX0               0x23c   /* response retcode */
+#define N_MBOX0               0x23c   /* response retcode (driver completion) */
+#define N_MBOX1               0x240   /* response error_code -> guest app */
 #define N_MBOX3               0x248   /* command word */
 #define N_BASEINOUTL          0x27c
 #define N_BASESPILLL          0x284
@@ -100,11 +110,27 @@ struct IMX95NeutronState {
      * Honesty/telemetry: the NPU acks inferences without computing them (the
      * compute is proprietary firmware). This counts RUN commands so an operator
      * can query, via QMP qom-get, how many inferences "completed" with
-     * uncomputed output. The driver has NO inference-error path - it polls for
-     * DONE forever (poll_result_callback) - so the model cannot fault honestly
-     * to the guest without hanging it; this is the honest signal we CAN give.
+     * uncomputed output.
      */
     uint64_t acked_uncomputed;
+
+    /*
+     * Operator opt-in honest-fault to the GUEST (not just the operator). The
+     * driver completes an inference purely on MBOX0 == DONE; it then reads an
+     * error_code from MBOX1 and surfaces it to userspace via the
+     * NEUTRON_IOCTL_INFERENCE_STATE ioctl (struct neutron_uapi_result_status
+     * .error_code). So a non-zero MBOX1 alongside MBOX0 == DONE signals "this
+     * inference did not really compute" to a guest app WITHOUT hanging the
+     * driver (completion does not depend on MBOX1).
+     *
+     * Default 0 = faithful to real silicon (a successful inference returns
+     * error_code 0). Set a non-zero value at runtime
+     * (qom-set /machine/soc/neutron neutron-uncomputed-errcode 0x95E0) to make
+     * the model emit that recognisable error_code on every uncomputed RUN, so
+     * the farm can choose guest-visible honesty over happy-path fidelity.
+     * Preserved across reset (it is operator configuration, not device state).
+     */
+    uint32_t uncomputed_errcode;
 };
 
 static inline uint32_t ndev_r(IMX95NeutronState *s, hwaddr off)
@@ -141,11 +167,23 @@ static void neutron_doorbell(IMX95NeutronState *s)
 
     if (cmd == N_CMD_RUN) {
         s->acked_uncomputed++;         /* an inference "completed" uncomputed */
+        /*
+         * Surface the operator-selected honest-fault error_code to the guest in
+         * MBOX1. Default 0 keeps the happy-path (success) faithful; a non-zero
+         * value makes a guest app's NEUTRON_IOCTL_INFERENCE_STATE see an error
+         * for this uncomputed inference. MBOX0 stays DONE either way, so the
+         * driver never hangs.
+         */
+        ndev_w(s, N_MBOX1, s->uncomputed_errcode);
         qemu_log_mask(LOG_GUEST_ERROR,
                       "imx95-neutron: inference #%" PRIu64 " acked (DONE) but "
                       "NOT computed - output is uncomputed (proprietary NPU "
-                      "firmware not modelled). qom-get .../neutron "
-                      "compute-modelled = false\n", s->acked_uncomputed);
+                      "firmware not modelled). compute-modelled = false; "
+                      "guest error_code (MBOX1) = 0x%x%s\n",
+                      s->acked_uncomputed, s->uncomputed_errcode,
+                      s->uncomputed_errcode ? "" :
+                      " (operator opt-in: set neutron-uncomputed-errcode to "
+                      "fault honestly to the guest)");
     } else {
         qemu_log_mask(LOG_UNIMP,
                       "imx95-neutron: cmd 0x%x acked (DONE)\n", cmd);
@@ -253,6 +291,11 @@ static void neutron_reset(DeviceState *dev)
     s->started = false;
     s->irq_pending = false;
     s->acked_uncomputed = 0;
+    /*
+     * uncomputed_errcode is operator config (property), not device state - do
+     * not clear it on reset, so a -global / qom-set value survives a guest
+     * reboot.
+     */
     qemu_set_irq(s->irq, 0);
 }
 
@@ -274,6 +317,15 @@ static void neutron_realize(DeviceState *dev, Error **errp)
                              neutron_get_compute_modelled, NULL);
     object_property_add_uint64_ptr(OBJECT(dev), "inferences-acked-uncomputed",
                                    &s->acked_uncomputed, OBJ_PROP_FLAG_READ);
+    /*
+     * Operator opt-in honest-fault: the error_code the model returns to the
+     * guest (MBOX1) on each uncomputed inference. 0 (default) = faithful
+     * success; non-zero = guest-visible honest fault. Settable at runtime via
+     * qom-set, like the ADC's operator-driven conversion values.
+     */
+    object_property_add_uint32_ptr(OBJECT(dev), "neutron-uncomputed-errcode",
+                                   &s->uncomputed_errcode,
+                                   OBJ_PROP_FLAG_READWRITE);
 
     memory_region_init_io(&s->rctl_iomem, OBJECT(dev), &neutron_rctl_ops, s,
                           "imx95.neutron.resetctrl", RESETCTRL_SIZE);

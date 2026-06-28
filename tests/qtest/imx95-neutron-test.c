@@ -22,6 +22,7 @@
 #define N_APPCTRL     0x1fc
 #define N_APPSTATUS   0x200
 #define N_MBOX0       0x23c           /* response retcode */
+#define N_MBOX1       0x240           /* response error_code -> guest app */
 #define N_MBOX3       0x248           /* command word */
 
 #define RCTL_ZENV_CLK_ON   0x1
@@ -58,9 +59,58 @@ static void test_neutron_bringup(void)
     qtest_quit(qts);
 }
 
+/* Clock the NPU on and ring a RUN-inference doorbell. */
+static void run_inference(QTestState *qts)
+{
+    qtest_writel(qts, RCTL, RCTL_ZENV_CLK_ON);
+    qtest_writel(qts, DEV + N_MBOX3, CMD_RUN);
+    qtest_writel(qts, DEV + N_APPCTRL, APPCTRL_DOORBELL);
+}
+
+/*
+ * Default (no operator opt-in): the model is faithful to real silicon - an
+ * uncomputed inference still completes DONE and reports error_code 0 (success)
+ * in MBOX1. (The output is uncomputed; honesty is operator-side via QMP.)
+ */
+static void test_neutron_errcode_faithful(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+
+    run_inference(qts);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX1), ==, 0);
+
+    qtest_quit(qts);
+}
+
+/*
+ * Operator opt-in honest-fault: after the operator sets neutron-uncomputed-
+ * errcode (via qom-set, as the farm control-plane would), the model returns
+ * DONE in MBOX0 (so the driver never hangs) AND the chosen non-zero error_code
+ * in MBOX1, which the driver surfaces to the guest app via
+ * NEUTRON_IOCTL_INFERENCE_STATE - a guest-visible "did not compute" fault.
+ */
+static void test_neutron_errcode_honest(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+
+    qtest_qmp_assert_success(qts,
+        "{'execute':'qom-set','arguments':{'path':'/machine/soc/neutron',"
+        "'property':'neutron-uncomputed-errcode','value':38368}}");  /* 0x95e0 */
+
+    run_inference(qts);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX1), ==, 0x95e0);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("imx95/neutron/bringup", test_neutron_bringup);
+    qtest_add_func("imx95/neutron/errcode-faithful",
+                   test_neutron_errcode_faithful);
+    qtest_add_func("imx95/neutron/errcode-honest", test_neutron_errcode_honest);
     return g_test_run();
 }
