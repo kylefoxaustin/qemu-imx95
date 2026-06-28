@@ -27,31 +27,46 @@ cs_build() {
 
     cat > "$OUT/runtest.sh" <<'GUEST'
 #!/bin/sh
-HERE=$(cd "$(dirname "$0")" && pwd); BB="$HERE/busybox"
-# Wait for the ENETC interface to probe.
-i=0; while [ $i -lt 30 ]; do [ -e /sys/class/net/eth0 ] && break; sleep 1; i=$((i+1)); done
-[ -e /sys/class/net/eth0 ] || { echo "[net] no eth0 (ENETC) present - skipping"; exit 77; }
-# Static config matching slirp's network (DHCP would hand out the same .15).
-"$BB" ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up || { echo "[net] ifconfig failed"; exit 1; }
-"$BB" route add default gw 10.0.2.2 2>/dev/null
-echo "[net] eth0 up: $("$BB" ifconfig eth0 | grep -o 'inet addr:[0-9.]*')"
-# Let the link/ARP settle: the first UDP after link-up can be dropped (ARP
-# resolution), so settle briefly and retry each fetch a few times.
-sleep 2
-cd "$HERE"; rm -f netpayload.bin netpayload.sha
-fetch() {  # retry tftp GET (tolerate first-packet/ARP-warmup loss)
+HERE=$(cd "$(dirname "$0")" && pwd); BB="$HERE/busybox"; cd "$HERE"
+# The machine has THREE ENETC PFs (ENETC0/1/2) but only ENETC0 carries the slirp
+# backend. Linux's interface naming across the three identical PFs is NOT
+# deterministic (probe order), so the backed PF is not always "eth0" - assuming
+# eth0 made the test flake ~7% of boots (eth0 landed on a back-end-less PF: RX
+# dead, TX into the void). So: enumerate every non-loopback interface and use
+# whichever one actually reaches slirp. That tests the ENETC datapath regardless
+# of which name the backed PF got.
+ifaces=""
+i=0; while [ $i -lt 30 ]; do
+    ifaces=$(for d in /sys/class/net/*; do n=$(basename "$d"); [ "$n" = lo ] || echo "$n"; done)
+    [ -n "$ifaces" ] && break; sleep 1; i=$((i+1))
+done
+[ -n "$ifaces" ] || { echo "[net] no ENETC interfaces present - skipping"; exit 77; }
+echo "[net] candidate interfaces:$ifaces"
+fetch_on() {  # $1=iface $2=file ; try over that iface with a few retries
+    "$BB" ifconfig "$1" 10.0.2.15 netmask 255.255.255.0 up 2>/dev/null
+    "$BB" route add default gw 10.0.2.2 2>/dev/null
     n=0; while [ $n -lt 4 ]; do
-        "$BB" tftp -g -r "$1" 10.0.2.2 && [ -s "$1" ] && return 0
-        n=$((n+1)); echo "[net] tftp $1 retry $n"; sleep 2
+        rm -f "$2"; "$BB" tftp -g -r "$2" 10.0.2.2 2>/dev/null && [ -s "$2" ] && return 0
+        n=$((n+1)); sleep 2
     done
-    return 1
+    "$BB" ifconfig "$1" 0.0.0.0 down 2>/dev/null; return 1
 }
-fetch netpayload.sha || { echo "[net] tftp sha fetch failed"; exit 1; }
-fetch netpayload.bin || { echo "[net] tftp payload fetch failed"; exit 1; }
+DEV=""
+for ifc in $ifaces; do
+    if fetch_on "$ifc" netpayload.sha; then DEV="$ifc"; break; fi
+done
+if [ -z "$DEV" ]; then
+    echo "[net] no interface reached slirp over ENETC"
+    echo "[net] DIAG:"; for ifc in $ifaces; do
+        echo "  $ifc -> $(basename "$(readlink -f /sys/class/net/$ifc/device 2>/dev/null)") $("$BB" ifconfig "$ifc" 2>/dev/null | grep -o 'RX packets:[0-9]*')"; done
+    exit 1
+fi
+echo "[net] slirp reachable via $DEV (PF $(basename "$(readlink -f /sys/class/net/$DEV/device 2>/dev/null)"))"
+"$BB" tftp -g -r netpayload.bin 10.0.2.2 || { echo "[net] payload fetch failed"; exit 1; }
 want=$(cat netpayload.sha)
 got=$("$BB" sha256sum netpayload.bin | awk '{print $1}')
 [ -n "$got" ] && [ "$want" = "$got" ] || { echo "[net] sha mismatch: $got != $want"; exit 1; }
-echo "[net] OK ($("$BB" wc -c < netpayload.bin) bytes pulled over ENETC, sha256 verified)"
+echo "[net] OK ($("$BB" wc -c < netpayload.bin) bytes pulled over ENETC ($DEV), sha256 verified)"
 GUEST
     chmod +x "$OUT/runtest.sh"
 }
