@@ -33,10 +33,26 @@ environment:
 
 # ---- summary -------------------------------------------------------------
 summary:
-  cpu_items:        36
-  peripheral_items: 8
-  result:           "44/44 PASS"
-  note:             "i2c-rw SKIPs (honest) in a combined boot where the audio driver claims the WM8962 codec @0x1a; standalone it PASSes. i2c-scan passes either way (kernel-enumerated)."
+  cpu_items:           36
+  peripheral_items:    8
+  in_guest_build_tiers: 3
+  result:              "44/44 cross-run PASS + 3/3 in-guest build tiers PASS"
+  note:                "i2c-rw SKIPs (honest) in a combined boot where the audio driver claims the WM8962 codec @0x1a; standalone it PASSes. i2c-scan passes either way (kernel-enumerated)."
+
+# ---- in-guest build tier (compile AND run ON the A55, not cross-compiled) -
+# The cpu/peripheral tiers above cross-compile on the host then run in the guest.
+# These tiers compile *and* run on the emulated A55 - the self-hosting proof for
+# the board farm. Harness: tests/in-guest-build/.
+in_guest_build:
+  - { tier: tcc-musl,    harness: "tests/in-guest-build/run.sh",
+      toolchain: "TinyCC (native aarch64) + musl static, built from source",
+      result: pass, oracle: "sum/fib/qsort compiled + run in-guest vs // EXPECT (pass=3/0)" }
+  - { tier: gcc-rootfs,  harness: "tests/in-guest-build/run-gcc.sh",
+      toolchain: "native gcc/g++ 14 + glibc + libstdc++ (arm64 gcc docker image, ext4 on eMMC)",
+      result: pass, oracle: "sum(gcc) + sqrt(gcc+libm) + cppsort(g++ STL) compiled + run in-guest (pass=3/0)" }
+  - { tier: gcc-realbuild, harness: "tests/in-guest-build/run-gcc-build.sh",
+      toolchain: "native gcc 14 on the gcc rootfs",
+      result: pass, oracle: "real upstream projects built natively + their OWN tests pass: bzip2 (make&&make test), zlib (./configure&&make&&make test), lua (make posix + run script) (pass=3/0)" }
 
 # ---- CPU tier ------------------------------------------------------------
 cpu:

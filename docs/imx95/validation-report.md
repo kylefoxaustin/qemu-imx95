@@ -699,9 +699,10 @@ into the guest over **virtio-9p**, run the whole corpus in **one boot**, and
 score each (`0`=PASS, `77`=SKIP first-class, else FAIL). Scope is
 **non-accelerator** (no GPU/VPU/NPU/ISP — those have no functional model).
 
-**Result: 44/44 PASS** — 36 CPU-tier items + 8 peripheral-tier items.
-Reproduce: `tests/code-sweep/run.sh` (CPU) and
-`tests/code-sweep/run-peripheral.sh` (peripheral).
+**Result: 44/44 PASS** — 36 CPU-tier items + 8 peripheral-tier items — **plus 3/3
+in-guest build tiers** (compile *and* run on the A55; see below).
+Reproduce: `tests/code-sweep/run.sh` (CPU), `tests/code-sweep/run-peripheral.sh`
+(peripheral), and `tests/in-guest-build/` (in-guest build tier).
 
 ### CPU tier (computes in core + memory)
 
@@ -776,6 +777,27 @@ Coexistence note: the audio driver binds the WM8962 codec at i2c-3 @0x1a, so in
 a combined boot `i2c-rw` (raw register round-trip) honestly **SKIPs** (slave
 kernel-claimed) while `i2c-scan` still passes via kernel enumeration; standalone
 `i2c-rw` PASSes.
+
+### In-guest build tier (compile *and* run on the A55) — 2026-06-29
+
+The CPU/peripheral tiers above cross-compile on the host then run in the guest.
+This tier compiles *and* runs **on the emulated A55** — the self-hosting proof
+for the board farm (a developer building their own code on the board). Three
+tiers, each `pass=3 fail=0`. Harness: `tests/in-guest-build/`.
+
+| Tier | Toolchain | What it proves | Result |
+|------|-----------|----------------|--------|
+| `run.sh` | TinyCC (native aarch64) + musl static, built from source | a compiler runs on the A55 and its output runs (sum/fib/qsort vs `// EXPECT`) | PASS |
+| `run-gcc.sh` | native gcc/g++ 14 + glibc + libstdc++ (arm64 `gcc` Docker image → ext4 on eMMC root) | the real toolchain devs use: C + libm + C++ STL compiled and run in-guest | PASS |
+| `run-gcc-build.sh` | native gcc 14 on the gcc rootfs | **real upstream projects built natively + their *own* tests pass**: bzip2 (`make && make test`), zlib (`./configure && make && make test`), lua (`make posix` + run a script) | PASS |
+
+Mechanics worth recording: TinyCC's young arm64 backend can't link glibc's
+GOT/TLS relocations (so musl) and lacks `svc` inline asm; the real-gcc rootfs is
+obtained by `docker pull --platform linux/arm64` + `docker export` (fetches a
+foreign-arch image without running it — the host can't execute aarch64), built
+into an ext4 with `mke2fs -d` (no root) and booted as `/dev/mmcblk0`; gcc must be
+invoked by full path (bare `gcc` mis-computes its exec-prefix → "cannot execute
+cc1"). Reproduce: `tests/in-guest-build/run.sh` / `run-gcc.sh` / `run-gcc-build.sh`.
 
 ### Soak (ITERS=N: build once, boot+run N times)
 
