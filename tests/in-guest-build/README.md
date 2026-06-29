@@ -5,16 +5,25 @@ C code **on the emulated board** and run the result, not just cross-compile it o
 a host. (The [`code-sweep`](../code-sweep/) CPU tier cross-compiles on the host
 then runs in the guest; this compiles *and* runs entirely in the guest.)
 
+Two variants, light and representative:
+
 ```sh
-tests/in-guest-build/run.sh
+tests/in-guest-build/run.sh        # tcc + musl, busybox initramfs (lightweight)
+tests/in-guest-build/run-gcc.sh    # real gcc/g++ + glibc rootfs off eMMC (representative)
 ```
 
-It builds a tiny native toolchain **from source** (nothing is committed as a
-binary), boots the busybox initramfs on `imx95-19x19-evk`, compiles every
-`tests/*.c` **in-guest** with that toolchain, runs each binary on the A55, and
-checks its stdout against the program's own `// EXPECT:` line. Exit 0 iff every
-case builds and prints the expected output. SKIPs (exit 0) if a prerequisite
-(QEMU, kernel+dtb, SM ELF, cross gcc) is missing.
+Both compile every test **in-guest**, run each binary on the A55, and check its
+stdout against the program's own `// EXPECT:` line (exit 0 iff every case builds
+and prints the expected output; SKIP if a prerequisite is missing).
+
+`run.sh` builds a tiny native toolchain **from source** (nothing is committed as a
+binary), boots the busybox initramfs on `imx95-19x19-evk`, and compiles `tests/*.c`
+with it. Prereqs: QEMU, kernel+dtb, SM ELF, a cross gcc.
+
+`run-gcc.sh` is the representative variant — a **real native GCC** (glibc gcc/g++
++ libstdc++ + libm, GCC 14) on a Debian rootfs booted as the eMMC root filesystem,
+compiling `gcc-tests/*.{c,cpp}` (incl. C++ STL). That's what a farm developer
+actually does. Prereqs add **docker** (to fetch the arm64 rootfs) + `mke2fs`.
 
 ## Toolchain
 
@@ -39,17 +48,37 @@ Both are fetched + built by `run.sh` and cached under `build/in-guest-build/`
 - tcc's crt prefix is the **triplet** libdir, so musl's `crt1.o/crti.o/crtn.o` +
   `libc.a` are staged in `/usr/lib/arm64-linux-gnu`, headers in `/usr/include`.
 
+## The gcc rootfs (run-gcc.sh)
+
+The aarch64 rootfs is the upstream multi-arch `gcc` Docker image:
+`docker pull --platform linux/arm64` fetches a foreign-arch image **without
+running it**, and `docker export` yields a complete native arm64 gcc — no cross or
+emulation on the host. The script stages tests + a tiny init, builds an ext4 image
+with `mke2fs -d` (no root), and boots it as `/dev/mmcblk0`. Gotchas (each cost a
+boot):
+
+- invoke gcc by **full path** (`/usr/local/bin/gcc`) — bare `gcc` computes a
+  relative exec-prefix and can't find `cc1` ("cannot execute 'cc1'");
+- `PATH` must include `/usr/bin` so `collect2` finds `ld` at link;
+- the rootfs has no init system, so it boots `init=/igtest.sh` directly and the
+  script **must never exit** (else "Attempted to kill init" panic) — it loops
+  after poweroff;
+- inject the script via `mke2fs -d` (rebuild the image), **not** `debugfs write`,
+  which silently truncated it here.
+
 ## Adding a test
 
-Drop a `tests/<name>.c` whose **first line** is `// EXPECT: <exact stdout>`. Keep
-it to C that musl static + tcc's arm64 codegen support (loops, arithmetic, libc:
-`printf`, `qsort`, `malloc`, `string.h`, …). The committed cases exercise loops +
-`printf` (`sum.c`), integer arithmetic (`fib.c`), and musl stdlib + function
-pointers (`qsort.c`).
+Drop a `tests/<name>.c` (tcc variant) or `gcc-tests/<name>.{c,cpp}` (gcc variant)
+whose **first line** is `// EXPECT: <exact stdout>`. tcc/musl cases must stay
+within tcc's arm64 codegen (loops, arithmetic, libc: `printf`, `qsort`, `malloc`,
+`string.h`); gcc cases can use anything glibc/libstdc++ provide (C++ STL, libm,
+…). Committed: tcc — `sum.c` (loops+printf), `fib.c` (arithmetic), `qsort.c` (musl
+stdlib+fn ptrs); gcc — `sum.c`, `sqrt.c` (libm), `cppsort.cpp` (g++ + STL).
 
 ## Status / roadmap
 
-MVP proven: the A55 hosts a compiler and runs the binaries it produces
-(`pass=3 fail=0`). tcc is the bring-up proof of the *capability*; the heavier,
-more representative follow-up is a full **native gcc in a real aarch64 rootfs**
-(what farm devs actually use) booted off a disk image — future work.
+Both tiers proven (`pass=3 fail=0`): the A55 hosts a compiler and runs the
+binaries it produces. `run.sh` (tcc+musl) is the lightweight capability proof;
+`run-gcc.sh` (real glibc gcc/g++ on a Debian rootfs off eMMC) is the
+representative case — what farm devs actually use. Possible next steps: a richer
+program corpus (build a real library/app natively), or `clang` alongside gcc.
