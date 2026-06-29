@@ -27,9 +27,10 @@ For every recipe in `recipes/`, `run.sh`:
 5. prints a scoreboard.
 
 This is the **cross-compile-on-host → run-in-guest** tier: it proves the A55
-executes real software correctly. An **in-guest build** tier (compile *and* run
-on the machine) is future work — it needs a toolchain rootfs; the recipe format
-is designed to host it too.
+executes real software correctly. The **in-guest build** tier (compile *and* run
+on the machine, the strongest self-hosting signal) now lives at
+[`tests/in-guest-build/`](../in-guest-build/) — a native tcc+musl toolchain built
+from source, compiling + running C on the A55.
 
 ## Usage
 
