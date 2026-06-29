@@ -8,8 +8,9 @@ then runs in the guest; this compiles *and* runs entirely in the guest.)
 Two variants, light and representative:
 
 ```sh
-tests/in-guest-build/run.sh        # tcc + musl, busybox initramfs (lightweight)
-tests/in-guest-build/run-gcc.sh    # real gcc/g++ + glibc rootfs off eMMC (representative)
+tests/in-guest-build/run.sh           # tcc + musl, busybox initramfs (lightweight)
+tests/in-guest-build/run-gcc.sh       # real gcc/g++ + glibc rootfs off eMMC (representative)
+tests/in-guest-build/run-gcc-build.sh # REAL upstream projects: ./configure/make + their own tests
 ```
 
 Both compile every test **in-guest**, run each binary on the A55, and check its
@@ -24,6 +25,15 @@ with it. Prereqs: QEMU, kernel+dtb, SM ELF, a cross gcc.
 + libstdc++ + libm, GCC 14) on a Debian rootfs booted as the eMMC root filesystem,
 compiling `gcc-tests/*.{c,cpp}` (incl. C++ STL). That's what a farm developer
 actually does. Prereqs add **docker** (to fetch the arm64 rootfs) + `mke2fs`.
+
+`run-gcc-build.sh` goes the extra step — it builds **real upstream projects** on
+the A55 and runs each project's **own** test suite, proving the machine is a
+working dev host (download → `./configure`/`make` → `make test` passes, all
+in-guest). Corpus: **bzip2** (`make && make test`), **zlib** (`./configure &&
+make && make test`), **lua** (`make posix`, then run a Lua script). Tarballs are
+fetched host-side (cached) and staged into the rootfs, so the guest needs no
+network. Real builds under TCG are slow — the default timeout is generous
+(`TMO=1200`). Verified `pass=3 fail=0`.
 
 ## Toolchain
 
@@ -77,8 +87,10 @@ stdlib+fn ptrs); gcc — `sum.c`, `sqrt.c` (libm), `cppsort.cpp` (g++ + STL).
 
 ## Status / roadmap
 
-Both tiers proven (`pass=3 fail=0`): the A55 hosts a compiler and runs the
-binaries it produces. `run.sh` (tcc+musl) is the lightweight capability proof;
-`run-gcc.sh` (real glibc gcc/g++ on a Debian rootfs off eMMC) is the
-representative case — what farm devs actually use. Possible next steps: a richer
-program corpus (build a real library/app natively), or `clang` alongside gcc.
+All three tiers proven (`pass=3 fail=0` each): the A55 hosts a compiler, runs the
+binaries it produces, and natively builds + tests real upstream projects.
+`run.sh` (tcc+musl) is the lightweight capability proof; `run-gcc.sh` (real glibc
+gcc/g++) is the representative toolchain; `run-gcc-build.sh` is the real-project
+corpus. To grow the corpus, add a project to `run-gcc-build.sh` (a tarball URL +
+a `./configure`/`make` + self-test block). Possible next steps: a larger app
+(e.g. sqlite amalgamation, git), or `clang` alongside gcc.
