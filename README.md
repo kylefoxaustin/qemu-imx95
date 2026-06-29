@@ -780,6 +780,21 @@ This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
     # FlexSPI + serial NOR: enumerate a 64 MiB mtd, read + write/read-back
     tests/flexspi/run.sh
 
+    # code-sweep: real third-party source cross-built + run on the A55, checked
+    # against each project's own oracle (36 CPU + 8 peripheral items)
+    tests/code-sweep/run.sh ; tests/code-sweep/run-peripheral.sh
+
+    # in-guest build tier: compile AND run on the A55 (self-hosting proof) -
+    # tcc+musl, real gcc/g++ off eMMC, and real upstream projects (bzip2/zlib/lua)
+    # built natively + their own `make test` passing
+    tests/in-guest-build/run.sh ; tests/in-guest-build/run-gcc.sh
+    tests/in-guest-build/run-gcc-build.sh
+
+The per-block fidelity record (which blocks COMPUTE vs FAULT-honestly vs are
+flagged) is [`docs/validation/fidelity-audit.md`](docs/validation/fidelity-audit.md);
+machine-readable results of record are
+[`docs/validation/code-sweep-matrix.yaml`](docs/validation/code-sweep-matrix.yaml).
+
 ## Methodology & contributing
 
 The project is built measure-first: propose a hypothesis, verify it against
