@@ -46,6 +46,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXLPUARTState, IMX_LPUART)
 /* GLOBAL: write GLOBAL_RST to trigger a software reset of the IP. */
 #define LPUART_GLOBAL_RST       0x00000002
 
+/*
+ * BAUD: RDMAE enables RX-side DMA (the driver drives a cyclic eDMA-RX channel
+ * fed by our dma-req line instead of the RDRF interrupt).
+ */
+#define LPUART_BAUD_RDMAE       0x00200000
+
 /* STAT bits the model implements. */
 #define LPUART_STAT_TDRE        0x00800000  /* TX data register empty */
 #define LPUART_STAT_TC          0x00400000  /* TX complete */
@@ -104,6 +110,7 @@ struct IMXLPUARTState {
     MemoryRegion    iomem;
     CharFrontend    chr;
     qemu_irq        irq;
+    qemu_irq        dma_req;        /* RX DMA request line to the eDMA */
 
     /* Register state. Only the writable bits are tracked. */
     uint32_t        baud;

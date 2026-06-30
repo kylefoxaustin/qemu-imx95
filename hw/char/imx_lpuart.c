@@ -299,6 +299,20 @@ static void imx_lpuart_receive(void *opaque, const uint8_t *buf, int size)
     s->rx_byte = buf[0];
     s->rx_full = true;
     s->stat |= LPUART_STAT_RDRF;
+
+    if (s->baud & LPUART_BAUD_RDMAE) {
+        /*
+         * RX DMA path. The i.MX lpuart driver runs a cyclic eDMA-RX channel and
+         * flushes it to the tty on the IDLE interrupt (RIE stays clear), so a
+         * PIO-only model silently dropped every byte. Pulse the eDMA request so
+         * it pulls this byte from DATA (the DATA read clears rx_full/RDRF),
+         * then raise STAT.IDLE so the driver's idle handler flushes the ring.
+         * The eDMA reads DATA a byte at a time, which is why .valid allows 1.
+         */
+        qemu_set_irq(s->dma_req, 1);
+        qemu_set_irq(s->dma_req, 0);
+        s->stat |= LPUART_STAT_IDLE;
+    }
     imx_lpuart_update_irq(s);
 }
 
@@ -311,7 +325,7 @@ static const MemoryRegionOps imx_lpuart_ops = {
         .max_access_size = 4,
     },
     .valid = {
-        .min_access_size = 4,
+        .min_access_size = 1,    /* eDMA reads DATA a byte at a time (RX DMA) */
         .max_access_size = 4,
     },
 };
@@ -333,6 +347,7 @@ static void imx_lpuart_init(Object *obj)
                           TYPE_IMX_LPUART, IMX_LPUART_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->dma_req, "dma-req", 1);
 }
 
 static const Property imx_lpuart_properties[] = {

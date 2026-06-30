@@ -1968,6 +1968,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
 
         /*
+         * LPUART2 RX-DMA: the i.MX lpuart driver runs a non-console tty with a
+         * cyclic eDMA-RX channel (LPUART2's DTB dmas point at edma1, src 22/23)
+         * - so wire LPUART2's dma-req to an edma1 request input, else received
+         * bytes are silently dropped (PIO-only). Console LPUART1 stays PIO,
+         * unaffected (never sets RDMAE). edma1 req lines 0/1 serve micfil/sai1;
+         * use line 2.
+         */
+        qdev_connect_gpio_out_named(DEVICE(&s->lpuart[1]), "dma-req", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->edma1), "dma-req", 2));
+
+        /*
          * edma3 (fsl,imx95-edma5): same 64-channel/0x8000-stride engine at
          * 0x42210000, channel N raises GIC SPI 256 + N/2. General-purpose (no
          * peripheral wired to it yet), so the fsl-edma driver probes it and a
