@@ -61,12 +61,11 @@ struct FslEnetcState {
 
     /*
      * RX producer index (which posted BD the next frame lands in). The driver
-     * does not read RBPIR; it polls each BD's writeback lstatus. rx_pending is
-     * set when an incoming frame had no free buffer, so a later RBCIR write
-     * (the driver posting buffers) reflushes the queued packet.
+     * does not read RBPIR; it polls each BD's writeback lstatus. An incoming
+     * frame that finds no free buffer is dropped (RX overrun), so no pending
+     * state is needed - see fsl_enetc_can_receive().
      */
     uint32_t rx_pi;
-    bool rx_pending;
 };
 
 #endif /* HW_NET_FSL_ENETC_H */

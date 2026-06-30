@@ -267,11 +267,8 @@ static void fsl_enetc_bar0_write(void *opaque, hwaddr off, uint64_t val,
         enetc_tx_kick(s);
         return;
     case ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0) + ENETC_RBCIR:
-        /* Driver posted more empty RX buffers; try to flush pending RX. */
+        /* Driver posted more empty RX buffers (consumer index advanced). */
         enetc_set(s, off, val);
-        if (s->nic && s->rx_pending) {
-            qemu_flush_queued_packets(qemu_get_queue(s->nic));
-        }
         return;
     default:
         enetc_set(s, off, val);
@@ -314,9 +311,21 @@ static uint32_t fsl_enetc_rx_free_bds(FslEnetcState *s)
 
 static bool fsl_enetc_can_receive(NetClientState *nc)
 {
-    FslEnetcState *s = qemu_get_nic_opaque(nc);
-
-    return fsl_enetc_rx_free_bds(s) != 0;
+    /*
+     * Always accept frames from the wire. Real ENETC does not back-pressure
+     * the link when its RX BD ring is empty - it discards the frame (RX
+     * overrun) and bumps a discard counter; see fsl_enetc_receive(). Returning
+     * false here would instead make a peer netdev queue the frame and, in the
+     * case of the socket netdev used to bridge two QEMU instances, park its fd
+     * reader until we flush. That recovery is racy around link-up (a frame
+     * arriving before the driver has posted RX buffers parks the reader, and
+     * re-arming it from the MMIO/flush path does not reliably resume the main
+     * loop), which silently wedged inter-instance RX. Accepting unconditionally
+     * and discarding in fsl_enetc_receive() when no BD is free matches hardware
+     * and keeps the link self-healing - the few frames dropped before ndo_open
+     * finishes posting buffers are covered by upper-layer retransmits.
+     */
+    return true;
 }
 
 /*
@@ -368,16 +377,17 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     /*
      * A frame may not fit in one RX buffer (RBBSR), so scatter it across
      * successive posted BDs: each holds up to bufsz bytes, only the final BD
-     * carries LSTATUS_F. Require enough free BDs up front; otherwise
-     * back-pressure and retry when the driver posts more (RBCIR write).
+     * carries LSTATUS_F. Require enough free BDs up front; if the ring has no
+     * room, discard the frame (RX overrun) - see fsl_enetc_can_receive().
+     * Reporting it as consumed (return size) keeps the sender's net queue
+     * running; upper layers retransmit any frame dropped this way.
      */
     need = (size + bufsz - 1) / bufsz;
     if (need == 0) {
         need = 1; /* zero-length frame still consumes one BD */
     }
     if (fsl_enetc_rx_free_bds(s) < need) {
-        s->rx_pending = true;
-        return 0;
+        return size; /* no RX buffer posted: discard (overrun) */
     }
 
     /*
@@ -436,7 +446,6 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     }
 
     enetc_set(s, rbase + ENETC_RBPIR, s->rx_pi);
-    s->rx_pending = false;
     enetc_ring_irq(s, ENETC_SIMSIRRV(0));
 
     return size;
@@ -543,7 +552,6 @@ static void fsl_enetc_reset(DeviceState *dev)
 
     fsl_enetc_reset_regs(s);
     s->rx_pi = 0;
-    s->rx_pending = false;
 }
 
 static const Property fsl_enetc_props[] = {
