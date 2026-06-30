@@ -35,8 +35,8 @@ environment:
 summary:
   cpu_items:           36
   peripheral_items:    8
-  in_guest_build_tiers: 3
-  result:              "44/44 cross-run PASS + 3/3 in-guest build tiers PASS"
+  in_guest_build_tiers: 4
+  result:              "44/44 cross-run PASS + 4/4 in-guest build tiers PASS (tcc, gcc, gcc-realbuild incl sqlite, clang)"
   note:                "i2c-rw SKIPs (honest) in a combined boot where the audio driver claims the WM8962 codec @0x1a; standalone it PASSes. i2c-scan passes either way (kernel-enumerated)."
 
 # ---- in-guest build tier (compile AND run ON the A55, not cross-compiled) -
@@ -52,7 +52,10 @@ in_guest_build:
       result: pass, oracle: "sum(gcc) + sqrt(gcc+libm) + cppsort(g++ STL) compiled + run in-guest (pass=3/0)" }
   - { tier: gcc-realbuild, harness: "tests/in-guest-build/run-gcc-build.sh",
       toolchain: "native gcc 14 on the gcc rootfs",
-      result: pass, oracle: "real upstream projects built natively + their OWN tests pass: bzip2 (make&&make test), zlib (./configure&&make&&make test), lua (make posix + run script) (pass=3/0)" }
+      result: pass, oracle: "real upstream projects built natively + their OWN tests pass: bzip2 (make&&make test), zlib (./configure&&make&&make test), lua (make posix + run script), sqlite (native-compile the ~9MB amalgamation + run SQL) (pass=4/0)" }
+  - { tier: clang-rootfs, harness: "tests/in-guest-build/run-clang.sh",
+      toolchain: "native LLVM/clang 19 + clang++ + lld (arm64 silkeh/clang docker image, ext4 on eMMC)",
+      result: pass, oracle: "sum(clang) + cppsort(clang++ STL) compiled (-fuse-ld=lld) + run in-guest (pass=2/0)" }
 
 # ---- CPU tier ------------------------------------------------------------
 cpu:

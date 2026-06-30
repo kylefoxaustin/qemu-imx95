@@ -789,7 +789,8 @@ tiers, each `pass=3 fail=0`. Harness: `tests/in-guest-build/`.
 |------|-----------|----------------|--------|
 | `run.sh` | TinyCC (native aarch64) + musl static, built from source | a compiler runs on the A55 and its output runs (sum/fib/qsort vs `// EXPECT`) | PASS |
 | `run-gcc.sh` | native gcc/g++ 14 + glibc + libstdc++ (arm64 `gcc` Docker image → ext4 on eMMC root) | the real toolchain devs use: C + libm + C++ STL compiled and run in-guest | PASS |
-| `run-gcc-build.sh` | native gcc 14 on the gcc rootfs | **real upstream projects built natively + their *own* tests pass**: bzip2 (`make && make test`), zlib (`./configure && make && make test`), lua (`make posix` + run a script) | PASS |
+| `run-gcc-build.sh` | native gcc 14 on the gcc rootfs | **real upstream projects built natively + their *own* tests pass**: bzip2 (`make && make test`), zlib (`./configure && make && make test`), lua (`make posix` + run a script), sqlite (native-compile the ~9 MB amalgamation + run real SQL) | PASS |
+| `run-clang.sh` | native LLVM/clang 19 + clang++ + lld (arm64 `silkeh/clang` image → ext4 on eMMC root) | the *other* major toolchain self-hosts: C + C++ STL compiled (`-fuse-ld=lld`) and run in-guest | PASS |
 
 Mechanics worth recording: TinyCC's young arm64 backend can't link glibc's
 GOT/TLS relocations (so musl) and lacks `svc` inline asm; the real-gcc rootfs is
@@ -797,7 +798,7 @@ obtained by `docker pull --platform linux/arm64` + `docker export` (fetches a
 foreign-arch image without running it — the host can't execute aarch64), built
 into an ext4 with `mke2fs -d` (no root) and booted as `/dev/mmcblk0`; gcc must be
 invoked by full path (bare `gcc` mis-computes its exec-prefix → "cannot execute
-cc1"). Reproduce: `tests/in-guest-build/run.sh` / `run-gcc.sh` / `run-gcc-build.sh`.
+cc1"). Reproduce: `tests/in-guest-build/run.sh` / `run-gcc.sh` / `run-gcc-build.sh` / `run-clang.sh`.
 
 ### Soak (ITERS=N: build once, boot+run N times)
 

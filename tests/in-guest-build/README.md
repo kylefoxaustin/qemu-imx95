@@ -11,6 +11,7 @@ Two variants, light and representative:
 tests/in-guest-build/run.sh           # tcc + musl, busybox initramfs (lightweight)
 tests/in-guest-build/run-gcc.sh       # real gcc/g++ + glibc rootfs off eMMC (representative)
 tests/in-guest-build/run-gcc-build.sh # REAL upstream projects: ./configure/make + their own tests
+tests/in-guest-build/run-clang.sh     # native LLVM/clang toolchain (the other major compiler)
 ```
 
 Both compile every test **in-guest**, run each binary on the A55, and check its
@@ -33,7 +34,13 @@ in-guest). Corpus: **bzip2** (`make && make test`), **zlib** (`./configure &&
 make && make test`), **lua** (`make posix`, then run a Lua script). Tarballs are
 fetched host-side (cached) and staged into the rootfs, so the guest needs no
 network. Real builds under TCG are slow — the default timeout is generous
-(`TMO=1200`). Verified `pass=3 fail=0`.
+(`TMO=1800`). Verified `pass=4 fail=0` (bzip2, zlib, lua, sqlite).
+
+`run-clang.sh` is the same idea with the **other** major toolchain: a native
+LLVM/clang (clang 19 + clang++ + lld) on an arm64 rootfs off eMMC, compiling
+`clang-tests/*.{c,cpp}` in-guest (C + C++ STL). Links with `-fuse-ld=lld` (the
+clang image ships lld, not GNU ld). Verified `pass=2 fail=0`. So the farm proves
+both gcc and clang self-host on the board.
 
 ## Toolchain
 

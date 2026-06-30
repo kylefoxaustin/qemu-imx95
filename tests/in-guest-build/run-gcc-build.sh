@@ -10,6 +10,7 @@
 #   - bzip2 1.0.8  : make && make test          (upstream compress/decompress self-test)
 #   - zlib  1.3.1  : ./configure && make && make test
 #   - lua   5.4.7  : make posix, then run a Lua script with a known result
+#   - sqlite 3.46.1: native-compile the ~9MB amalgamation (one big TU) + run SQL
 #
 # Same rootfs/boot mechanism as run-gcc.sh (arm64 `gcc` docker image -> ext4 ->
 # eMMC root). Tarballs are fetched host-side (cached) and staged into the rootfs,
@@ -26,7 +27,7 @@ DTB=${DTB:-$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb}
 GCC_IMAGE=${GCC_IMAGE:-gcc:14-bookworm}
 CACHE=${CACHE:-$ROOT/build/in-guest-build}
 MEM=${MEM:-4G}
-TMO=${TMO:-1200}
+TMO=${TMO:-1800}
 
 skip() { echo "SKIP: $*"; exit 0; }
 die()  { echo "FAIL: $*"; exit 1; }
@@ -54,6 +55,7 @@ fetch() { [ -f "$SRC/$1" ] || curl -fsSL "$2" -o "$SRC/$1" || skip "download fai
 fetch bzip2-1.0.8.tar.gz https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
 fetch zlib-1.3.1.tar.gz  https://zlib.net/fossils/zlib-1.3.1.tar.gz
 fetch lua-5.4.7.tar.gz   https://www.lua.org/ftp/lua-5.4.7.tar.gz
+fetch sqlite-autoconf-3460100.tar.gz https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
 mkdir -p "$RF/opt/igsrc"; rm -f "$RF/opt/igsrc"/*.tar.gz; cp "$SRC"/*.tar.gz "$RF/opt/igsrc/"
 
 # ---- the in-guest build+test runner (real builds, project self-tests) -------
@@ -79,6 +81,13 @@ echo "--- lua: make posix && run a script ---"
 ( set -e; rm -rf lua-5.4.7; tar xf lua-5.4.7.tar.gz; cd lua-5.4.7; make -j$J posix CC=$GCC
   echo 'local s=0 for i=1,100 do s=s+i end assert(s==5050) print("LUA-OK "..s)' | ./src/lua ) >/tmp/lua.log 2>&1
 if grep -q 'LUA-OK 5050' /tmp/lua.log; then echo "PASS lua (built + ran script)"; pass=$((pass+1)); else echo "FAIL lua"; tail -6 /tmp/lua.log; fail=$((fail+1)); fi
+
+echo "--- sqlite: native-compile the 9MB amalgamation + run real SQL ---"
+( set -e; rm -rf sqlite-autoconf-3460100; tar xf sqlite-autoconf-3460100.tar.gz
+  cd sqlite-autoconf-3460100
+  $GCC -O1 -o sqlite3 shell.c sqlite3.c -lpthread -lm -ldl
+  printf 'CREATE TABLE t(a INTEGER,b TEXT);\nINSERT INTO t VALUES(1,"x"),(2,"y"),(3,"z");\nSELECT count(*)||"|"||sum(a) FROM t;\n.quit\n' | ./sqlite3 ) >/tmp/sqlite.log 2>&1
+if grep -qx '3|6' /tmp/sqlite.log; then echo "PASS sqlite (big TU built + ran SQL)"; pass=$((pass+1)); else echo "FAIL sqlite"; tail -6 /tmp/sqlite.log; fail=$((fail+1)); fi
 
 echo "=== IG-RESULT pass=$pass fail=$fail ==="
 sync; sleep 1; poweroff -f 2>/dev/null; halt -f 2>/dev/null
