@@ -73,24 +73,31 @@ via the *completion* retcode (it hangs), **but you can fault via a separate,
 non-gating error/status field** if the driver plumbs one to userspace. The
 i.MX 95 model uses exactly this (`neutron-uncomputed-errcode`).
 
-**Confirmed two-way taxonomy** (i.MX 93 checked its Ethos-U after this finding —
-2026-06-28): NXP remote-accelerator drivers split by *what gates completion*, and
-that decides where the honest fault goes:
+**Confirmed three-way taxonomy** (i.MX 93 checked its Ethos-U 2026-06-28; MCXN947
+checked its small Neutron 2026-06-29): NXP remote-accelerator drivers split by
+*what gates completion*, and that decides where the honest fault goes:
 
-- **Neutron-style — completion gates on a polled retcode** (MBOX0 == DONE).
-  A non-DONE retcode hangs, so you MUST fault via a *side-band* field
-  (Neutron: MBOX1 `error_code`, read after DONE, surfaced via the ioctl).
-- **Ethos-style — completion gates on response *arrival*** (the `INFERENCE_RSP`
-  rpmsg). `ethosu_inference_rsp()` maps `rsp->status` for every value then
-  *unconditionally* sets done+wake, so the response's own `status` is **in-band
-  but non-gating** — a `STATUS_ERROR` completes exactly like success and
-  userspace reads it via the `INFERENCE_STATUS` ioctl. Here you fault via that
-  in-band status field directly; no side-band needed.
+- **Neutron (big, i.MX 95) — completion gates on a polled retcode** (MBOX0 ==
+  DONE). A non-DONE retcode hangs, so you MUST fault via a *side-band* field
+  (MBOX1 `error_code`, read after DONE, surfaced via the ioctl).
+- **Neutron (small N1-16, MCXN947) — completion gates on a polled CTRL bit**
+  (no Zen-V core, no MBOX: `exec` spins while CTRL bit31 busy, `done` spins while
+  `CTRL != 0`). Same hazard as big-Neutron — the completion poll can't carry an
+  error — so MCX faults via a *side-band* too: an opt-in `INTR.ERRORTRAP` + IRQ
+  97 (non-gating). Same family, different register surface.
+- **Ethos-U (i.MX 93) — completion gates on response *arrival*** (the
+  `INFERENCE_RSP` rpmsg). `ethosu_inference_rsp()` maps `rsp->status` for every
+  value then *unconditionally* sets done+wake, so the response's own `status` is
+  **in-band but non-gating** — a `STATUS_ERROR` completes exactly like success and
+  userspace reads it via the `INFERENCE_STATUS` ioctl. Fault via that status field
+  directly; no side-band needed.
 
-Either way the honest fault is a *non-gating* status channel, never the
-completion signal. (The i.MX 93 model is adding opt-in honest-fault on the same
-default-faithful pattern, for unsupported opcodes/elementwise sub-ops it had been
-silently no-opping.)
+The invariant across all three: **a poll/arrival-gated completion can never carry
+the error — the honest fault must travel a separate, non-gating channel** (a
+side-band register for the poll-gated accels, the in-band status field for the
+arrival-gated one), never the completion signal itself. All three models ship the
+fault as an operator opt-in on a default-faithful (looks-like-success) base, so
+real-silicon behaviour is the default and the farm flips honesty on per its needs.
 
 ## Fixing vs flagging
 
