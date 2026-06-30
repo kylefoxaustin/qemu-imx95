@@ -637,6 +637,7 @@ config FSL_IMX95
     select IMX95_ANATOP
     select IMX95_DPU
     select IMX95_NEUTRON
+    select IMX95_MALI
     select IMX95_ISI
     select IMX95_DSI
     select IMX_IRQSTEER

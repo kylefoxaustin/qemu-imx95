@@ -646,9 +646,14 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
    arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
    follow-up to qemu-devel.
 
-**The GPU and the VPU (Wave6) are probe-time stubs** — their Linux drivers
-register but no GPU rendering or VPU video codec occurs (the HW JPEG codecs, a
-separate block, are functional). The **Neutron NPU brings up end to end**: the remoteproc
+**The GPU and the VPU (Wave6) are not functionally modelled** (no GPU rendering,
+no VPU video codec; the HW JPEG codecs, a separate block, are functional). Linux
+still *sees* both: the Wave6 VPU drivers bind (`/dev/video*` present), and the
+Mali GPU model reports the real Mali-G310 GPU_ID so kbase **identifies** it
+(`GPU identified as 0x4 arch 10.12.0`) and then fails the un-modelled CSF
+bring-up **cleanly** (-EIO) — no hang, no fake `/dev/mali0`. (A fully-bound GPU
+couldn't render anyway: kbase's userspace is Arm's proprietary libmali, not
+Mesa.) The **Neutron NPU brings up end to end**: the remoteproc
 loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
 (`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
 (`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0

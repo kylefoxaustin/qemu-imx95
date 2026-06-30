@@ -450,7 +450,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 (EMDIO domain) */
             { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl ierb */
             { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
-            { 0x4d900000, 0x100000 }, /* gpu */
+            /* gpu@4d900000 -> imx95.mali (registration-tier GPU_ID) below */
             /* 0x4ab00000 neutron npu -> imx95.neutron (rproc + mailbox) below */
             /*
              * Audio (SAI/XCVR/MICFIL): not yet modelled. Stub them so a
@@ -664,6 +664,22 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         sysbus_mmio_map(SYS_BUS_DEVICE(npu), 3, 0x4ab10000);  /* ITCM fw code */
         sysbus_connect_irq(SYS_BUS_DEVICE(npu), 0,
                            qdev_get_gpio_in(gicdev, 318));
+    }
+
+    /*
+     * Mali GPU (gpu@4d900000): identify-tier model. Reports the real Mali-G310
+     * GPU_ID so the kbase DDK identifies the GPU and attempts bring-up, then
+     * fails cleanly (-EIO) - Linux "sees" the GPU without a hang or a fake
+     * /dev/mali0. The 3D compute is not modelled (see imx95_mali.c).
+     */
+    {
+        DeviceState *gpu = qdev_new("imx95.mali");
+
+        object_property_add_child(OBJECT(s), "mali", OBJECT(gpu));
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(gpu), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(gpu), 0, 0x4d900000);
     }
 
     return true;

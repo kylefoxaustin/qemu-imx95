@@ -137,6 +137,9 @@ config IMX95_DPU
 config IMX95_NEUTRON
     bool
 
+config IMX95_MALI
+    bool
+
 config IMX95_ELE_SERVER
     bool
     select IMX_MU
