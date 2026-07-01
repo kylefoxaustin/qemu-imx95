@@ -106,16 +106,12 @@ boot() { # $1=role $2=chardev-spec (id=ul) $3=logfile
 echo "== launching two i.MX 95 instances joined by an LPUART3 socket link (look for ZRESULT) =="
 boot server "socket,id=ul,host=127.0.0.1,port=$PORT,server=on,wait=off" "$WORK/server.log" &
 SPID=$!
-# Wait until the server has bound the listen port before connecting the client,
-# so the client chardev needs no reconnect (its reconnect path can crash at
-# teardown). The server chardev binds at QEMU startup, before the guest boots.
-b=0
-while [ $b -lt 60 ]; do
-    if ss -ltnH 2>/dev/null | grep -q ":$PORT "; then break; fi
-    sleep 1; b=$((b+1))
-done
-[ $b -lt 60 ] || skip "server LPUART3 listen port $PORT never came up"
-boot client "socket,id=ul,host=127.0.0.1,port=$PORT" "$WORK/client.log" &
+# The client uses reconnect-ms so it rides out the listen-bind race (and any
+# peer flap) without an explicit port wait. This relies on the char-socket
+# reconnect-abort fix (chardev/char-socket.c): before it, a reconnect-ms client
+# whose connect attempt errored against a vanishing peer aborted at teardown.
+sleep 1
+boot client "socket,id=ul,host=127.0.0.1,port=$PORT,reconnect-ms=1000" "$WORK/client.log" &
 CPID=$!
 wait "$SPID" "$CPID" 2>/dev/null
 

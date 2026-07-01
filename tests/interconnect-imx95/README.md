@@ -74,6 +74,9 @@ Env knobs: `PORT` (host TCP port for the chardev link, default 12500), `TMO`.
   `serial_hd(2)` = the socket link (LPUART3).
 - The dtb is patched to flip only LPUART3's `status` to `okay` (its stock
   `dmas` are kept, so the real DMA path is used, not a PIO fallback).
-- The client uses a plain connecting chardev (no `reconnect`) after the harness
-  waits for the server's listen port - the socket chardev's reconnect path can
-  crash at teardown.
+- The client uses a `reconnect-ms` connecting chardev, so it rides out the
+  listen-bind race and any peer flap. This relies on the char-socket
+  reconnect-abort fix (`chardev/char-socket.c`): before that fix, a `reconnect-ms`
+  client whose connect attempt errored against a vanishing peer `abort()`ed at
+  teardown (`yank_unregister_function` on a never-registered channel). That fix
+  is a cross-SoC one - originally i.MX93, carried on i.MX91 and here.
