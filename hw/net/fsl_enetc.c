@@ -524,17 +524,12 @@ static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 
     /*
-     * Seed the SI primary MAC the driver reads back at probe
-     * (enetc4_pf_get_si_primary_mac reads PORT PSIPMAR0/1 for SI 0).
-     * PSIPMAR0 = MAC[0..3] little-endian, PSIPMAR1 = MAC[4..5].
+     * The SI primary MAC (PSIPMAR0/1) is seeded in fsl_enetc_reset(), not here:
+     * the device reset runs after realize and memset()s the whole register
+     * file, so a seed placed in realize would be wiped before the guest ever
+     * reads it - the driver's enetc4_pf_get_si_primary_mac() would then read
+     * back 00:00:00:00:00:00.
      */
-    {
-        const uint8_t *m = s->conf.macaddr.a;
-
-        enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR0(0),
-                  m[0] | m[1] << 8 | m[2] << 16 | (uint32_t)m[3] << 24);
-        enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR1(0), m[4] | m[5] << 8);
-    }
 }
 
 static void fsl_enetc_exit(PCIDevice *pci_dev)
@@ -546,12 +541,38 @@ static void fsl_enetc_exit(PCIDevice *pci_dev)
     g_free(s->regs);
 }
 
+/*
+ * Seed the SI primary MAC (MAC[0..3] little-endian in xxPMAR0, MAC[4..5] in
+ * xxPMAR1). Two register views must both carry it, because real hardware
+ * mirrors them but this model keeps separate slots:
+ *  - SI-space SIPMAR0/1 (0x80/0x84): read by enetc_load_primary_mac_addr(),
+ *    which sets the Linux netdev's station address. Miss this and the guest's
+ *    eth0 comes up 00:00:00:00:00:00.
+ *  - PORT-space PSIPMAR0/1 (0x2000): read by enetc4_pf_get_si_primary_mac().
+ */
+static void fsl_enetc_seed_primary_mac(FslEnetcState *s)
+{
+    const uint8_t *m = s->conf.macaddr.a;
+    uint32_t lo = m[0] | m[1] << 8 | m[2] << 16 | (uint32_t)m[3] << 24;
+    uint32_t hi = m[4] | m[5] << 8;
+
+    enetc_set(s, ENETC_SI_BASE + ENETC_SIPMAR0, lo);
+    enetc_set(s, ENETC_SI_BASE + ENETC_SIPMAR1, hi);
+    enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR0(0), lo);
+    enetc_set(s, ENETC_PORT_BASE + ENETC_PSIPMAR1(0), hi);
+}
+
 static void fsl_enetc_reset(DeviceState *dev)
 {
     FslEnetcState *s = FSL_ENETC(dev);
 
     fsl_enetc_reset_regs(s);
     s->rx_pi = 0;
+    /*
+     * Re-seed the primary MAC that fsl_enetc_reset_regs() just zeroed, so the
+     * driver reads a valid station address (not 00:00:00:00:00:00) at probe.
+     */
+    fsl_enetc_seed_primary_mac(s);
 }
 
 static const Property fsl_enetc_props[] = {
