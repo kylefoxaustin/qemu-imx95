@@ -42,3 +42,38 @@ serial log is copied to `/tmp/ic-eth-{server,client}.log`.
 - The harness waits for the server's listen port to be bound before starting
   the client, because the legacy socket netdev does not retry a failed
   `connect()`.
+
+## run-uart.sh - LPUART leg
+
+Two instances joined by a QEMU socket **chardev** on **LPUART3** (`ttyLP2`):
+instance A's `-chardev socket,server=on` <-> instance B's `-chardev socket`
+(connect), each wired to `serial_hd(2)` via `-serial chardev:ul`. A byte-exact
+text payload is sent client->server over `/dev/ttyLP2` and the server greps the
+received stream for the exact payload line.
+
+```
+QEMU=build/qemu-system-aarch64 \
+KBUILD=$HOME/Documents/linux-imx95-build \
+SM_ELF=$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf \
+    bash tests/interconnect-imx95/run-uart.sh
+```
+
+Env knobs: `PORT` (host TCP port for the chardev link, default 12500), `TMO`.
+
+### Why LPUART3, and what it exercises
+
+- **It exercises the LPUART RX-DMA datapath end to end.** LPUART3 is a
+  non-console tty with DTB `dmas`, so Linux drives its RX through a cyclic
+  eDMA-RX channel. The model wires LPUART3's `dma-req` to edma2; without that
+  (and the LPUART RDMAE->dma-req+IDLE support) received bytes are silently
+  dropped. This is the reason a UART leg uses LPUART3 rather than the console.
+- **LPUART1 stays the Linux console; LPUART2 is the System Manager's own
+  console** (`BOARD_DEBUG_UART_INSTANCE = 2`) and is left on `-serial null` -
+  a Linux data link there would collide with the SM's banner. Serial mapping:
+  `serial_hd(0)` = console (LPUART1), `serial_hd(1)` = null (LPUART2/SM),
+  `serial_hd(2)` = the socket link (LPUART3).
+- The dtb is patched to flip only LPUART3's `status` to `okay` (its stock
+  `dmas` are kept, so the real DMA path is used, not a PIO fallback).
+- The client uses a plain connecting chardev (no `reconnect`) after the harness
+  waits for the server's listen port - the socket chardev's reconnect path can
+  crash at teardown.
