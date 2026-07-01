@@ -1986,6 +1986,19 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             qdev_get_gpio_in_named(DEVICE(&s->edma1), "dma-req", 2));
 
         /*
+         * LPUART3 RX-DMA: LPUART3 is a free, non-console UART (DTB serial2 ->
+         * ttyLP2) whose DTB dmas point at edma2 (src 17/18). Wire its dma-req
+         * to an edma2 request input so a cyclic eDMA-RX tty delivers received
+         * bytes (same path as LPUART2 above; exercised by the two-instance
+         * UART interconnect test, tests/interconnect-imx95/run-uart.sh). edma2
+         * req lines 0/1 serve sai1/xcvr; use line 2. The eDMA model advances
+         * whichever cyclic channel is armed, so the exact line index is not
+         * load-bearing (audio is not running in that scenario).
+         */
+        qdev_connect_gpio_out_named(DEVICE(&s->lpuart[2]), "dma-req", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->edma2), "dma-req", 2));
+
+        /*
          * edma3 (fsl,imx95-edma5): same 64-channel/0x8000-stride engine at
          * 0x42210000, channel N raises GIC SPI 256 + N/2. General-purpose (no
          * peripheral wired to it yet), so the fsl-edma driver probes it and a
