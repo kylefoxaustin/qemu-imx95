@@ -110,6 +110,18 @@ struct IMXMUState {
      * real SM firmware service the A55's SCMI traffic.
      */
     IMXMUState          *peer;
+
+    /*
+     * SCMI request-trace hook (analysis only). When nonzero, this is the
+     * guest-physical address of the SCMI A2P (agent->platform) shared-memory
+     * buffer fed by this MU's doorbell. On each GCR.GIRn trigger, and only
+     * when the imx_mu_scmi_request trace event is enabled, the model decodes
+     * the SMT message header (offset 0x18) and first payload word (offset
+     * 0x1c) and emits them via that trace event. Enable with
+     * "-trace imx_mu_scmi_request" to capture a golden SCMI coverage trace
+     * from a real-SM boot; inert otherwise.
+     */
+    uint64_t            scmi_trace_buf;
 };
 
 /*

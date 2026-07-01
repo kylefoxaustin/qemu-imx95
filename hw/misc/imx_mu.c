@@ -18,11 +18,14 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/bswap.h"
 #include "qemu/module.h"
+#include "exec/cpu-common.h"
 #include "hw/misc/imx_mu.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 static const VMStateDescription vmstate_imx_mu = {
     .name = TYPE_IMX_MU,
@@ -321,6 +324,26 @@ static void imx_mu_write(void *opaque, hwaddr offset,
         for (unsigned i = 0; i < IMX_MU_NUM_CHANNELS; i++) {
             if (!(newly & IMX_MU_V2_BIT(i))) {
                 continue;
+            }
+            if (s->scmi_trace_buf &&
+                trace_event_get_state_backends(TRACE_IMX_MU_SCMI_REQUEST)) {
+                /*
+                 * Decode the outgoing SCMI request from the A2P shared-memory
+                 * buffer. SMT layout: msg_header at +0x18, first payload word
+                 * (usually the resource id) at +0x1c. Header packing (Linux
+                 * drivers/firmware/arm_scmi/common.h): msg_id[7:0], type[9:8],
+                 * protocol_id[17:10], token[27:18]. Guarded by the trace
+                 * event's enabled state so the buffer read only happens when
+                 * the event is actually turned on (-trace imx_mu_scmi_request).
+                 */
+                uint8_t b[8];
+                cpu_physical_memory_read(s->scmi_trace_buf + 0x18,
+                                         b, sizeof(b));
+                uint32_t hdr = ldl_le_p(b);
+                uint32_t res0 = ldl_le_p(b + 4);
+                trace_imx_mu_scmi_request((hdr >> 10) & 0xff, hdr & 0xff,
+                                          (hdr >> 8) & 0x3, (hdr >> 18) & 0x3ff,
+                                          res0);
             }
             if (s->peer) {
                 s->peer->gsr |= IMX_MU_V2_BIT(i);

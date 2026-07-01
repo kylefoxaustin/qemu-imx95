@@ -1368,6 +1368,13 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                         fsl_imx95_memmap[FSL_IMX95_SM_MU].addr);
         sysbus_connect_irq(mu_sbd, 0,
             qdev_get_gpio_in(gicdev, FSL_IMX95_SM_MU_IRQ));
+        /*
+         * Point the MU's SCMI request-trace hook at the A2P (agent->platform)
+         * shared-memory buffer (scmi-sram-section@0). Inert unless the
+         * imx_mu_scmi_request trace event is enabled (-trace ...); used to
+         * capture a golden SCMI coverage trace from a real-SM boot.
+         */
+        s->sm_mu.scmi_trace_buf = fsl_imx95_memmap[FSL_IMX95_SM_SHMEM].addr;
     }
 
     /*
