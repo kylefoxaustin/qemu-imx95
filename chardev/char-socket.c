@@ -1128,11 +1128,16 @@ static void qemu_chr_socket_connected(QIOTask *task, void *opaque)
 
     if (qio_task_propagate_error(task, &err)) {
         tcp_chr_change_state(s, TCP_CHARDEV_STATE_DISCONNECTED);
-        if (s->registered_yank) {
-            yank_unregister_function(CHARDEV_YANK_INSTANCE(chr->label),
-                                     char_socket_yank_iochannel,
-                                     QIO_CHANNEL(sioc));
-        }
+        /*
+         * Do NOT yank_unregister_function() here: the yank function is
+         * registered against the channel only on a *successful* connect (in
+         * tcp_chr_new_client below), so a failed connect never registered this
+         * sioc. Unregistering it aborts() with "entry not found" - which a
+         * reconnect-ms client hits every time its attempt errors against a
+         * flapping/vanishing peer (e.g. a two-instance socket link tearing
+         * down). Cross-SoC fix: originally 93 (imx93) c1c6d1c79c, carried on
+         * imx91 (ab4f3d3417) and here.
+         */
         check_report_connect_error(chr, err);
         goto cleanup;
     }
