@@ -13,6 +13,16 @@ them for the exact diff and rationale.
 > that are *not* already visible in the code you inherited — that's the real
 > knowledge transfer. Everything else is a map.
 
+> **STATUS UPDATE (2026-07-02):** this playbook was written *before* the 952 was
+> booted. Since then the 95 Claude session cloned your `qemu-i.MX952`, booted it,
+> and did the **P0 work already** — the 952 now boots stock BSP Linux to
+> userspace on the real SM, A55 at 1.704 GHz, ENETC eth0 up; the CCM/PLL/MU/ENETC
+> fidelity fixes are ported and pushed. **Start with `docs/952-bringup-notes.md`
+> in the 952 repo** for the current state, the boot recipe, the root-cause of the
+> one blocking bug (an unmapped 952 TRDC → M33 BusFault → dead SCMI), and the
+> live worklist. Then use THIS doc as the methodology/reference. §7's P0 below is
+> marked done; P1–P4 are still yours.
+
 ---
 
 ## 0. TL;DR — the five things that matter
@@ -380,17 +390,14 @@ up the handful of **new blocks**. The silent-wrong hunt (§4a) finds the rest.
 
 Do these in order. Each is "verify on 952, then fix if the delta broke it."
 
-**P0 — make sure the 95 fixes actually apply to 952 (they may not, per §6):**
-1. Run the **silent-wrong hunt** (§4a) on a 952 boot. Triage every hit. This
-   drives most of the rest.
-2. **Clocks:** boot + `clk_summary`. Confirm the A55 cores read the real 952 freq
-   (not 24 MHz) and SYS_PLL1 = the 952 value. If 952's clock-root count or
-   SYS_PLL1 config differs, re-derive the CCM handling + the ANATOP seed from the
-   `MIMX952` SM source. **This is the highest-impact check** — it's a 75× bug if wrong.
-3. **ENETC MAC:** `cat /sys/class/net/eth0/address` — must not be all-zero, must
-   honor `-nic mac=`. (Reset-path seed; check it survives the 952 reset.)
-4. **MU core block:** confirm no `imx_mu_read: bad read offset 0x18` flood; confirm
-   SCMI boots to userspace.
+**P0 — ✅ DONE (by the 95 Claude session; see `docs/952-bringup-notes.md`).**
+For the record, P0 was: run the hunt on a 952 boot; confirm A55 clocks read the
+real 952 freq not 24 MHz (they read 1.704 GHz — the CCM/ANATOP fixes ported
+cleanly); ENETC MAC not all-zero; no MU `0x18` flood; SCMI boots to userspace.
+The one thing that blocked all of it was NOT a fidelity fix — it was an unmapped
+952 TRDC (0x42080000 + new 0x424C0000) the SM writes at boot, causing an M33
+BusFault → dead SCMI. Fixed in the 952 repo (commit `4d959ba`). **Start your work
+at P1.**
 
 **P1 — finish the clock tree (the 95 known-gap; likely tractable on 952):**
 5. **DRAM_PLL** — seed the 952 EVK's DDR PLL rate (single well-known value per
