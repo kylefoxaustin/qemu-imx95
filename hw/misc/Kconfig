@@ -111,6 +111,9 @@ config IMX95_WDOG
 config IMX95_DDR_PMU
     bool
 
+config IMX95_CCM
+    bool
+
 config IMX95_XCACHE
     bool
 

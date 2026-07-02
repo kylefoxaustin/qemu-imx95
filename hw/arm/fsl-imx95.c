@@ -61,6 +61,7 @@
 #include "hw/ssi/ssi.h"
 #include "hw/ssi/imx95_lpspi.h"
 #include "hw/misc/imx95_ddr_pmu.h"
+#include "hw/misc/imx95_ccm.h"
 #include "system/blockdev.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
@@ -280,7 +281,8 @@ static void fsl_imx95_stub_mu_tr_write(void *opaque, unsigned int idx,
 static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
 {
     static const int unimplemented_regions[] = {
-        FSL_IMX95_CCM, FSL_IMX95_IOMUXC,
+        /* FSL_IMX95_CCM is a real clock-root register model (imx95.ccm). */
+        FSL_IMX95_IOMUXC,
         FSL_IMX95_TRDC_AON,
         /* BLK_CTRL_S_AONMIX has a real model (M7 CPU-WAIT gate) below. */
         FSL_IMX95_BLK_CTRL_NS_ANOMIX,
@@ -1563,6 +1565,22 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(SYS_BUS_DEVICE(pmu), 0, 0x4e090dc0);
         sysbus_connect_irq(SYS_BUS_DEVICE(pmu), 0,
                            qdev_get_gpio_in(gicdev, 91)); /* dtsi GIC SPI 91 */
+    }
+
+    /*
+     * CCM clock-root register model. The SM programs the clock roots here and
+     * reads them back to answer SCMI CLOCK_RATE_GET (rate = source/(DIV+1));
+     * a plain unimplemented stub returned 0, so every rate was reported
+     * undivided. Backing the registers makes the SM's read-modify-writes stick.
+     */
+    {
+        DeviceState *ccm = qdev_new(TYPE_IMX95_CCM);
+
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(ccm), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(ccm), 0,
+                        fsl_imx95_memmap[FSL_IMX95_CCM].addr);
     }
 
     /*

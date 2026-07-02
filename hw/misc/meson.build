@@ -75,6 +75,7 @@ system_ss.add(when: 'CONFIG_IMX', if_true: files(
 system_ss.add(when: 'CONFIG_IMX_MU', if_true: files('imx_mu.c'))
 system_ss.add(when: 'CONFIG_IMX95_WDOG', if_true: files('imx95_wdog.c'))
 system_ss.add(when: 'CONFIG_IMX95_DDR_PMU', if_true: files('imx95_ddr_pmu.c'))
+system_ss.add(when: 'CONFIG_IMX95_CCM', if_true: files('imx95_ccm.c'))
 system_ss.add(when: 'CONFIG_IMX95_XCACHE', if_true: files('imx95_xcache.c'))
 system_ss.add(when: 'CONFIG_IMX95_PMIC', if_true: files('imx95_pmic.c'))
 system_ss.add(when: 'CONFIG_IMX95_GPC', if_true: files('imx95_gpc.c'))
