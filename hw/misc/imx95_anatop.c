@@ -142,11 +142,42 @@ static const MemoryRegionOps imx95_anatop_ops = {
     },
 };
 
+/*
+ * Seed SYS_PLL1 to its i.MX95 boot configuration. On real hardware the boot ROM
+ * programs SYS_PLL1 (VCO 4000 MHz; PFD0/1/2 = 1000/800/625 MHz - fixed rates,
+ * cf. Linux clk-imx93/91 sys_pll_pfd0..2) before the SM or Linux run. QEMU
+ * boots -kernel directly and skips the ROM, so otherwise the SM reads DIV/
+ * NUMERATOR/DENOMINATOR back as 0 and reports every SYS_PLL1-derived clock
+ * (buses, ENET, most peripherals) to Linux as 0 over SCMI. The SM computes the
+ * rate from these registers: VCO = 24MHz*(MFI + MFN/MFD)/RDIV and
+ * PFD = VCO*5/(DFS_MFI*5 + DFS_MFN). ARM_PLL and HSIO_PLL are programmed at
+ * runtime by the SM (DVFS / PCIe) so they need no seed; DRAM/AUDIO/VIDEO/LDB
+ * PLLs have board- and
+ * use-case-specific rates and are left unprogrammed (honest 0 until sourced).
+ */
+#define ANATOP_SYS_PLL1         0x1000
+static void anatop_seed_sys_pll1(IMX95AnatopState *s)
+{
+#define PLL_SEED(off, val) (s->regs[(ANATOP_SYS_PLL1 + (off)) / 4] = (val))
+    PLL_SEED(0x00, 0x1);                    /* CTRL: POWERUP (status=locked)  */
+    PLL_SEED(0x40, 2u * 4u);                /* NUMERATOR: MFN*4, MFN=2        */
+    PLL_SEED(0x50, 3u);                     /* DENOMINATOR: MFD=3             */
+    PLL_SEED(0x60, (166u << 16) | (1u << 13)); /* DIV: MFI=166 RDIV=1 (4000M) */
+    PLL_SEED(0x70, 0x80000000u);            /* DFS0 CTRL: ENABLE              */
+    PLL_SEED(0x80, 4u << 8);                /* DFS0 DIV: MFI=4  -> PFD0 1000M */
+    PLL_SEED(0x90, 0x80000000u);            /* DFS1 CTRL: ENABLE              */
+    PLL_SEED(0xa0, 5u << 8);                /* DFS1 DIV: MFI=5  -> PFD1 800M  */
+    PLL_SEED(0xb0, 0x80000000u);            /* DFS2 CTRL: ENABLE              */
+    PLL_SEED(0xc0, (6u << 8) | 2u);         /* DFS2 DIV: MFI=6 MFN=2 -> 625M  */
+#undef PLL_SEED
+}
+
 static void imx95_anatop_reset(DeviceState *dev)
 {
     IMX95AnatopState *s = IMX95_ANATOP(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+    anatop_seed_sys_pll1(s);
 }
 
 static void imx95_anatop_init(Object *obj)
