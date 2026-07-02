@@ -33,6 +33,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXMUState, IMX_MU)
 #define IMX_MU_PAR              0x004   /* parameter (RO; TR/RR counts) */
 #define IMX_MU_CR               0x008   /* control */
 #define IMX_MU_SR               0x00C   /* status */
+#define IMX_MU_CCR0             0x010   /* core control 0 */
+#define IMX_MU_CIER0            0x014   /* core interrupt enable 0 */
+#define IMX_MU_CSSR0            0x018   /* core sticky status 0 (W1C) */
+#define IMX_MU_CSR0             0x01C   /* core status 0 (RO) */
 #define IMX_MU_FCR              0x100   /* flag control */
 #define IMX_MU_FSR              0x104   /* flag status */
 #define IMX_MU_GIER             0x110   /* general-purpose IRQ enable */
@@ -81,6 +85,16 @@ struct IMXMUState {
      */
     uint32_t        cr;
     uint32_t        sr;
+    /*
+     * Core control/status block (0x10..0x1c). CCR0/CIER0 are plain RW; CSSR0
+     * is a sticky status (write-1-to-clear); CSR0 is read-only live core
+     * status. The SM firmware polls CSSR0 (peer-core halt sticky bit) once per
+     * SCMI transaction - without these the model logged a "bad read" per
+     * transaction and a consumer checking peer-core halt via CSR0 read 0.
+     */
+    uint32_t        ccr0;
+    uint32_t        cier0;
+    uint32_t        cssr0;
     uint32_t        fcr;
     uint32_t        fsr;
     uint32_t        gier;

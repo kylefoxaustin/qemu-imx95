@@ -29,7 +29,7 @@
 
 static const VMStateDescription vmstate_imx_mu = {
     .name = TYPE_IMX_MU,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(cr, IMXMUState),
@@ -45,6 +45,9 @@ static const VMStateDescription vmstate_imx_mu = {
         VMSTATE_UINT32(rsr, IMXMUState),
         VMSTATE_UINT32_ARRAY(tr, IMXMUState, IMX_MU_NUM_CHANNELS),
         VMSTATE_UINT32_ARRAY(rr, IMXMUState, IMX_MU_NUM_CHANNELS),
+        VMSTATE_UINT32_V(ccr0, IMXMUState, 2),
+        VMSTATE_UINT32_V(cier0, IMXMUState, 2),
+        VMSTATE_UINT32_V(cssr0, IMXMUState, 2),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -69,6 +72,9 @@ static void imx_mu_reset_state(IMXMUState *s)
 {
     s->cr   = 0;
     s->sr   = 0;
+    s->ccr0 = 0;
+    s->cier0 = 0;
+    s->cssr0 = 0;
     s->fcr  = 0;
     s->fsr  = 0;
     s->gier = 0;
@@ -184,6 +190,19 @@ static uint64_t imx_mu_read(void *opaque, hwaddr offset, unsigned size)
     case IMX_MU_SR:
         value = s->sr;
         break;
+    case IMX_MU_CCR0:
+        value = s->ccr0;
+        break;
+    case IMX_MU_CIER0:
+        value = s->cier0;
+        break;
+    case IMX_MU_CSSR0:
+        value = s->cssr0;
+        break;
+    case IMX_MU_CSR0:
+        /* Live core status; the modelled peer core is running (no HALT etc). */
+        value = 0;
+        break;
     case IMX_MU_FCR:
         value = s->fcr;
         break;
@@ -282,6 +301,18 @@ static void imx_mu_write(void *opaque, hwaddr offset,
          * status that the model manages. Writing has no effect.
          */
         break;
+
+    case IMX_MU_CCR0:
+        s->ccr0 = value;
+        break;
+    case IMX_MU_CIER0:
+        s->cier0 = value;
+        break;
+    case IMX_MU_CSSR0:
+        s->cssr0 &= ~value;     /* sticky status: write 1 to clear */
+        break;
+    case IMX_MU_CSR0:
+        break;                  /* read-only live core status */
 
     case IMX_MU_FCR:
         /*
