@@ -28,8 +28,8 @@ DTC=$KBUILD/scripts/dtc/dtc
 DEFAULT_CPIO=${DEFAULT_CPIO:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
 PORT=${PORT:-12390}
 TMO=${TMO:-300}
-SRV_MAC=00:04:9f:06:11:22   # server eth0 (ethernet@0,0) - patch-dtb MAC
-CLI_MAC=00:04:9f:06:12:22   # client eth0 - sed'd distinct MAC (see below)
+SRV_MAC=00:04:9f:06:11:22   # server eth0 - passed via -nic mac= (model seeds it)
+CLI_MAC=00:04:9f:06:12:22   # client eth0 - distinct -nic mac= (point-to-point L2)
 PAYLOAD="IMX95-INTERCONNECT-ETH-PAYLOAD-0123456789-abcdef-byte-exact-OK"
 
 skip() { echo "SKIP: $*"; exit 0; }
@@ -40,14 +40,12 @@ done
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 # --- patched dtb: ENETC ports as fixed-link + identity msi-map (so they probe) ---
-# Two variants: the server keeps the patch's MACs; the client gets distinct MACs
-# (a shared MAC across the two ends of the point-to-point link breaks L2/ARP -
-# a node would see its own address as the frame source and drop it).
+# One dtb for both sides. The per-side distinct MAC (a shared MAC across the two
+# ends of a point-to-point link breaks L2) comes from -nic mac= below - the
+# model seeds it into the ENETC SI primary-MAC register - not from the dtb.
 "$DTC" -I dtb -O dts "$DTB" >"$WORK/base.dts" 2>/dev/null
-python3 "$ROOT/tests/netc/patch-dtb.py" "$WORK/base.dts" >"$WORK/server.dts"
-sed 's/00 04 9f 06 11 /00 04 9f 06 12 /g' "$WORK/server.dts" > "$WORK/client.dts"
-"$DTC" -I dts -O dtb -o "$WORK/server.dtb" "$WORK/server.dts" 2>/dev/null || skip "dtb recompile failed"
-"$DTC" -I dts -O dtb -o "$WORK/client.dtb" "$WORK/client.dts" 2>/dev/null || skip "dtb recompile failed"
+python3 "$ROOT/tests/netc/patch-dtb.py" "$WORK/base.dts" >"$WORK/enetc.dts"
+"$DTC" -I dts -O dtb -o "$WORK/enetc.dtb" "$WORK/enetc.dts" 2>/dev/null || skip "dtb recompile failed"
 
 # --- one initramfs, role chosen from the kernel cmdline (ig_role=server|client) ---
 root="$WORK/root"; mkdir -p "$root"/{bin,proc,sys,dev}
@@ -65,13 +63,12 @@ PORT=$PORT
 n=0; while [ ! -d /sys/class/net/eth0 ] && [ \$n -lt 60 ]; do sleep 1; n=\$((n+1)); done
 [ -d /sys/class/net/eth0 ] || { echo "ZRESULT FAIL (no eth0)"; poweroff -f; }
 if [ "\$ROLE" = server ]; then MY=10.0.0.1; PEER=10.0.0.2; MYMAC=$SRV_MAC; PMAC=$CLI_MAC; else MY=10.0.0.2; PEER=10.0.0.1; MYMAC=$CLI_MAC; PMAC=$SRV_MAC; fi
-# The ENETC SI primary-MAC register reads back 00:00:00:00:00:00 in-guest, so
-# set a valid, per-side-distinct MAC from userspace (matching the static neigh
-# below). A shared MAC across the two ends of a point-to-point link breaks L2.
-ip link set eth0 down 2>/dev/null
-ip link set eth0 address \$MYMAC
+# The distinct per-side MAC now comes from the model (-nic mac=, below): the
+# ENETC SI primary-MAC register seeds it so the guest reads a valid station
+# address. (A shared MAC across the two ends of a point-to-point link breaks L2,
+# hence distinct MACs per side.) MYMAC is what we expect the model to report.
 ip addr add \$MY/24 dev eth0; ip link set eth0 up
-echo "ZMAC eth0=\$(cat /sys/class/net/eth0/address)"
+echo "ZMAC eth0=\$(cat /sys/class/net/eth0/address) (expect \$MYMAC)"
 # static neighbour: take ARP timing out of the loop (we know the peer's MAC).
 ip neigh replace \$PEER lladdr \$PMAC dev eth0 nud permanent 2>/dev/null
 echo "ZBOOT role=\$ROLE my=\$MY peer=\$PEER carrier=\$(cat /sys/class/net/eth0/carrier 2>/dev/null)"
@@ -100,17 +97,17 @@ INIT
 chmod +x "$root/init"
 ( cd "$root" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/ic.cpio.gz"
 
-boot() { # $1=role $2=socket-arg $3=logfile $4=dtb
+boot() { # $1=role $2=socket-arg $3=logfile $4=dtb $5=mac
     timeout --signal=KILL "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
         -kernel "$IMAGE" -dtb "$4" -initrd "$WORK/ic.cpio.gz" \
         -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init ig_role=$1" \
         -device loader,file="$SM_ELF",cpu-num=6 \
-        -nic "socket,$2,model=fsl-enetc" \
+        -nic "socket,$2,model=fsl-enetc,mac=$5" \
         -serial file:"$3" -serial null -monitor none >/dev/null 2>&1 || true
 }
 
 echo "== launching two i.MX 95 instances joined by an ENETC socket link (look for ZRESULT) =="
-boot server "listen=:$PORT"            "$WORK/server.log" "$WORK/server.dtb" &
+boot server "listen=:$PORT"            "$WORK/server.log" "$WORK/enetc.dtb" "$SRV_MAC" &
 SPID=$!
 # Wait until the server QEMU has actually bound the listen port before starting
 # the client: the legacy socket netdev does NOT retry a failed connect(), so a
@@ -123,7 +120,7 @@ while [ $b -lt 60 ]; do
     sleep 1; b=$((b+1))
 done
 [ $b -lt 60 ] || skip "server listen port $PORT never came up"
-boot client "connect=127.0.0.1:$PORT"  "$WORK/client.log" "$WORK/client.dtb" &
+boot client "connect=127.0.0.1:$PORT"  "$WORK/client.log" "$WORK/enetc.dtb" "$CLI_MAC" &
 CPID=$!
 wait "$SPID" "$CPID" 2>/dev/null
 
