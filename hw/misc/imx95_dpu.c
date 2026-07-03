@@ -35,9 +35,16 @@
  *    pipeline and triggers Store9, and the engine writes the destination buffer
  *    back to DRAM and signals a fence via a ComCtrl SW interrupt. We decode the
  *    HIF command stream, run the configured operation, and write the result:
- *    same-format rectangular copy, constant-colour fill, and Porter-Duff
- *    alpha-blend (BlitBlend9). Scaling, rotation and format conversion land in
- *    later commits.
+ *    same-format copy, constant-colour fill, Porter-Duff alpha-blend
+ *    (BlitBlend9), nearest-neighbour scaling (H/VScaler9), rotation (FetchRot9)
+ *    and RGBA<->YUV colour conversion (CSC). qtest coverage in
+ *    tests/qtest/imx95-blit-test.c (fill/copy/blend/scale, integrity oracles).
+ *    ROP9 raster ops (AND/OR/XOR of source with destination) are NOT modelled:
+ *    the mainline dpu95-blit driver leaves ROP9 at passthrough (ROP9_CONTROL
+ *    reset = 0 = passthrough, so a copy already represents it correctly), no
+ *    in-tree consumer programs a raster op, and the ROP9_CONTROL op-code
+ *    encoding is not in the driver headers (RM-only) - modelling it from a
+ *    guessed layout would risk mis-handling the passthrough/copy path.
  *
  * The full 4 MiB MMIO is backed by a plain register store (read-back-what-was-
  * written) so the driver's many other writes (layerblend, extdst, etc.) are
