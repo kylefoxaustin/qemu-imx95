@@ -91,10 +91,13 @@ for i in $(seq 1 90); do grep -qa 'CANLINK:RESPOND ready' "$R95" 2>/dev/null && 
 grep -qa 'CANLINK:RESPOND ready' "$R95" 2>/dev/null && echo "   95 ready" || echo "   (not seen yet; starting MCX anyway)"
 
 echo "== booting MCXN947 (bare-metal FlexCAN0, TCP client -> :$PORT) =="
+# Fleet-standard wiring: the frdm-mcxn947 board is a custom machine type that
+# takes -machine canbus0=cb, the same incantation as imx91/93/95 (mcxn947qemu
+# 2ee08e14d5). No MCX special-casing.
 timeout 90 "$QEMU_MCX" -M frdm-mcxn947 -display none -monitor none \
-  -object can-bus,id=canbus0 \
+  -object can-bus,id=cb -machine canbus0=cb \
   -chardev socket,id=canl,host=127.0.0.1,port=$PORT,server=off,reconnect-ms=1000 \
-  -object can-host-chardev,id=h0,canbus=canbus0,chardev=canl \
+  -object can-host-chardev,id=h0,canbus=cb,chardev=canl \
   -kernel "$MCX_ELF" -no-reboot -serial file:"$MCXLOG" >/dev/null 2>&1 &
 PMCX=$!
 
