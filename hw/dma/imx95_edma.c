@@ -150,6 +150,34 @@ static uint32_t edma_decode_nbytes(uint32_t raw, int32_t *mloff)
  */
 #define IMX95_EDMA_MAX_XFER_ELEMS (64u * 1024 * 1024)
 
+/*
+ * Mark a channel's major loop complete: persist the (advanced) pointers, read
+ * CITER back as 0 so the driver computes a full real count, clear ERQ/ACTIVE,
+ * set DONE, and raise the channel interrupt.
+ */
+static void edma_finish(IMX95EdmaState *s, int ch, uint64_t saddr,
+                        uint64_t daddr)
+{
+    uint8_t *t = s->chan[ch].regs;
+    const EdmaTcdLayout *L = TCD(s);
+    uint32_t csr;
+
+    st_addr(L, t + L->saddr, saddr);
+    st_addr(L, t + L->daddr, daddr);
+    t[L->citer] = 0;
+    t[L->citer + 1] = 0;
+
+    csr = ld32(t + CH_CSR);
+    csr &= ~(CH_CSR_ERQ | CH_CSR_ACTIVE);
+    csr |= CH_CSR_DONE;
+    st32(t + CH_CSR, csr);
+
+    st32(t + CH_INT, 1);
+    if (ch < s->num_channels) {
+        qemu_irq_raise(s->irq[ch]);
+    }
+}
+
 /* Execute a channel's TCD: move CITER * NBYTES bytes SADDR->DADDR. */
 static void edma_run_channel(IMX95EdmaState *s, int ch)
 {
@@ -210,21 +238,103 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
     }
 
     /* Completion: channel done, request disabled, interrupt pending. */
-    st_addr(L, t + L->saddr, saddr);          /* harmless bookkeeping */
-    st_addr(L, t + L->daddr, daddr);
-    /* CITER reads back as 0 so the driver computes a full real count. */
-    t[L->citer] = 0;
-    t[L->citer + 1] = 0;
+    edma_finish(s, ch, saddr, daddr);
+}
 
-    uint32_t csr = ld32(t + CH_CSR);
-    csr &= ~(CH_CSR_ERQ | CH_CSR_ACTIVE);
-    csr |= CH_CSR_DONE;
-    st32(t + CH_CSR, csr);
+/*
+ * Decode the linear (non-cyclic, no minor-loop-offset) element walk of a
+ * channel's TCD - the common shape for a peripheral TX or RX slave transfer.
+ * Returns the number of ESIZE elements to move, and the walk parameters. NULL
+ * out / a false return when the TCD is cyclic or uses a minor-loop offset
+ * go through edma_run_channel / edma_service_minor unchanged).
+ */
+typedef struct {
+    uint64_t saddr, daddr;
+    int16_t soff, doff;
+    uint32_t esize;
+    uint64_t elems;
+} EdmaWalk;
 
-    st32(t + CH_INT, 1);
-    if (ch < s->num_channels) {
-        qemu_irq_raise(s->irq[ch]);
+static bool edma_decode_walk(IMX95EdmaState *s, int ch, EdmaWalk *w)
+{
+    uint8_t *t = s->chan[ch].regs;
+    const EdmaTcdLayout *L = TCD(s);
+    uint32_t nb_raw = ld32(t + L->nbytes);
+    uint16_t attr = ld16(t + L->attr);
+    uint16_t citer = ld16(t + L->citer) & ITER_MASK;
+    uint32_t ssize = 1u << ATTR_SSIZE(attr);
+    uint32_t dsize = 1u << ATTR_DSIZE(attr);
+    int32_t mloff;
+    uint32_t nbytes = edma_decode_nbytes(nb_raw, &mloff);
+
+    w->esize = MAX(ssize, dsize);
+    if (nb_raw & (NBYTES_SMLOE | NBYTES_DMLOE)) {
+        return false;               /* minor-loop offset: not this path */
     }
+    if (citer == 0) {
+        citer = 1;
+    }
+    if (w->esize == 0 || nbytes == 0 || nbytes % w->esize) {
+        return false;
+    }
+    w->saddr = ld_addr(L, t + L->saddr);
+    w->daddr = ld_addr(L, t + L->daddr);
+    w->soff = (int16_t)ld16(t + L->soff);
+    w->doff = (int16_t)ld16(t + L->doff);
+    w->elems = (uint64_t)citer * (nbytes / w->esize);
+    return w->elems <= IMX95_EDMA_MAX_XFER_ELEMS;
+}
+
+/*
+ * Run a memory->peripheral (TX) channel byte-locked with a peripheral->memory
+ * (RX) channel, one element each in turn - the way a full-duplex peripheral
+ * (LPSPI) paces TX and RX DMA requests off the same shifted word: each
+ * word shifted out produces one word shifted in. Running TX to completion
+ * first would push the whole transfer into the device's small RX FIFO
+ * (16 deep on imx95_lpspi), overflow it, and the RX drain would then read
+ * stale/empty data past the FIFO depth. Interleaving keeps one element
+ * flight, so any transfer length crosses intact.
+ *
+ * ONLY for the byte-locked case: TX and RX must move the same element count.
+ * That holds for SPI (one rx word per tx word) and for a pure LPI2C RXDATA run
+ * (each MTDR RECV_DATA command synchronously pushes one MRDR byte). A command
+ * stream where some tx words produce no rx data - an LPI2C sequence carrying
+ * START/STOP, tx count != rx count - is NOT byte-locked; those keep the ordered
+ * TX-then-RX drain, the shape hw/i2c/imx_lpi2c relies on.
+ */
+static void edma_run_txrx(IMX95EdmaState *s, int tx, int rx)
+{
+    EdmaWalk tw, rw;
+    uint64_t i;
+    uint8_t buf[8];
+
+    if (!edma_decode_walk(s, tx, &tw) || !edma_decode_walk(s, rx, &rw) ||
+        tw.esize > sizeof(buf) || rw.esize > sizeof(buf) ||
+        tw.elems != rw.elems) {
+        /* Not a byte-locked pair: keep the ordered TX-then-RX drain. */
+        edma_run_channel(s, tx);
+        edma_run_channel(s, rx);
+        return;
+    }
+
+    for (i = 0; i < tw.elems; i++) {
+        /* one TX element: mem -> device (fills the device RX FIFO by one) */
+        address_space_read(&address_space_memory, tw.saddr,
+                           MEMTXATTRS_UNSPECIFIED, buf, tw.esize);
+        address_space_write(&address_space_memory, tw.daddr,
+                            MEMTXATTRS_UNSPECIFIED, buf, tw.esize);
+        tw.saddr += tw.soff;
+        tw.daddr += tw.doff;
+        /* one RX element: device -> mem (drains the byte just produced) */
+        address_space_read(&address_space_memory, rw.saddr,
+                           MEMTXATTRS_UNSPECIFIED, buf, rw.esize);
+        address_space_write(&address_space_memory, rw.daddr,
+                            MEMTXATTRS_UNSPECIFIED, buf, rw.esize);
+        rw.saddr += rw.soff;
+        rw.daddr += rw.doff;
+    }
+    edma_finish(s, tx, tw.saddr, tw.daddr);
+    edma_finish(s, rx, rw.saddr, rw.daddr);
 }
 
 /*
@@ -347,6 +457,16 @@ static void edma_drain_armed_rx(IMX95EdmaState *s)
     }
 }
 
+static int edma_find_armed_rx(IMX95EdmaState *s)
+{
+    for (int i = 0; i < s->num_channels; i++) {
+        if (s->chan[i].armed) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* CH_CSR was written with ERQ set: arm or run the channel. */
 static void edma_trigger(IMX95EdmaState *s, int ch)
 {
@@ -378,8 +498,22 @@ static void edma_trigger(IMX95EdmaState *s, int ch)
         /* device -> memory: defer until the peripheral has data (a tx run). */
         c->armed = true;
     } else {
-        /* memory -> device: push now, then let any armed rx channel drain. */
-        edma_run_channel(s, ch);
+        /*
+         * memory -> device. If an rx channel is armed for the same peripheral
+         * (the fsl-lpspi driver issues rx before tx), interleave them so each
+         * shifted word's tx-fill is drained immediately - a full-duplex device
+         * paces tx/rx off one word, and its rx FIFO is small (16). Running tx
+         * to completion first would overflow that FIFO and the rx drain would
+         * reads empty past it. No armed rx: a plain tx (or mem->mem).
+         */
+        int rx = edma_find_armed_rx(s);
+
+        if (rx >= 0) {
+            s->chan[rx].armed = false;
+            edma_run_txrx(s, ch, rx);
+        } else {
+            edma_run_channel(s, ch);
+        }
         edma_drain_armed_rx(s);
     }
 }

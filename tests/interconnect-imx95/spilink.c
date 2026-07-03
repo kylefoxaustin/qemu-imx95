@@ -83,10 +83,15 @@ int main(int argc, char **argv)
      * search is alignment-independent, unlike matching the first plen bytes.
      */
     /*
-     * Clock in small chunks: the LPSPI model's RX FIFO is 16 deep and the
-     * driver writes a whole spidev transfer to TDR before draining RX, so a
-     * receive larger than the FIFO overflows and drops bytes. 8 bytes/xfer
-     * stays comfortably under the FIFO depth.
+     * Clock 8 bytes/xfer. The RX-FIFO-overflow reason for small chunks is gone -
+     * the i.MX95 fsl-lpspi runs the receive over eDMA and the eDMA now
+     * interleaves tx-fill and rx-drain byte-by-byte (hw/dma/imx95_edma.c
+     * edma_run_txrx), so a receive longer than the 16-deep FIFO no longer drops
+     * bytes. Small chunks remain deliberate here for a different reason: this
+     * oracle clocks continuously across the window, and every dummy word is
+     * forwarded to the peer over the socket; a large chunk floods the peer's
+     * 256-deep spi-link FIFO faster than it drains, back-pressures the socket and
+     * blocks the clock. 8 bytes/xfer keeps the flow gentle.
      */
     memset(tx, 0, sizeof(tx));
     start = time(NULL);
