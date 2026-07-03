@@ -8,34 +8,23 @@
 # guest B's spi-link -> LPSPI -> spidev, verified byte-exact on the receiver.
 #
 # SPI is master-driven, so each side is an LPSPI *master* with a spi-link SSI
-# peripheral on its bus (-device spi-link,bus=lpspi1,chardev=...). spi-link
+# peripheral on its bus (-device spi-link,bus=lpspi7,chardev=...). spi-link
 # forwards each shifted-out byte (MOSI) to the chardev and returns peer bytes on
 # MISO from an rx FIFO - the sender clocks the payload out, the receiver clocks
-# dummy bytes to shift it in. The base EVK DTB disables the LPSPIs, so the
-# harness enables lpspi1 (spi@44360000), drops its dmas (the model is PIO), and
-# adds a spidev child so the guest exposes /dev/spidev*.
+# dummy bytes to shift it in.
 #
-# WIP DIAGNOSIS (95) - ROOT-CAUSED: /dev/spidev binds (PARAM.PCSNUM fix) + the
-# spidev ioctl completes, but the payload does NOT cross. Reliable register
-# tracing (fflush) shows the 95 guest fsl-lpspi drives SPI via eDMA, NOT PIO:
-# every transfer writes DER=DER_TDDE|DER_RDDE (0x3) - which the driver does ONLY
-# when usedma==true - and never writes TDR (0x64) / reads FSR/RDR. So the eDMA is
-# meant to move the TX buffer to TDR, but imx95_lpspi has no dma-req wired to the
-# eDMA (unlike LPUART2/3 + SAI, fsl-imx95.c:2003/2016), so the eDMA never writes
-# TDR -> no ssi_transfer -> 0 bytes reach spi_link. The ioctl still completes (the
-# DMA-completion path fires), masking the missing data. Persists even with the DT
-# spi-dmas stripped AND edma1 disabled (the driver always takes usedma). i.MX91/93
-# run the SAME fsl-lpspi in PIO (holobench: 91=PIO), so their TDR writes hit
-# spi_link - that is why they pass and 95 does not.
-#
-# FIX (3 parts, scoped): (1) imx95_lpspi.c: add a "dma-req" GPIO out, assert on
-# DER_TDDE/RDDE; (2) imx95_edma.c edma_dma_request(): also run NON-cyclic ERQ
-# channels (edma_run_tcd) - today it only services cyclic (audio/LPUART-RX);
-# (3) fsl-imx95.c: wire lpspi1 TX/RX dma-req to edma1 req inputs (like LPUART).
-# Then the eDMA writes TDR -> ssi_transfer -> spi_link and the payload crosses.
-#
-# spi-link + the LPSPI SSI-master model are the fleet-shared transport (authored
-# on i.MX 91, hw/ssi/spi_link.c ported verbatim). Required artifacts (env):
+# On the 19x19 EVK, lpspi7 (spi@42710000) is the enabled SPI master (an lwn,bk4
+# node); the harness re-points its child at a plain spidev (rohm,dh2228fv is in
+# the kernel spidev allow-list) so the guest exposes /dev/spidev0.0. lpspi7 keeps
+# its DTB dmas because the 95 fsl-lpspi driver runs transfers over eDMA (usedma):
+# the eDMA bursts each 8-bit word to TDR one BYTE at a time, so imx95_lpspi must
+# accept byte-width MMIO (fixed: lpspi_ops .valid/.impl min_access_size=1; a
+# 4-byte-only window silently dropped every DMA burst and nothing reached the SSI
+# bus - the bug this test caught). Then the eDMA's TDR writes hit lpspi_transfer
+# -> ssi_transfer -> spi-link exactly like a PIO write would on i.MX91/93 (which
+# run the same driver in PIO). spi-link + the LPSPI SSI-master model are the
+# fleet-shared transport (authored on i.MX 91, hw/ssi/spi_link.c ported verbatim).
+# Required artifacts (env):
 #   QEMU, KBUILD (Image + dtb + scripts/dtc/dtc), SM_ELF, an aarch64 cross gcc.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -65,24 +54,18 @@ SPID=; CPID=
 # ---- build the spidev oracle (static aarch64) -------------------------------
 "$CROSS" -O2 -static -o "$WORK/spilink" "$HERE/spilink.c" || die "spilink build failed"
 
-# ---- patch the DTB: enable lpspi1 (spi@44360000) + a spidev child -----------
-# Flip spi@44360000 to okay, drop its dmas (imx95_lpspi is PIO - ssi_transfer,
-# no eDMA), and add a spidev@0 child (rohm,dh2228fv is in the kernel spidev
-# allow-list) so the guest exposes /dev/spidev*. lpspi1 is 0x44360000 on i.MX 95
-# too, so the same node patch as the i.MX 91/93 harnesses applies.
+# ---- patch the DTB: give lpspi7 (spi@42710000) a plain spidev child ---------
+# lpspi7 is already status=okay on the EVK with an lwn,bk4 child; swap that child's
+# compatible for rohm,dh2228fv (kernel spidev allow-list) so the guest binds
+# spidev and exposes /dev/spidev0.0. Keep the node's dmas: the fsl-lpspi driver
+# runs the transfer over eDMA, which the imx95_lpspi byte-access fix now services.
 "$DTC" -I dtb -O dts "$DTB" 2>/dev/null > "$WORK/base.dts" || die "dtc decompile failed"
 awk '
-  /spi@44360000 \{/ { inn = 1 }
-  inn && /dmas =|dma-names =/ { next }
-  inn && /status = "disabled"/ { print "\t\t\t\tstatus = \"okay\";"; next }
-  inn && /^\t\t\t\};/ {
-    print "\t\t\t\tspidev@0 {";
-    print "\t\t\t\t\tcompatible = \"rohm,dh2228fv\";";
-    print "\t\t\t\t\treg = <0x00>;";
-    print "\t\t\t\t\tspi-max-frequency = <0xf4240>;";
-    print "\t\t\t\t};";
-    print; inn = 0; next
+  /spi@42710000 \{/ { inn = 1 }
+  inn && /compatible = "lwn,bk4"/ {
+    print "\t\t\t\t\tcompatible = \"rohm,dh2228fv\";"; next
   }
+  inn && /^\t\t\t\};/ { inn = 0 }
   { print }
 ' "$WORK/base.dts" > "$WORK/spi.dts"
 "$DTC" -I dts -O dtb "$WORK/spi.dts" 2>/dev/null > "$WORK/spi.dtb" || die "dtc recompile failed"
@@ -107,7 +90,7 @@ exec > /dev/console 2>&1
 n=0; while [ ! -c "$(ls /dev/spidev* 2>/dev/null | head -1)" ] && [ $n -lt 30 ]; do
     sleep 1; n=$((n+1)); done
 S=$(ls /dev/spidev* 2>/dev/null | head -1)
-[ -c "$S" ] || { echo "SPILINK:FAIL:no /dev/spidev (lpspi1 not bound)"; \
+[ -c "$S" ] || { echo "SPILINK:FAIL:no /dev/spidev (lpspi7 not bound)"; \
                  dmesg | grep -iE 'spi|lpspi' | tail -5; busybox poweroff -f; }
 echo "=== INTERCONNECT spi ($ROLE on $S) ==="
 if [ "$ROLE" = recv ]; then
@@ -137,7 +120,7 @@ boot() {                    # $1=initrd  $2=chardev-args  $3=logfile
         -kernel "$IMAGE" -dtb "$DTB2" -initrd "$1" \
         -append "earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
         -device loader,file="$SM_ELF",cpu-num=6 \
-        $2 -device spi-link,bus=lpspi1,chardev=spil \
+        $2 -device spi-link,bus=lpspi7,chardev=spil \
         -serial file:"$3" -serial null -monitor none >/dev/null 2>&1 &
 }
 

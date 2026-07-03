@@ -168,7 +168,15 @@ static const MemoryRegionOps lpspi_ops = {
     .read = lpspi_read,
     .write = lpspi_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    /*
+     * Allow byte/half/word access: the CPU (PIO) writes TDR 32 bits at a time,
+     * but when spi-fsl-lpspi runs the transfer over eDMA the DMA engine bursts
+     * to TDR (and drains RDR) one element at a time - typically a single byte
+     * for an 8-bit word. A 4-byte-only window silently drops those DMA accesses
+     * so the transfer never reaches the SSI bus.
+     */
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
 };
 
 static void lpspi_reset(DeviceState *dev)
