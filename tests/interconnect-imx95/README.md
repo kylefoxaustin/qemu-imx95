@@ -80,3 +80,77 @@ Env knobs: `PORT` (host TCP port for the chardev link, default 12500), `TMO`.
   client whose connect attempt errored against a vanishing peer `abort()`ed at
   teardown (`yank_unregister_function` on a never-registered channel). That fix
   is a cross-SoC one - originally i.MX93, carried on i.MX91 and here.
+
+## run-spi.sh - LPSPI leg
+
+Two instances, each an LPSPI **master** with a `spi-link` SSI peripheral on its
+bus (`-device spi-link,bus=lpspi7,chardev=`), socket-bridged (server <-> a
+`reconnect-ms` connecting client). `spi-link` forwards each shifted-out byte
+(MOSI) to the chardev and returns peer bytes on MISO from an rx FIFO; the sender
+clocks a known payload out over `/dev/spidev0.0`, the receiver clocks dummy bytes
+to shift it in and verifies it **byte-exact** (`SPILINK:PASS`).
+
+```
+QEMU=build/qemu-system-aarch64 \
+KBUILD=$HOME/Documents/linux-imx95-build \
+SM_ELF=$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf \
+    bash tests/interconnect-imx95/run-spi.sh
+```
+
+Env knobs: `PAYLOAD`, `TMO`; needs an aarch64 cross gcc (builds the `spilink.c`
+spidev oracle static). `spi-link` (`hw/ssi/spi_link.c`) is the fleet-shared SPI
+transport, authored on i.MX 91 and ported verbatim (also on i.MX 93 / MCXN947).
+
+### What this exercises
+
+- **The full eDMA-driven SPI datapath.** On the 19x19 EVK the enabled SPI master
+  is **lpspi7** (`spi@42710000`); the harness re-points its `lwn,bk4` child at a
+  plain `rohm,dh2228fv` spidev and keeps its `dmas`. The i.MX95 `fsl-lpspi`
+  driver runs the transfer over **eDMA** (usedma), which bursts each 8-bit word
+  to `TDR` one **byte** at a time. `imx95_lpspi` therefore has to accept
+  byte-width MMIO (`lpspi_ops .valid/.impl min_access_size=1`); a 4-byte-only
+  window silently dropped every DMA burst so nothing reached the SSI bus. The
+  eDMA's `TDR` writes then hit `lpspi_transfer` -> `ssi_transfer` -> `spi-link`
+  exactly like a PIO write would (i.MX91/93 run the same driver in PIO).
+- The two LPSPI masters are independent - each clocks its own bus - so the link
+  is a byte stream in each direction over the socket, not a clocked full-duplex
+  pair; a substring search on the receiver rides out the boot-offset window.
+
+## run-can.sh - FlexCAN leg
+
+Two instances, each a **FlexCAN** (`can0`) on its own emulated `can-bus`, joined
+by a `can-host-chardev` object over a socket chardev:
+
+```
+-object can-bus,id=cb -machine canbus0=cb,canbus1=cb
+-chardev socket,id=canl,path=SOCK,server=on|off,reconnect-ms=1000
+-object can-host-chardev,id=canh,canbus=cb,chardev=canl
+```
+
+A known frame (`id 0x321 "CANLink!"`) crosses `FlexCAN TX -> can-bus ->
+can-host-chardev -> socket -> peer -> FlexCAN RX` and is verified **byte-exact**
+on the receiver (`CANLINK:PASS`).
+
+```
+QEMU=build/qemu-system-aarch64 \
+KBUILD=$HOME/Documents/linux-imx95-build \
+SM_ELF=$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf \
+    bash tests/interconnect-imx95/run-can.sh
+```
+
+Env knobs: `TMO`; needs an aarch64 cross gcc (builds `canlink.c`) and the CAN
+kernel modules (`can/can-dev/can-raw/flexcan`) from the kernel build. Reuses the
+`tests/flexcan` DT overlay + SocketCAN bring-up helpers.
+
+### What this exercises
+
+- **`can-host-chardev`** (`net/can/can_host_chardev.c`) is a generic `CanHost`
+  backend that bridges an emulated `can-bus` to a chardev instead of a host
+  SocketCAN interface - so **no host vcan / root** is needed (unlike
+  `can-host-socketcan`). The wire format is the raw `qemu_can_frame`; the reader
+  reassembles a full frame from the byte stream before injecting it locally.
+- Two harness gotchas are baked in: `can-host-chardev` is registered among the
+  *delayed* `-object` types (`system/vl.c`) because it references a chardev, and
+  **both** canbuses are wired to `cb` (`canbus0=cb,canbus1=cb`) so that whichever
+  FlexCAN Linux enumerates as `can0` is on the bridged bus (an unwired `can0`
+  silently drops TX).

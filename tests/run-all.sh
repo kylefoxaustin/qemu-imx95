@@ -20,12 +20,18 @@
 #   5. v1.x boot-matrix: tests/m33-m7-only/run.sh
 #      (SM + M7 with no A55 cluster - fills the "M-side runs
 #      independently of Linux" matrix gap)
+#   6. interconnect legs: tests/interconnect-imx95/run-{eth,uart,spi,can}.sh
+#      (two i.MX95 guests joined over a socket bridge, application
+#      bytes proven byte-exact across ENETC / LPUART / LPSPI / FlexCAN;
+#      each skip()s cleanly if its extra artifacts are absent)
 #
 # Future v1.x steps will add tests/a-first/run.sh and lifecycle /
 # cohabitation tests; each gets its own entry here.
 #
 # Required artifacts (paths set via env vars):
 #   QEMU SM_ELF KERNEL DTB INITRD CM7_ELF
+#   plus, for the interconnect legs: KBUILD (kernel build tree with the CAN
+#   modules + scripts/dtc) and an aarch64 cross gcc on PATH.
 # Defaults match the development host's layout; override as needed.
 
 set -e
@@ -49,6 +55,14 @@ export QEMU_TEST_IMX95_KERNEL=$KERNEL
 export QEMU_TEST_IMX95_DTB=$DTB
 export QEMU_TEST_IMX95_INITRD=$INITRD
 export QEMU_TEST_IMX95_SM_FW=$SM_ELF
+
+# The board-to-board interconnect legs use their own env names (QEMU/KBUILD/
+# SM_ELF); map them here so one set of overrides drives the whole wrapper. They
+# skip() cleanly when their extra artifacts (an aarch64 cross gcc, the CAN
+# kernel modules) are absent, so this stays safe on a minimal host.
+export QEMU=${QEMU:-$REPO/build/qemu-system-aarch64}
+export KBUILD=${KBUILD:-$_ARTIFACTS/linux-build}
+export SM_ELF
 
 echo "============================================="
 echo "=== v1.0 regression: functional test       ==="
@@ -89,10 +103,24 @@ tests/m33-m7-only/run.sh
 
 echo
 echo "============================================="
+echo "=== interconnect legs (two i.MX95 guests,   ==="
+echo "===   byte-exact over a socket bridge):     ==="
+echo "===   ENETC / LPUART / LPSPI / FlexCAN      ==="
+echo "===   (skip cleanly if artifacts absent)   ==="
+echo "============================================="
+tests/interconnect-imx95/run-eth.sh
+tests/interconnect-imx95/run-uart.sh
+tests/interconnect-imx95/run-spi.sh
+tests/interconnect-imx95/run-can.sh
+
+echo
+echo "============================================="
 echo "All tests passed:"
 echo "  - v1.0 regression (A55 + M33 + Linux to userspace)"
 echo "  - v1.x Step 2 unit (M7 hello firmware)"
 echo "  - v1.x Step 2 integration (A55 + M33 + M7 parallel)"
 echo "  - v1.x Step 3 integration (SM-driven M7 release path)"
 echo "  - v1.x boot-matrix (SM + M7, no A55)"
+echo "  - interconnect legs: ENETC / LPUART / LPSPI / FlexCAN"
+echo "    (two guests, byte-exact over a socket bridge)"
 echo "============================================="
