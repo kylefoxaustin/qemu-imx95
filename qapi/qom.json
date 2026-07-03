@@ -274,6 +274,23 @@
   'if': 'CONFIG_LINUX' }
 
 ##
+# @CanHostChardevProperties:
+#
+# Properties for can-host-chardev objects, which bridge a can-bus to a
+# chardev (e.g. a socket) so two QEMU instances form one CAN segment
+# without a host SocketCAN interface.
+#
+# @canbus: object ID of the can-bus object to bridge
+#
+# @chardev: ID of the chardev the CAN frames are carried over
+#
+# Since: 10.1
+##
+{ 'struct': 'CanHostChardevProperties',
+  'data': { 'canbus': 'str',
+            'chardev': 'str' } }
+
+##
 # @ColoCompareProperties:
 #
 # Properties for colo-compare objects.
@@ -1206,6 +1223,7 @@
     'authz-pam',
     'authz-simple',
     'can-bus',
+    'can-host-chardev',
     { 'name': 'can-host-socketcan',
       'if': 'CONFIG_LINUX' },
     'colo-compare',
@@ -1284,6 +1302,7 @@
       'authz-listfile':             'AuthZListFileProperties',
       'authz-pam':                  'AuthZPAMProperties',
       'authz-simple':               'AuthZSimpleProperties',
+      'can-host-chardev':           'CanHostChardevProperties',
       'can-host-socketcan':         { 'type': 'CanHostSocketcanProperties',
                                       'if': 'CONFIG_LINUX' },
       'colo-compare':               'ColoCompareProperties',

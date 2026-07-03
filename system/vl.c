@@ -1967,6 +1967,7 @@ static bool object_create_early(const char *type)
 
     /* Reason: property "chardev" */
     if (g_str_equal(type, "rng-egd") ||
+        g_str_equal(type, "can-host-chardev") ||
         g_str_equal(type, "qtest")) {
         return false;
     }

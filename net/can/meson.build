@@ -1,5 +1,5 @@
 can_ss = ss.source_set()
-can_ss.add(files('can_core.c', 'can_host.c'))
+can_ss.add(files('can_core.c', 'can_host.c', 'can_host_chardev.c'))
 if host_os == 'linux'
   can_ss.add(files('can_socketcan.c'))
 endif
