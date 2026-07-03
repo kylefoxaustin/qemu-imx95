@@ -178,6 +178,17 @@ static void imx95_anatop_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     anatop_seed_sys_pll1(s);
+    /*
+     * DRAM_PLL is deliberately left honest-0 (not seeded). Unlike SYS_PLL1,
+     * seeding it to a live set-point makes the SM treat DRAM as trained and
+     * drive its DRAM-DVFS path (DEV_SM_PerfDramFreqUpdate), which pokes the
+     * unmodelled DDR controller/PHY and then hangs - the A55's SCMI channel
+     * times out mid-boot (-ETIMEDOUT) and the console clock never comes up.
+     * The EVK set-points are known (s_perfPllCfgDram in the SM's dev_sm_perf.c:
+     * NOM VCO 24MHz*200 = 4800 MHz / ODIV 8 -> 600 MHz -> 4800 MT/s), so a real
+     * seed would need the DDRC perf path modelled too. Nothing in Linux reads
+     * the DRAM_PLL rate, so honest-0 is correct here.
+     */
 }
 
 static void imx95_anatop_init(Object *obj)
