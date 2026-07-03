@@ -249,10 +249,82 @@ static int do_recv(const char *ifn)
     return 1;
 }
 
+/*
+ * respond: for the cross-SoC check against the MCXN947 bare-metal FlexCAN
+ * firmware (mcxn947qemu tests/mcxn-can-link). That firmware sends std ID 0x321
+ * with payload DE AD BE EF CA FE BA BE and waits for a std ID 0x322 reply with
+ * payload 11 22 33 44 55 66 77 88. Receive + verify its frame byte-exact and
+ * send the reply, so the two FlexCANs round-trip over one can-host-chardev.
+ */
+#define MCX_TX_ID   0x321
+#define MCX_RX_ID   0x322
+static const uint8_t MCX_TX_DATA[8] = {
+    0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe
+};
+static const uint8_t MCX_RX_DATA[8] = {
+    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+};
+
+static int do_respond(const char *ifn)
+{
+    time_t start;
+    int fd, got = 0;
+
+    if (bringup(ifn, 500000)) {
+        printf("CANLINK:FAIL:respond bring-up\n");
+        return 1;
+    }
+    fd = can_open(ifn);
+    if (fd < 0) {
+        printf("CANLINK:FAIL:respond socket\n");
+        return 1;
+    }
+    printf("CANLINK:RESPOND ready on %s\n", ifn);
+    fflush(stdout);
+
+    start = time(NULL);
+    while (time(NULL) - start < 60) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        struct can_frame in = { 0 }, out = { 0 };
+
+        if (poll(&pfd, 1, 1000) <= 0) {
+            continue;
+        }
+        if (read(fd, &in, sizeof(in)) != sizeof(in)) {
+            continue;
+        }
+        if ((in.can_id & CAN_SFF_MASK) != MCX_TX_ID || in.can_dlc != 8 ||
+            memcmp(in.data, MCX_TX_DATA, 8)) {
+            continue;
+        }
+        got++;
+        out.can_id = MCX_RX_ID;
+        out.can_dlc = 8;
+        memcpy(out.data, MCX_RX_DATA, 8);
+        if (write(fd, &out, sizeof(out)) != sizeof(out)) {
+            printf("CANLINK:FAIL:respond write %s\n", strerror(errno));
+            return 1;
+        }
+        printf("CANLINK:GOT-MCX 0x%03x #%d byte-exact -> replied 0x%03x\n",
+               MCX_TX_ID, got, MCX_RX_ID);
+        fflush(stdout);
+        if (got >= 5) {
+            break;
+        }
+    }
+    if (got) {
+        printf("CANLINK:PASS: MCX frame 0x%03x crossed byte-exact, replied "
+               "0x%03x (x%d)\n", MCX_TX_ID, MCX_RX_ID, got);
+        return 0;
+    }
+    printf("CANLINK:FAIL: no MCX 0x%03x frame in window\n", MCX_TX_ID);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s send|recv <if> [count]\n", argv[0]);
+        fprintf(stderr, "usage: %s send|recv|respond <if> [count]\n", argv[0]);
         return 2;
     }
     if (!strcmp(argv[1], "send")) {
@@ -260,6 +332,9 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[1], "recv")) {
         return do_recv(argv[2]);
+    }
+    if (!strcmp(argv[1], "respond")) {
+        return do_respond(argv[2]);
     }
     fprintf(stderr, "canlink: unknown role '%s'\n", argv[1]);
     return 2;

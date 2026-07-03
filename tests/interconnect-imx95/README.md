@@ -154,3 +154,30 @@ kernel modules (`can/can-dev/can-raw/flexcan`) from the kernel build. Reuses the
   **both** canbuses are wired to `cb` (`canbus0=cb,canbus1=cb`) so that whichever
   FlexCAN Linux enumerates as `can0` is on the bridged bus (an unwired `can0`
   silently drops TX).
+
+## Cross-SoC checks - xcheck-spi-91.sh / xcheck-can-mcx.sh
+
+The same transports (`spi_link.c`, `can-host-chardev`) are fleet-shared, so an
+i.MX95 instance links byte-exact not just to another i.MX95 but to a **different
+SoC's** QEMU over the identical socket-bridge shape. Two self-contained cross-SoC
+checks (both ends on one host, one side server / one side reconnect-ms client)
+live here; each `skip()`s cleanly when the peer tree is not built locally, and
+all peer paths are env-overridable.
+
+- **`xcheck-spi-91.sh`** - i.MX95 <-> i.MX91 SPI, **both directions**, one
+  `spi_link.c`. The interesting part is that it bridges two *different* LPSPI
+  datapaths transparently: the i.MX95 runs the transfer over **eDMA** (byte-wide
+  TDR bursts) while the i.MX91 runs it in **PIO** (32-bit TDR writes). Both
+  `91 PIO -> 95 eDMA` and `95 eDMA -> 91 PIO` verify byte-exact. Override the
+  peer with `QEMU91`, `DEPLOY91` (or `IMG91`/`DTB91`/`DTC91`), `CPIO91`.
+
+- **`xcheck-can-mcx.sh`** - i.MX95 <-> MCXN947 CAN, **both directions**, one
+  `can-host-chardev`. Joins a **Linux SocketCAN** node (95) and a **bare-metal
+  Cortex-M33** node (MCX firmware) on one bus over a TCP socket: MCX sends std
+  `0x321`, the 95 (`canlink respond`) verifies + replies std `0x322`, the MCX ISR
+  verifies the reply. The MCX firmware resends until the peer connects, so the
+  slow 95 responder is booted first, then the fast MCX client. Override the peer
+  with `QEMU_MCX`, `MCX_ELF`.
+
+Proven pairwise across imx91 / imx93 / imx95 / MCXN947 - Linux-PIO, Linux-eDMA,
+and bare-metal masters all interoperate over the same socket bridge.
