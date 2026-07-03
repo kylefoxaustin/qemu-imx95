@@ -15,11 +15,24 @@
 # harness enables lpspi1 (spi@44360000), drops its dmas (the model is PIO), and
 # adds a spidev child so the guest exposes /dev/spidev*.
 #
-# WIP DIAGNOSIS (95): /dev/spidev binds (PARAM.PCSNUM fix) + the spidev ioctl
-# completes, but the payload does NOT cross: reliable socat isolation shows the
-# sender fsl-lpspi never writes TDR (0x64) in PIO mode, so ssi_transfer never
-# reaches spi_link (0 bytes on the wire). 91/93 pass with the same driver +
-# spi_link, so it is a subtle fsl,imx95-spi PIO-path interaction still to crack.
+# WIP DIAGNOSIS (95) - ROOT-CAUSED: /dev/spidev binds (PARAM.PCSNUM fix) + the
+# spidev ioctl completes, but the payload does NOT cross. Reliable register
+# tracing (fflush) shows the 95 guest fsl-lpspi drives SPI via eDMA, NOT PIO:
+# every transfer writes DER=DER_TDDE|DER_RDDE (0x3) - which the driver does ONLY
+# when usedma==true - and never writes TDR (0x64) / reads FSR/RDR. So the eDMA is
+# meant to move the TX buffer to TDR, but imx95_lpspi has no dma-req wired to the
+# eDMA (unlike LPUART2/3 + SAI, fsl-imx95.c:2003/2016), so the eDMA never writes
+# TDR -> no ssi_transfer -> 0 bytes reach spi_link. The ioctl still completes (the
+# DMA-completion path fires), masking the missing data. Persists even with the DT
+# spi-dmas stripped AND edma1 disabled (the driver always takes usedma). i.MX91/93
+# run the SAME fsl-lpspi in PIO (holobench: 91=PIO), so their TDR writes hit
+# spi_link - that is why they pass and 95 does not.
+#
+# FIX (3 parts, scoped): (1) imx95_lpspi.c: add a "dma-req" GPIO out, assert on
+# DER_TDDE/RDDE; (2) imx95_edma.c edma_dma_request(): also run NON-cyclic ERQ
+# channels (edma_run_tcd) - today it only services cyclic (audio/LPUART-RX);
+# (3) fsl-imx95.c: wire lpspi1 TX/RX dma-req to edma1 req inputs (like LPUART).
+# Then the eDMA writes TDR -> ssi_transfer -> spi_link and the payload crosses.
 #
 # spi-link + the LPSPI SSI-master model are the fleet-shared transport (authored
 # on i.MX 91, hw/ssi/spi_link.c ported verbatim). Required artifacts (env):
