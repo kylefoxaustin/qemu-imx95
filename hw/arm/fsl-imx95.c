@@ -449,7 +449,8 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             /* jpegdec/jpegenc (0x4c500000/4c550000) are real models below. */
             { 0x4c810000, 64 * KiB }, /* syscon */
             /* netc pcie ecam0 (0x4ca00000) is now a real gpex host (v2.x). */
-            { 0x4cb00000, 0x100000 }, /* netc pcie ecam 1 (EMDIO domain) */
+            /* netc pcie ecam1 (0x4cb00000, EMDIO domain) is a real gpex host
+             * below (Path B: the AQR c45 PHY behind the EMDIO). */
             { 0x4cde0000, 64 * KiB }, /* netc-blk-ctrl ierb */
             { 0x4cdf0000, 64 * KiB }, /* netc-blk-ctrl prb */
             /* gpu@4d900000 -> imx95.mali (registration-tier GPU_ID) below */
@@ -1172,6 +1173,66 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                       &error_fatal);
             }
         }
+    }
+
+    /*
+     * Path B: the netc-blk-ctrl's SECOND child ECAM (pcie@4cb00000, its own PCI
+     * domain) carries the external MDIO controller - the EMDIO PCI function
+     * (1131:ee00, mdio@0,0) which fronts the Aquantia c45 10G PHY at MDIO addr 8,
+     * the ethernet@10,0 phy-handle. A second gpex host with the EMDIO endpoint
+     * makes that phy-handle resolve so the stock 10G node comes up through the
+     * real chain (its LINK arrives via the port's internal xPCS / in-band-status)
+     * rather than only via the fixed-link test DTB.
+     */
+    {
+        DeviceState *pcie = qdev_new(TYPE_GPEX_HOST);
+        MemoryRegion *ecam_alias = g_new0(MemoryRegion, 1);
+        MemoryRegion *mmio_alias = g_new0(MemoryRegion, 1);
+        MemoryRegion *ecam_reg, *mmio_reg;
+        int pin;
+
+        /*
+         * EMDIO sits at devfn 00.0; move its gpex root off it -> devfn 30
+         * (ECAM0 uses 31). gpex hardcodes root_bus_path "0000:00", so two roots
+         * at the same devfn would collide on the gpex_root vmstate idstr; a
+         * distinct devfn keeps them unique.
+         */
+        object_property_set_int(object_resolve_path_component(OBJECT(pcie),
+                                                              "gpex_root"),
+                                "addr", PCI_DEVFN(30, 0), &error_abort);
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(pcie), errp)) {
+            return;
+        }
+
+        /* ECAM config window @0x4cb00000 (1 MiB). */
+        ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 0);
+        memory_region_init_alias(ecam_alias, OBJECT(pcie), "emdio-pcie-ecam",
+                                 ecam_reg, 0, 0x100000);
+        memory_region_add_subregion(get_system_memory(), 0x4cb00000,
+                                    ecam_alias);
+
+        /*
+         * BAR window @0x4cce0000 (the pcie@4cb00000 dtsi range, 0x20000). It
+         * lies inside the ENETC ECAM's wider 0x4cc00000 MMIO alias, so overlap
+         * it at higher priority - the ENETC BARs are assigned below 0x4cce0000.
+         */
+        mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 1);
+        memory_region_init_alias(mmio_alias, OBJECT(pcie), "emdio-pcie-mmio",
+                                 mmio_reg, 0x4cce0000, 0x20000);
+        memory_region_add_subregion_overlap(get_system_memory(), 0x4cce0000,
+                                            mmio_alias, 1);
+
+        /* INTx -> GIC SPIs 308..311 (MSI via the ITS is the real path). */
+        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+            int spi = 308 + pin;
+
+            sysbus_connect_irq(SYS_BUS_DEVICE(pcie), pin,
+                               qdev_get_gpio_in(gicdev, spi));
+            gpex_set_irq_num(GPEX_HOST(pcie), pin, spi);
+        }
+
+        pci_realize_and_unref(pci_new(PCI_DEVFN(0, 0), "imx95-netc-emdio"),
+                              PCI_HOST_BRIDGE(pcie)->bus, &error_fatal);
     }
 
     /* On-chip RAM. */
