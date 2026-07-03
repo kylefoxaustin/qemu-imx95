@@ -51,7 +51,7 @@
 #define TCR_CONT (1u << 21)
 
 /* PARAM: tx/rx FIFO depth = 1 << nibble; report 16-entry FIFOs. */
-#define LPSPI_PARAM_VALUE 0x00000404
+#define LPSPI_PARAM_VALUE 0x00040404
 #define LPSPI_VERID_VALUE 0x02000004
 #define LPSPI_FIFO_DEPTH  16
 
@@ -82,10 +82,7 @@ static void lpspi_transfer(IMX95LpspiState *s, uint32_t tx)
     if (!fifo32_is_full(&s->rx)) {
         fifo32_push(&s->rx, rx);
     }
-    s->sr |= SR_TCF;
-    if (!(s->tcr & TCR_CONT)) {
-        s->sr |= SR_FCF;        /* CS deasserts: frame complete */
-    }
+    s->sr |= SR_TCF | SR_FCF;
 }
 
 static uint64_t lpspi_read(void *opaque, hwaddr offset, unsigned size)

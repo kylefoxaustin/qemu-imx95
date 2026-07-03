@@ -629,6 +629,7 @@ config FSL_IMX95
     select IMX95_WDOG
     select IMX95_DDR_PMU
     select IMX95_CCM
+    select SPI_LINK
     select USB_DWC3
     select IMX95_XCACHE
     select IMX95_PMIC
