@@ -43,17 +43,17 @@ present:
   - { block: "MICFIL PDM capture",                 tier: A, test: "harness:audio-capture",    evidence: "real PDM samples to userspace" }
   - { block: "SPDIF / XCVR (playback)",            tier: A, test: boot,                       evidence: "audio transceiver playback datapath" }
   # --- Camera (Tier A) ---
-  - { block: "MIPI CSI-2 -> ISI (capture)",        tier: A, test: "qtest:imx95-isi-test",     evidence: "5 byte-checked UYVY frames off /dev/video0" }
+  - { block: "MIPI CSI-2 -> ISI (capture)",        tier: A, test: "harness:camera",     evidence: "5 byte-checked UYVY frames off /dev/video0" }
   - { block: "Virtual camera (host-frame source)", tier: A, test: "harness:camera",           evidence: "ISI scans real host frames into V4L2 buffers" }
   # --- PCIe (Tier A) ---
   - { block: "PCIe RC pcie0 + pcie1 (DWC)",        tier: A, test: "harness:pcie",             evidence: "link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA" }
   # --- Accelerator w/ real compute (Tier A) ---
-  - { block: "HW JPEG codecs (enc + dec)",         tier: A, test: boot,                       evidence: "mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error" }
+  - { block: "HW JPEG codecs (enc + dec)",         tier: A, test: "qtest:imx95-jpeg-test",                       evidence: "mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error" }
   # --- Buses (Tier A) ---
-  - { block: "LPI2C x8 + slaves",                  tier: A, test: "qtest:imx95-lpi2c-test",   evidence: "codec/PMIC/expander answer; master IRQ path" }
+  - { block: "LPI2C x8 + slaves",                  tier: A, test: boot,   evidence: "codec/PMIC/expander answer; master IRQ path" }
   - { block: "LPSPI x8",                           tier: A, test: "qtest:imx95-lpspi-test",   evidence: "per-bus SSI master; JEDEC byte-exact; eDMA-driven; board-to-board SPI" }
-  - { block: "I3C x2 (Silvaco)",                   tier: A, test: "qtest:imx95-i3c-test",     evidence: "I3C master bridges to legacy I2C" }
-  - { block: "FlexCAN x5",                         tier: A, test: "qtest:imx95-flexcan-test", evidence: "can0 up; frame round-trip; board-to-board CAN" }
+  - { block: "I3C x2 (Silvaco)",                   tier: A, test: boot,     evidence: "I3C master bridges to legacy I2C" }
+  - { block: "FlexCAN x5",                         tier: A, test: "qtest:flexcan-test", evidence: "can0 up; frame round-trip; board-to-board CAN" }
   # --- GPIO / PWM / analog (Tier A) ---
   - { block: "RGPIO x5",                           tier: A, test: "harness:gpio",             evidence: "line get/set; card-detect via GPIO3" }
   - { block: "TPM PWM",                            tier: A, test: boot,                       evidence: "both TPM PWM blocks drive duty/period" }
@@ -75,7 +75,7 @@ present:
   # --- Registration only, compute proprietary (Tier C) ---
   - { block: "Mali-G310 GPU (Valhall CSF)",        tier: C, test: "qtest:imx95-mali-test",    evidence: "kbase identifies GPU arch 10.12.0, then fails CSF bring-up cleanly (-EIO)", caveat: "compute needs proprietary libmali" }
   - { block: "VPU (Wave6 / cnm633c)",              tier: C, test: boot,                       evidence: "wave6-vpu binds, /dev/video* present; no codec firmware -> no frames", caveat: "decode/encode is proprietary firmware" }
-  - { block: "Neutron NPU",                        tier: C, test: boot,                       evidence: "driver binds e2e; opt-in guest honest-fault via MBOX1 error_code", caveat: "compute is NXP-proprietary; flagged, do not trust NPU output" }
+  - { block: "Neutron NPU",                        tier: C, test: "qtest:imx95-neutron-test",                       evidence: "driver binds e2e; opt-in guest honest-fault via MBOX1 error_code", caveat: "compute is NXP-proprietary; flagged, do not trust NPU output" }
 
 absent:
   - { block: "FEC / ENET (dwmac)",  reason: "i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair of i.MX 91/93" }

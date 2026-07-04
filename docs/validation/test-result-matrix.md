@@ -29,14 +29,14 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | SAI3 + WM8962 playback | A | HARNESS | square wave -> eDMA -> SAI FIFO -> wav byte-checked |
 | MICFIL PDM capture | A | HARNESS | real PDM samples to userspace |
 | SPDIF / XCVR (playback) | A | PASS (boot) | audio transceiver playback datapath |
-| MIPI CSI-2 -> ISI (capture) | A | SKIP (not built) | 5 byte-checked UYVY frames off /dev/video0 |
+| MIPI CSI-2 -> ISI (capture) | A | HARNESS | 5 byte-checked UYVY frames off /dev/video0 |
 | Virtual camera (host-frame source) | A | HARNESS | ISI scans real host frames into V4L2 buffers |
 | PCIe RC pcie0 + pcie1 (DWC) | A | HARNESS | link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA |
-| HW JPEG codecs (enc + dec) | A | PASS (boot) | mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error |
-| LPI2C x8 + slaves | A | SKIP (not built) | codec/PMIC/expander answer; master IRQ path |
+| HW JPEG codecs (enc + dec) | A | PASS (qtest) | mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error |
+| LPI2C x8 + slaves | A | PASS (boot) | codec/PMIC/expander answer; master IRQ path |
 | LPSPI x8 | A | PASS (qtest) | per-bus SSI master; JEDEC byte-exact; eDMA-driven; board-to-board SPI |
-| I3C x2 (Silvaco) | A | SKIP (not built) | I3C master bridges to legacy I2C |
-| FlexCAN x5 | A | SKIP (not built) | can0 up; frame round-trip; board-to-board CAN |
+| I3C x2 (Silvaco) | A | PASS (boot) | I3C master bridges to legacy I2C |
+| FlexCAN x5 | A | PASS (qtest) | can0 up; frame round-trip; board-to-board CAN |
 | RGPIO x5 | A | HARNESS | line get/set; card-detect via GPIO3 |
 | TPM PWM | A | PASS (boot) | both TPM PWM blocks drive duty/period |
 | ADC | A | HARNESS | operator-settable adc-chN QOM props; injection verified (was silent-wrong, fixed) |
@@ -52,7 +52,7 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | Audio capture bring-up (BT-SCO + SAI RX) | B | PASS (boot) | cards register; no codec ADC-DAPM route (documented, known-limitations sec.7) |
 | Mali-G310 GPU (Valhall CSF) | C | PASS (qtest) | ⚑ compute needs proprietary libmali; kbase identifies GPU arch 10.12.0, then fails CSF bring-up cleanly (-EIO) |
 | VPU (Wave6 / cnm633c) | C | PASS (boot) | ⚑ decode/encode is proprietary firmware; wave6-vpu binds, /dev/video* present; no codec firmware -> no frames |
-| Neutron NPU | C | PASS (boot) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; opt-in guest honest-fault via MBOX1 error_code |
+| Neutron NPU | C | PASS (qtest) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; opt-in guest honest-fault via MBOX1 error_code |
 
 ## Absent IP — N/A (NOT a negative result)
 
@@ -64,5 +64,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 41 present (24 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 41 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
 
