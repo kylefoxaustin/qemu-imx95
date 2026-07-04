@@ -919,6 +919,21 @@ working artifacts — they are not committed to the repo (the directory is
   the SM built `M=2` (no debug-monitor busy-poll), an idle board drops from
   ~109 % to ~15 % host-CPU/board; a 25-board A/B flipped the density limiter from
   CPU-bound (~29 boards) to RAM-bound — a ~7.3× per-board CPU cut.
+- **v2.4.0 — Path B: the 10G port links through its real PHY chain (on
+  `imx95-netc`).** The stock `ethernet@10,0` (`10gbase-r`,
+  `managed = "in-band-status"`) now comes up at 10 Gbps through a fully-modelled
+  **NETC EMDIO → Aquantia AQR113C → DesignWare xPCS** path — no fixed-link
+  shortcut. A new EMDIO controller (`hw/net/imx95_netc_emdio.c`, a PCI endpoint on
+  a second GPEX host for the bus-1 ECAM) fronts an embedded AQR113C c45 PHY; a
+  model **fidelity fix** flips the ENETC PCI Revision ID 1→4 so the driver routes
+  the in-band PCS through the DW xPCS (not a Lynx PCS) — a wrong revision byte was
+  silently forking the driver down the wrong subsystem — and the AQR vendor probe
+  registers + the xPCS in-band config/link-status handshake complete the link.
+  `tests/netc/run-real-10g.sh` PASSes only when a port reports `Link is Up -
+  10Gbps/Full` with the Aquantia AQR113C driver bound and no `pcs_config`
+  timeout. Also lands the **board-to-board SPI + CAN interconnect** (joining
+  eth/UART): `net/can/can_host_chardev.c` and a real eDMA-driven `fsl-lpspi`
+  over `spi_link`, cross-validated 95↔91 (SPI) and 95↔MCX (CAN).
 
 ## License & credits
 
