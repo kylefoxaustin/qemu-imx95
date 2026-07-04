@@ -326,15 +326,20 @@ absent efuse MAC, and rewrite the `msi-map` to identity (QEMU's ITS uses the
 PCI requester-ID as the DeviceID). The PFs attach to `-nic` backends (not bare
 `-netdev`).
 
-**Third port (ENETC2 / 10G) is a roadmap item, not a trivial extension.** The
-EVK's second physical port is ENETC2 (`ethernet@10,0`, devfn `0x80`), a **10G
-`10gbase-r`** interface. It is *not* "just another 1G PF instance": it uses
-in-band-status link semantics (no MDIO PHY) rather than a fixed/RGMII link, and
-the `netc-blk-ctrl` NETCMIX programming for devfn `0x80` differs from the
-ENETC0/ENETC1 (0x0/0x40) link-MII paths the model currently drives. Until that
-is modelled it stays inert — the DT node and the bus-1 EMDIO ECAM describe PCI
-functions with no backing device, so Linux enumerates an empty bus and those
-nodes produce no probe errors or log noise (verified). On the older
+**Third port (ENETC2 / 10G) — done, two ways (v2.1.0 fixed-link, v2.4.0 real
+chain).** The EVK's second physical port is ENETC2 (`ethernet@10,0`, devfn
+`0x80`), a **10G `10gbase-r`** interface with in-band-status link semantics. It
+comes up two ways: (a) as a third fixed-link PF (`tests/netc/run-10g.sh`), and
+(b) — the v2.4.0 "Path B" work — through the **fully real PHY chain**: a new
+NETC EMDIO controller (`hw/net/imx95_netc_emdio.c`, a PCI endpoint on a second
+GPEX host for the bus-1 ECAM `pcie@4cb00000`) fronting an Aquantia AQR113C c45
+PHY, plus the port's internal DesignWare xPCS. The stock `ethernet@10,0` node
+(real `phy-handle`, `managed = "in-band-status"`) links at 10 Gbps with the
+`Aquantia AQR113C` driver bound and no `pcs_config` timeout
+(`tests/netc/run-real-10g.sh`). The key fix was a model-fidelity one: the ENETC
+PF advertised PCI Revision ID 1, and the driver routes a rev1 in-band PCS
+through a Lynx PCS but a rev4 one through the DW xPCS — so a stray revision byte
+silently forked the driver down the wrong subsystem. On the older
 **`imx95-scaffold`** reference branch (pure v1) networking is not present — NETC
 is the additive v2.0.0 work, now part of the default `imx95-netc` branch.
 
@@ -364,6 +369,53 @@ This is a rootfs/mirror-reachability matter, not a separate model bug.
 Surfaced during the first non-author install-target evaluation (see
 `validation-report.md`'s "First-customer ecosystem readiness check"
 section).
+
+---
+
+## 7. Intentionally-deferred model fidelity (with reasons)
+
+A handful of features are modelled to the point Linux needs and then stop
+short, by deliberate choice. None of these is a *silent-wrong* — the worst
+class, where a model returns a plausible-but-incorrect result; each is either an
+honest "not exercised", an honest "no data", or a clean workaround. They are
+recorded here so the scope is explicit rather than surprising.
+
+- **DPU 2D blit — ROP9 raster ops (deferred by consumer-touched-fields).** The
+  blit engine models fill, copy, Porter-Duff alpha-blend, nearest-neighbour
+  scale, rotate and CSC (qtested). It does **not** model ROP9 raster ops
+  (AND/OR/XOR of source with destination): the mainline `dpu95-blit` driver
+  leaves `ROP9_CONTROL` at its reset (passthrough), which a plain copy already
+  represents correctly, and **no in-tree consumer programs a raster op**. The
+  `ROP9_CONTROL` op-code encoding is RM-only (absent from the driver headers),
+  so modelling it from a guessed layout would risk *breaking* the working
+  passthrough/copy path for zero observable gain. Left at passthrough on
+  purpose.
+
+- **DPU 2D blit — `g2d` userspace end-to-end (proprietary ceiling).** The blit
+  is exposed as a DRM render node and validated by qtest. A full
+  userspace-`g2d`-library 2D op requires NXP's proprietary `libg2d` stack — the
+  same ceiling as the Mali GPU and Amphion VPU (section 3): Linux sees the
+  device, full userspace acceleration is not emulatable.
+
+- **OCOTP fuse nvmem — MAC via DT workaround (ELE-gated).** The FSB fuse shadow
+  is seeded with real NXP-OUI MACs, but the `fsl,imx95-ocotp` nvmem driver
+  hard-defers on `imx_get_se_data_info()`, which needs the EdgeLock (`fsl-se`)
+  secure-enclave driver to fully probe. That probe is a multi-step ELE exchange
+  (SoC info + FW version + `imem_state` + `soc_device_register` + an SE-firmware
+  authenticate path) against an ELE responder that is a deliberate v0.1 stub. So
+  the ENETC MAC is supplied via a `local-mac-address` DT patch in the test
+  harnesses instead of resolving from the efuse nvmem cell. Closing this means a
+  real ELE bring-up to remove a clean, universal workaround — low ROI, deferred.
+
+- **Audio SAI capture — no codec ADC route (shared with i.MX91).** Playback
+  (WM8962/SAI3) and PDM capture (MICFIL) work end-to-end; **SAI RX capture** does
+  not, because there is no codec-driven `RCSR.RE` ADC-DAPM route modelled (the
+  same WM8962-ADC-DAPM gap the i.MX91 has). Capture returns silence, not wrong
+  data.
+
+- **Audio BT-SCO — registration-bar (dummy codec).** The BT-SCO ASoC card
+  registers, but there is no SCO datapath because there is no real SCO codec
+  behind it. Honest absence, not wrong data.
 
 ---
 
