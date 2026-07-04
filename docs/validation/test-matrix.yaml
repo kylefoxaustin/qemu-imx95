@@ -1,0 +1,161 @@
+# i.MX 95 QEMU — canonical capability/test matrix (HUMAN-owned).
+#
+# Single source of truth for both renderings:
+#   * docs/validation/test-result-matrix.md  (detailed; CI fills the result col)
+#   * the README condensed capability table   (via readme_groups, injected between
+#     the <!-- BEGIN/END capability-table --> markers)
+#
+# Tiers (fleet-canonical): A = data-path verified (data actually moves) ·
+# B = driver bring-up / registration bar (binds, may soft-fail) · C = registration
+# only (Linux sees + names it, compute is proprietary/out of scope).
+#
+# tests/gen-test-matrix.py --inject-readme regenerates the README table and
+# verify_groups() FAILS if any present/absent block is un-grouped, double-grouped,
+# or a group's tier disagrees with the block's — so the README table and this
+# matrix physically cannot drift (fleet anti-drift guard, 91's pattern 446062f980).
+
+soc: "i.MX 95"
+board: "imx95-19x19-evk"
+qemu_machine: "imx95-19x19-evk"
+
+present:
+  # --- CPU complex + interconnect (Tier A) ---
+  - { block: "6x Cortex-A55 (application cluster)", tier: A, test: boot,                     evidence: "Boots stock NXP + mainline Linux to userspace on all six cores" }
+  - { block: "Cortex-M33 System Manager (real SM fw)", tier: A, test: boot,                  evidence: "Runs real NXP SM firmware; Linux's sole SCMI provider over MU" }
+  - { block: "Cortex-M7 (real-time domain)",       tier: A, test: "harness:m7-rpmsg",        evidence: "SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip" }
+  - { block: "GICv3 + ITS",                        tier: A, test: boot,                       evidence: "Underpins boot + MSI-X for NETC/PCIe" }
+  - { block: "MU mailbox cross-connect",           tier: A, test: boot,                       evidence: "SCMI + rpmsg + ELE transports" }
+  - { block: "eDMA v3/v5",                         tier: A, test: "qtest:imx95-edma-test",    evidence: "Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave" }
+  # --- Networking (Tier A) ---
+  - { block: "ENETC x3 (2x1G + 10G)",              tier: A, test: "qtest:fsl-enetc-test",     evidence: "BD-ring DMA + MSI-X via ITS; links + traffic; board-to-board" }
+  - { block: "NETC EMDIO + AQR113C + xPCS (10G real chain)", tier: A, test: "harness:netc-real10g", evidence: "Stock 10G node links @10Gbps through the real PHY chain (v2.4.0)" }
+  # --- Storage (Tier A) ---
+  - { block: "uSDHC (SD + eMMC)",                  tier: A, test: "harness:sd-emmc",          evidence: "SDHCI/ADMA block r/w; ext4 mmcblk r/w/sync; Weston off eMMC rootfs" }
+  - { block: "FlexSPI + serial NOR",               tier: A, test: boot,                       evidence: "JEDEC + read; boots from real flash contents" }
+  # --- DMA'd datapaths + console (Tier A) ---
+  - { block: "LPUART x8",                          tier: A, test: boot,                       evidence: "Console on ttyLP0; LPUART3 RX-DMA drives the UART interconnect" }
+  # --- Display / GPU 2D (Tier A) ---
+  - { block: "DPU display + compositing",          tier: A, test: "harness:dpu-display",      evidence: "FetchLayer/FrameGen scanout, LayerBlend compositing, six-Tux boot logo" }
+  - { block: "DPU 2D blit engine",                 tier: A, test: "qtest:imx95-blit-test",    evidence: "copy/fill/Porter-Duff blend/scale/rotate/CSC compute to guest memory" }
+  - { block: "LVDS (LDB) display output",          tier: A, test: "harness:dpu-display",      evidence: "dpu95 binds LVDS-1, panel scanout" }
+  # --- Audio (Tier A) ---
+  - { block: "SAI3 + WM8962 playback",             tier: A, test: "harness:audio-playback",   evidence: "square wave -> eDMA -> SAI FIFO -> wav byte-checked" }
+  - { block: "MICFIL PDM capture",                 tier: A, test: "harness:audio-capture",    evidence: "real PDM samples to userspace" }
+  - { block: "SPDIF / XCVR (playback)",            tier: A, test: boot,                       evidence: "audio transceiver playback datapath" }
+  # --- Camera (Tier A) ---
+  - { block: "MIPI CSI-2 -> ISI (capture)",        tier: A, test: "qtest:imx95-isi-test",     evidence: "5 byte-checked UYVY frames off /dev/video0" }
+  - { block: "Virtual camera (host-frame source)", tier: A, test: "harness:camera",           evidence: "ISI scans real host frames into V4L2 buffers" }
+  # --- PCIe (Tier A) ---
+  - { block: "PCIe RC pcie0 + pcie1 (DWC)",        tier: A, test: "harness:pcie",             evidence: "link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA" }
+  # --- Accelerator w/ real compute (Tier A) ---
+  - { block: "HW JPEG codecs (enc + dec)",         tier: A, test: boot,                       evidence: "mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error" }
+  # --- Buses (Tier A) ---
+  - { block: "LPI2C x8 + slaves",                  tier: A, test: "qtest:imx95-lpi2c-test",   evidence: "codec/PMIC/expander answer; master IRQ path" }
+  - { block: "LPSPI x8",                           tier: A, test: "qtest:imx95-lpspi-test",   evidence: "per-bus SSI master; JEDEC byte-exact; eDMA-driven; board-to-board SPI" }
+  - { block: "I3C x2 (Silvaco)",                   tier: A, test: "qtest:imx95-i3c-test",     evidence: "I3C master bridges to legacy I2C" }
+  - { block: "FlexCAN x5",                         tier: A, test: "qtest:imx95-flexcan-test", evidence: "can0 up; frame round-trip; board-to-board CAN" }
+  # --- GPIO / PWM / analog (Tier A) ---
+  - { block: "RGPIO x5",                           tier: A, test: "harness:gpio",             evidence: "line get/set; card-detect via GPIO3" }
+  - { block: "TPM PWM",                            tier: A, test: boot,                       evidence: "both TPM PWM blocks drive duty/period" }
+  - { block: "ADC",                                tier: A, test: "harness:adc",              evidence: "operator-settable adc-chN QOM props; injection verified (was silent-wrong, fixed)" }
+  # --- Misc functional (Tier A) ---
+  - { block: "Watchdog (WDOG3)",                   tier: A, test: boot,                       evidence: "i.MX7ULP-style wdog; SDCLK auto-gate quirk" }
+  - { block: "virtio-mmio + 9p host share",        tier: A, test: "harness:virtio-9p",        evidence: "4 virtio-mmio transports; 9p host share mounts e2e" }
+
+  # --- Registration bar / bring-up (Tier B) ---
+  - { block: "ChipIdea USB2 host (usb-kbd)",       tier: B, test: "harness:usb",              evidence: "usb-kbd enumerates as HID; VBUS expander on lpi2c7" }
+  - { block: "USB3 SuperSpeed (DWC3)",             tier: B, test: boot,                       evidence: "snps,dwc3 core binds" }
+  - { block: "MIPI-DSI display output",            tier: B, test: boot,                       evidence: "dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up" }
+  - { block: "NeoISP (camera ISP)",                tier: B, test: boot,                       evidence: "ISP driver binds" }
+  - { block: "DDR PMU",                            tier: B, test: boot,                       evidence: "perf PMU driver binds" }
+  - { block: "OCOTP eFuse + EdgeLock ELE",         tier: B, test: boot,                       evidence: "ELE responder (GET_INFO/RANDOM real entropy); fuse shadow seeded" }
+  - { block: "Clocks/power/reset (CCM/ANATOP/SRC via SM)", tier: B, test: boot,               evidence: "programmed by the SM; Linux reads real rates over SCMI" }
+  - { block: "Audio capture bring-up (BT-SCO + SAI RX)", tier: B, test: boot,                 evidence: "cards register; no codec ADC-DAPM route (documented, known-limitations sec.7)" }
+
+  # --- Registration only, compute proprietary (Tier C) ---
+  - { block: "Mali-G310 GPU (Valhall CSF)",        tier: C, test: "qtest:imx95-mali-test",    evidence: "kbase identifies GPU arch 10.12.0, then fails CSF bring-up cleanly (-EIO)", caveat: "compute needs proprietary libmali" }
+  - { block: "VPU (Wave6 / cnm633c)",              tier: C, test: boot,                       evidence: "wave6-vpu binds, /dev/video* present; no codec firmware -> no frames", caveat: "decode/encode is proprietary firmware" }
+  - { block: "Neutron NPU",                        tier: C, test: boot,                       evidence: "driver binds e2e; opt-in guest honest-fault via MBOX1 error_code", caveat: "compute is NXP-proprietary; flagged, do not trust NPU output" }
+
+absent:
+  - { block: "FEC / ENET (dwmac)",  reason: "i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair of i.MX 91/93" }
+  - { block: "EQOS (DWMAC)",        reason: "same — ENETC replaces it on the i.MX 95" }
+  - { block: "LCDIFv3 (parallel-RGB)", reason: "i.MX 95 display is the DPU (+ LVDS/DSI), not a parallel-RGB LCDIF" }
+  - { block: "PXP 2D engine",       reason: "i.MX 95 2D acceleration is the DPU blit engine, not PXP" }
+  - { block: "Ethos-U65 NPU",       reason: "the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93)" }
+
+readme_groups:
+  - { label: "CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7", tier: A,
+      evidence: "Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong)",
+      blocks: ["6x Cortex-A55 (application cluster)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
+  - { label: "Networking — 3x ENETC (two 1G + one 10G through the real PHY chain)", tier: A,
+      evidence: "BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0)",
+      blocks: ["ENETC x3 (2x1G + 10G)", "NETC EMDIO + AQR113C + xPCS (10G real chain)"] }
+  - { label: "Storage — uSDHC (SD + eMMC) + FlexSPI NOR", tier: A,
+      evidence: "SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents",
+      blocks: ["uSDHC (SD + eMMC)", "FlexSPI + serial NOR"] }
+  - { label: "eDMA v3/v5", tier: A,
+      evidence: "Real TCD execution — audio FIFO drains, SPI/I2C, full-duplex byte-locked interleave",
+      blocks: ["eDMA v3/v5"] }
+  - { label: "Serial console — LPUART x8", tier: A,
+      evidence: "Console I/O on ttyLP0; LPUART3 RX-DMA drives the UART interconnect",
+      blocks: ["LPUART x8"] }
+  - { label: "Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop)", tier: A,
+      evidence: "FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output",
+      blocks: ["DPU display + compositing", "DPU 2D blit engine", "LVDS (LDB) display output"] }
+  - { label: "Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR", tier: A,
+      evidence: "square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace",
+      blocks: ["SAI3 + WM8962 playback", "MICFIL PDM capture", "SPDIF / XCVR (playback)"] }
+  - { label: "Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera", tier: A,
+      evidence: "5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers",
+      blocks: ["MIPI CSI-2 -> ISI (capture)", "Virtual camera (host-frame source)"] }
+  - { label: "PCIe Root Complex — pcie0 + pcie1 (DesignWare)", tier: A,
+      evidence: "link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains)",
+      blocks: ["PCIe RC pcie0 + pcie1 (DWC)"] }
+  - { label: "HW JPEG codecs (encode + decode)", tier: A,
+      evidence: "mxc-jpeg /dev/video2,3; libjpeg encode/decode (or an honest config error, never garbage)",
+      blocks: ["HW JPEG codecs (enc + dec)"] }
+  - { label: "I2C — LPI2C x8 + slaves", tier: A,
+      evidence: "codec/PMIC/expander answer on their buses; master IRQ path",
+      blocks: ["LPI2C x8 + slaves"] }
+  - { label: "LPSPI x8", tier: A,
+      evidence: "per-bus SSI master; JEDEC byte-exact; eDMA-driven; drives board-to-board SPI",
+      blocks: ["LPSPI x8"] }
+  - { label: "I3C x2 (Silvaco)", tier: A,
+      evidence: "I3C master bridges to legacy I2C",
+      blocks: ["I3C x2 (Silvaco)"] }
+  - { label: "FlexCAN x5", tier: A,
+      evidence: "can0 up; frame round-trip; board-to-board CAN (see Interconnect)",
+      blocks: ["FlexCAN x5"] }
+  - { label: "GPIO (RGPIO x5) + TPM PWM + ADC", tier: A,
+      evidence: "GPIO line get/set (card-detect on GPIO3); TPM PWM duty/period; ADC operator-settable per-channel props (injection verified)",
+      blocks: ["RGPIO x5", "TPM PWM", "ADC"] }
+  - { label: "Watchdog (WDOG3) + virtio-mmio/9p host share", tier: A,
+      evidence: "wdog binds; 4 virtio-mmio transports + 9p host share mount e2e",
+      blocks: ["Watchdog (WDOG3)", "virtio-mmio + 9p host share"] }
+  - { label: "USB — ChipIdea USB2 host (usb-kbd HID) + USB3 SuperSpeed (DWC3)", tier: B,
+      evidence: "usb-kbd enumerates as HID (VBUS expander on lpi2c7); the snps,dwc3 core binds",
+      blocks: ["ChipIdea USB2 host (usb-kbd)", "USB3 SuperSpeed (DWC3)"] }
+  - { label: "MIPI-DSI display output + NeoISP", tier: B,
+      evidence: "dw-mipi-dsi -> rm67191 panel (card0-DSI-1) and the NeoISP driver bind at the registration bar",
+      blocks: ["MIPI-DSI display output", "NeoISP (camera ISP)"] }
+  - { label: "DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM)", tier: B,
+      evidence: "PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI",
+      blocks: ["DDR PMU", "OCOTP eFuse + EdgeLock ELE", "Clocks/power/reset (CCM/ANATOP/SRC via SM)"] }
+  - { label: "Audio capture bring-up — BT-SCO + SAI RX", tier: B,
+      evidence: "cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7)",
+      blocks: ["Audio capture bring-up (BT-SCO + SAI RX)"] }
+  - { label: "Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary", tier: C,
+      evidence: "kbase identifies the Mali-G310 (arch 10.12.0) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with an opt-in guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result",
+      blocks: ["Mali-G310 GPU (Valhall CSF)", "VPU (Wave6 / cnm633c)", "Neutron NPU"] }
+
+readme_absent:
+  - { label: "FEC / ENET · EQOS (DWMAC)",
+      reason: "i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair (i.MX 91/93 have those)",
+      blocks: ["FEC / ENET (dwmac)", "EQOS (DWMAC)"] }
+  - { label: "LCDIFv3 (parallel-RGB) · PXP 2D engine",
+      reason: "i.MX 95 display + 2D are the DPU (scanout, compositing, blit) + LVDS/DSI, not LCDIF/PXP",
+      blocks: ["LCDIFv3 (parallel-RGB)", "PXP 2D engine"] }
+  - { label: "Ethos-U65 NPU",
+      reason: "the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93)",
+      blocks: ["Ethos-U65 NPU"] }

@@ -209,6 +209,49 @@ milestone in Scope, above), validated end to end:
 - Surfaced the generic `target/arm/ptw.c` PMSAv7 MPU fix — one of three
   generic-QEMU prereqs split out for upstream.
 
+**Capability summary.** The condensed table below is *generated* from
+[`docs/validation/test-matrix.yaml`](docs/validation/test-matrix.yaml) — the same
+single source of truth as the detailed
+[`docs/validation/test-result-matrix.md`](docs/validation/test-result-matrix.md).
+Do not hand-edit it; run `tests/gen-test-matrix.py --inject-readme`, which fails
+if the table and the matrix disagree (fleet anti-drift guard). Tiers: **A** =
+data-path verified (data moves) · **B** = driver bring-up / registration bar ·
+**C** = registration only (Linux sees + names it, compute is proprietary).
+
+<!-- BEGIN capability-table (generated from test-matrix.yaml) -->
+| Subsystem | Tier | Evidence |
+|---|:--:|---|
+| CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7 | A | Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong) |
+| Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) | A | BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0) |
+| Storage — uSDHC (SD + eMMC) + FlexSPI NOR | A | SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents |
+| eDMA v3/v5 | A | Real TCD execution — audio FIFO drains, SPI/I2C, full-duplex byte-locked interleave |
+| Serial console — LPUART x8 | A | Console I/O on ttyLP0; LPUART3 RX-DMA drives the UART interconnect |
+| Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop) | A | FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output |
+| Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
+| Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera | A | 5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers |
+| PCIe Root Complex — pcie0 + pcie1 (DesignWare) | A | link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains) |
+| HW JPEG codecs (encode + decode) | A | mxc-jpeg /dev/video2,3; libjpeg encode/decode (or an honest config error, never garbage) |
+| I2C — LPI2C x8 + slaves | A | codec/PMIC/expander answer on their buses; master IRQ path |
+| LPSPI x8 | A | per-bus SSI master; JEDEC byte-exact; eDMA-driven; drives board-to-board SPI |
+| I3C x2 (Silvaco) | A | I3C master bridges to legacy I2C |
+| FlexCAN x5 | A | can0 up; frame round-trip; board-to-board CAN (see Interconnect) |
+| GPIO (RGPIO x5) + TPM PWM + ADC | A | GPIO line get/set (card-detect on GPIO3); TPM PWM duty/period; ADC operator-settable per-channel props (injection verified) |
+| Watchdog (WDOG3) + virtio-mmio/9p host share | A | wdog binds; 4 virtio-mmio transports + 9p host share mount e2e |
+| USB — ChipIdea USB2 host (usb-kbd HID) + USB3 SuperSpeed (DWC3) | B | usb-kbd enumerates as HID (VBUS expander on lpi2c7); the snps,dwc3 core binds |
+| MIPI-DSI display output + NeoISP | B | dw-mipi-dsi -> rm67191 panel (card0-DSI-1) and the NeoISP driver bind at the registration bar |
+| DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM) | B | PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI |
+| Audio capture bring-up — BT-SCO + SAI RX | B | cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7) |
+| Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary | C | kbase identifies the Mali-G310 (arch 10.12.0) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with an opt-in guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result |
+
+**Absent on i.MX 95 silicon — N/A (never a failure):**
+
+| Block | Why absent |
+|---|---|
+| FEC / ENET · EQOS (DWMAC) | i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair (i.MX 91/93 have those) |
+| LCDIFv3 (parallel-RGB) · PXP 2D engine | i.MX 95 display + 2D are the DPU (scanout, compositing, blit) + LVDS/DSI, not LCDIF/PXP |
+| Ethos-U65 NPU | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
+<!-- END capability-table (generated from test-matrix.yaml) -->
+
 **Display, input, audio & media.** The EVK's output and HMI peripherals run
 against stock Linux. Each device below is tagged **functional** (the host
 driver's data path runs end to end — data actually moves) or **brings up** (the

@@ -65,6 +65,12 @@ export KBUILD=${KBUILD:-$_ARTIFACTS/linux-build}
 export SM_ELF
 
 echo "============================================="
+echo "=== matrix drift check (fast, boot-free)   ==="
+echo "===   README table vs test-matrix.yaml     ==="
+echo "============================================="
+tests/check-matrix-drift.sh
+
+echo "============================================="
 echo "=== v1.0 regression: functional test       ==="
 echo "===   (A55 + M33 + Linux to userspace)     ==="
 echo "============================================="
