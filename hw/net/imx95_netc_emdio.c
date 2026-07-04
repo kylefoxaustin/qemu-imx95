@@ -65,6 +65,27 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NetcEmdio, IMX95_NETC_EMDIO)
 #define MDIO_MMD_PCS        3
 #define MDIO_MMD_PHYXS      4
 #define MDIO_MMD_AN         7
+#define MDIO_MMD_VEND1      30
+
+/* PMA/PMD (MMD 1) speed-ability registers genphy_c45 reads for features. The
+ * AQR113C is a multi-gig BASE-T PHY, so it reports copper 10G/5G/2.5G via the
+ * extended-ability tables (must match the xPCS mx95 10G features: 10000baseT +
+ * multi-gig T, not fibre SR/LR - an empty intersection fails validate). */
+#define C45_PMA_STAT2_EXTABLE 0x0200
+#define C45_PMA_EXTABLE       0x000b
+#define C45_PMA_EXTABLE_10GBT 0x0004
+#define C45_PMA_EXTABLE_NBT   0x4000    /* 2.5/5GBASE-T -> NG_EXTABLE */
+#define C45_PMA_NG_EXTABLE    0x0015
+#define C45_PMA_NG_EXTABLE_2_5G 0x0001
+#define C45_PMA_NG_EXTABLE_5G   0x0002
+
+/* Aquantia AQR113C vendor (MMD 30) registers the aqr driver probe touches. */
+#define AQR_VEND1_FW_ID       0x0020    /* non-zero => fw loaded */
+#define AQR_VEND1_GEN_STAT2   0xc831    /* bit15 OP_IN_PROG; return clear */
+#define AQR_VEND1_CFG_10M     0x031a    /* media-speed serdes cfg regs */
+#define AQR_VEND1_CFG_10G     0x031f    /* .. to 10G (SERDES_MODE [2:0]) */
+#define AQR_CFG_SERDES_SGMII  0x0003    /* non-zero; low speeds report SGMII */
+#define AQR_CFG_SERDES_XFI    0x0000    /* 10G reports XFI => 10GBASE-R */
 
 /* Aquantia AQR113C: MII PHY id 0x31c31c12 (OUI 0x03a1b4, model/rev in id2). */
 #define AQR_PHYSID1         0x31c3
@@ -82,9 +103,26 @@ struct IMX95NetcEmdio {
     uint32_t addr;
 };
 
-/* Model the embedded Aquantia c45 PHY at MDIO addr 8. */
+/* Model the embedded Aquantia AQR113C c45 PHY at MDIO addr 8. */
 static uint16_t aqr_c45_read(int devad, int reg)
 {
+    /* Aquantia vendor MMD: let the aqr driver's probe/config_init succeed. */
+    if (devad == MDIO_MMD_VEND1) {
+        if (reg == AQR_VEND1_FW_ID) {
+            return 0x0501;              /* fw v5.1 present => skip fw load */
+        }
+        if (reg == AQR_VEND1_GEN_STAT2) {
+            return 0;                   /* OP_IN_PROG clear (not busy) */
+        }
+        if (reg >= AQR_VEND1_CFG_10M && reg < AQR_VEND1_CFG_10G) {
+            return AQR_CFG_SERDES_SGMII; /* low media speeds: SGMII, non-zero */
+        }
+        if (reg == AQR_VEND1_CFG_10G) {
+            return AQR_CFG_SERDES_XFI;   /* 10G: XFI serdes => 10GBASE-R host */
+        }
+        return 0;
+    }
+
     switch (reg) {
     case C45_DEVS1:
         return AQR_DEVS1;
@@ -95,7 +133,26 @@ static uint16_t aqr_c45_read(int devad, int reg)
     case C45_PHYSID2:
         return AQR_PHYSID2;
     case C45_STAT2:
+        /*
+         * PMA/PMD STAT2 doubles as the c45 device-present marker (bits[15:14])
+         * and a speed-ability register. Set EXTABLE so genphy_c45 reads the
+         * extended tables below for the copper 10G/multi-gig abilities.
+         */
+        if (devad == MDIO_MMD_PMAPMD) {
+            return MDIO_STAT2_DEVPRST | C45_PMA_STAT2_EXTABLE;
+        }
         return MDIO_STAT2_DEVPRST;
+    case C45_PMA_EXTABLE:
+        /* 10GBASE-T + the 2.5/5G marker (NG_EXTABLE has the detail). */
+        if (devad == MDIO_MMD_PMAPMD) {
+            return C45_PMA_EXTABLE_10GBT | C45_PMA_EXTABLE_NBT;
+        }
+        return 0;
+    case C45_PMA_NG_EXTABLE:
+        if (devad == MDIO_MMD_PMAPMD) {
+            return C45_PMA_NG_EXTABLE_2_5G | C45_PMA_NG_EXTABLE_5G;
+        }
+        return 0;
     case C45_STAT1:
         /* PMA/PMD + PCS report link up: the phy sees a live 10G PHY. */
         if (devad == MDIO_MMD_PMAPMD || devad == MDIO_MMD_PCS ||

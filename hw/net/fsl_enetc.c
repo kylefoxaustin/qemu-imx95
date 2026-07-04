@@ -87,6 +87,13 @@
 #define ENETC_MDIO_ADDR     0x0c
 #define ENETC_MDIO_CTL_READ (1u << 15)
 
+/* xPCS (internal imdio MDIO addr 0) PCS-status regs pcs_get_state reads. */
+#define ENETC_MDIO_MMD_PCS                3
+#define ENETC_MDIO_STAT1                  0x0001
+#define ENETC_MDIO_STAT1_LSTATUS          0x0004
+#define ENETC_MDIO_PCS_10GBRT_STAT1       0x0020
+#define ENETC_MDIO_PCS_10GBRT_STAT1_BLKLK 0x0001
+
 /* SI per-ring MSI-X vector tables (which MSI-X entry a ring fires). */
 #define ENETC_SIMSITRV(n)   (0x0b00 + (n) * 4)  /* TX ring n -> vector */
 #define ENETC_SIMSIRRV(n)   (0x0b80 + (n) * 4)  /* RX ring n -> vector */
@@ -261,6 +268,34 @@ static uint16_t enetc_imdio_xpcs_read(int port, int devad, int reg)
     }
     if (port == 16 && devad == 0 && reg == 0x0) {
         return 0x74cd;      /* IDCODE_LO -> 0x1b3274cd */
+    }
+
+    if (port != 0) {
+        return 0;
+    }
+    /*
+     * imx95 xPCS-phy config sequence polls hardware handshake bits (register
+     * addresses XPCS_PHY_REG(x) = (x & 0x1fffe) >> 1). A static model completes
+     * every handshake at once: SRAM init done, RX adapt ack, RX valid. Its many
+     * wait-for-clear polls already pass (unmodelled regs read 0).
+     */
+    switch (reg) {
+    case 0x809b:                /* PMA ..._SRAM: PMA_SRAM_INIT_DN (bit 0) */
+        return 0x0001;
+    case 0x8098:                /* PMA ..._MISC_STS: RX_ADPT_ACK (bit 12) */
+    case 0x8020:                /* PMA_RX_LSTS: RX_VALID_0 (bit 12) */
+        return 0x1000;
+    default:
+        break;
+    }
+    /* PCS (devad 3) link status for pcs_get_state: report a 10G link up. */
+    if (devad == ENETC_MDIO_MMD_PCS) {
+        if (reg == ENETC_MDIO_STAT1) {
+            return ENETC_MDIO_STAT1_LSTATUS;
+        }
+        if (reg == ENETC_MDIO_PCS_10GBRT_STAT1) {
+            return ENETC_MDIO_PCS_10GBRT_STAT1_BLKLK;
+        }
     }
     return 0;
 }
