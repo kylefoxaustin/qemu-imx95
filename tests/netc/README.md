@@ -21,6 +21,15 @@ PF brought up via a fixed-link `10gbase-r` node (no real Aquantia PHY / EMDIO):
 - `run.sh` — single-port probe demo: decompiles the base DTB, applies
   `patch-dtb.py`, recompiles with the kernel `scripts/dtc/dtc`, and boots QEMU
   with one `-nic`, printing the ENETC probe lines.
+- `run-10g.sh` — fixed-link 10G test: all three PFs up, the ENETC2 one at
+  10Gbps via a fixed-link `10gbase-r` node (no real PHY / EMDIO).
+- `patch-dtb-real10g.py` / `run-real-10g.sh` — **10G through the REAL chain**
+  (Path B): the 1G ports are fixed-linked, but the 10G `ethernet@10,0` keeps its
+  real `phy-handle` (Aquantia AQR113C on the NETC EMDIO, `pcie@4cb00000`) and
+  `managed = "in-band-status"` — only the never-resolving efuse nvmem MAC is
+  swapped for a fixed one. PASS = a port reports `Link is Up - 10Gbps/Full` with
+  the `Aquantia AQR113C` driver bound and no `pcs_config` timeout, i.e. the link
+  came up through the modelled EMDIO -> AQR113C -> xPCS path, not a fixed-link.
 - `run-2port.sh [evk|frdm]` — **two-port back-to-back traffic test** on either
   board's device tree (see "Two-port back-to-back" below). Joins both PFs on one
   QEMU L2 hub and pings eth0 <-> eth1; PASS means frames really crossed the
