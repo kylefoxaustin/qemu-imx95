@@ -85,6 +85,7 @@
 #define ENETC_MDIO_CTL      0x04
 #define ENETC_MDIO_DATA     0x08
 #define ENETC_MDIO_ADDR     0x0c
+#define ENETC_MDIO_CTL_READ (1u << 15)
 
 /* SI per-ring MSI-X vector tables (which MSI-X entry a ring fires). */
 #define ENETC_SIMSITRV(n)   (0x0b00 + (n) * 4)  /* TX ring n -> vector */
@@ -247,6 +248,23 @@ static uint64_t fsl_enetc_bar0_read(void *opaque, hwaddr off, unsigned size)
     }
 }
 
+/*
+ * Internal xPCS behind the port imdio (0x5030, clause-45). The xpcs driver
+ * probes its id via a "phy" at MDIO addr 16 (xpcs_phy_get_id: IDCODE_HI at
+ * devad0/reg0x2, IDCODE_LO at devad0/reg0x0); id=(HI<<16)|LO must be 0x1b3274cd
+ * so +DW_XPCS_VER_MX95(1) == NXP_MX95_XPCS_ID. The xPCS itself is MDIO addr 0.
+ */
+static uint16_t enetc_imdio_xpcs_read(int port, int devad, int reg)
+{
+    if (port == 16 && devad == 0 && reg == 0x2) {
+        return 0x1b32;      /* IDCODE_HI */
+    }
+    if (port == 16 && devad == 0 && reg == 0x0) {
+        return 0x74cd;      /* IDCODE_LO -> 0x1b3274cd */
+    }
+    return 0;
+}
+
 static void fsl_enetc_bar0_write(void *opaque, hwaddr off, uint64_t val,
                                  unsigned size)
 {
@@ -269,6 +287,17 @@ static void fsl_enetc_bar0_write(void *opaque, hwaddr off, uint64_t val,
     case ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0) + ENETC_RBCIR:
         /* Driver posted more empty RX buffers (consumer index advanced). */
         enetc_set(s, off, val);
+        return;
+    case ENETC_PORT_BASE + ENETC_IMDIO_BASE + ENETC_MDIO_CTL:
+        enetc_set(s, off, val);
+        if (val & ENETC_MDIO_CTL_READ) {
+            int devad = val & 0x1f, port = (val >> 5) & 0x1f;
+            int reg = enetc_reg(s, ENETC_PORT_BASE + ENETC_IMDIO_BASE +
+                                ENETC_MDIO_ADDR) & 0xffff;
+            uint16_t d = enetc_imdio_xpcs_read(port, devad, reg);
+            enetc_set(s, ENETC_PORT_BASE + ENETC_IMDIO_BASE + ENETC_MDIO_DATA,
+                      d);
+        }
         return;
     default:
         enetc_set(s, off, val);
@@ -589,7 +618,14 @@ static void fsl_enetc_class_init(ObjectClass *klass, const void *data)
     k->vendor_id = FSL_ENETC_VENDOR_ID;
     k->device_id = FSL_ENETC_PF_DEVICE_ID;
     k->class_id = PCI_CLASS_NETWORK_ETHERNET;
-    k->revision = 1;
+    /*
+     * PCI Revision ID = 4 (ENETC_REV4). The i.MX 95 NETC is ENETC v4, and the
+     * driver's is_enetc_rev1()/is_enetc_rev4() key off pdev->revision: rev1
+     * routes the port's in-band PCS through a Lynx PCS, rev4 through the DW
+     * xPCS. A wrong "1" here makes a managed=in-band-status port pick the Lynx
+     * PCS and fail phylink validate for 10gbase-r.
+     */
+    k->revision = 4;
 
     device_class_set_legacy_reset(dc, fsl_enetc_reset);
     device_class_set_props(dc, fsl_enetc_props);

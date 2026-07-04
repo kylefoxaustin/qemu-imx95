@@ -79,8 +79,11 @@ timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
 
 echo "--- ports ---"; sed -n '/NETC-10G ===/,/NETC-10G-done/p' "$LOG" | grep -E '^eth'
 grep -aE 'fsl_enetc4 .* Link is Up' "$LOG" || true
-grep -qa 'eth2: Link is Up - 10Gbps' "$LOG" && \
-   grep -qa 'eth2: speed=10000 carrier=1' "$LOG" && \
-   grep -qa 'eth0: speed=1000 carrier=1'  "$LOG" && {
-    echo "PASS: ENETC2 up at 10Gbps (eth0/eth1 at 1G)"; exit 0; }
+# Identify ports by reported speed, not by ethN name: Linux names netdevs in
+# probe order, which is not stable across ENETC revisions/defer timing. Require
+# one port up at 10Gbps and at least one at 1Gbps.
+grep -qaE 'Link is Up - 10Gbps' "$LOG" && \
+   grep -qaE 'eth[0-9]+: speed=10000 carrier=1' "$LOG" && \
+   grep -qaE 'eth[0-9]+: speed=1000 carrier=1'  "$LOG" && {
+    echo "PASS: one ENETC port up at 10Gbps, others at 1G"; exit 0; }
 echo "FAIL: the 10G port did not come up at 10Gbps"; exit 1
