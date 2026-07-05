@@ -96,9 +96,9 @@ static const MemoryRegionOps imx95_aonmix_ops = {
     },
 };
 
-static void imx95_aonmix_reset(DeviceState *dev)
+static void imx95_aonmix_reset_hold(Object *obj, ResetType type)
 {
-    IMX95AonmixState *s = IMX95_AONMIX(dev);
+    IMX95AonmixState *s = IMX95_AONMIX(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     /* M7 held at reset: the SM sees HOLD and runs its full CpuStart. */
@@ -130,9 +130,10 @@ static const VMStateDescription vmstate_imx95_aonmix = {
 static void imx95_aonmix_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_aonmix;
-    device_class_set_legacy_reset(dc, imx95_aonmix_reset);
+    rc->phases.hold = imx95_aonmix_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 BLK_CTRL_S_AONMIX (M7 CPU-WAIT gate)";
 }

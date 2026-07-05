@@ -71,9 +71,9 @@ static void imx_lpuart_reset(IMXLPUARTState *s)
     s->rx_full = false;
 }
 
-static void imx_lpuart_reset_at_boot(DeviceState *dev)
+static void imx_lpuart_reset_at_boot_hold(Object *obj, ResetType type)
 {
-    IMXLPUARTState *s = IMX_LPUART(dev);
+    IMXLPUARTState *s = IMX_LPUART(obj);
 
     imx_lpuart_reset(s);
     imx_lpuart_update_irq(s);
@@ -342,10 +342,11 @@ static const Property imx_lpuart_properties[] = {
 static void imx_lpuart_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->realize = imx_lpuart_realize;
     dc->vmsd = &vmstate_imx_lpuart;
-    device_class_set_legacy_reset(dc, imx_lpuart_reset_at_boot);
+    rc->phases.hold = imx_lpuart_reset_at_boot_hold;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     dc->desc = "NXP i.MX LPUART";
     device_class_set_props(dc, imx_lpuart_properties);

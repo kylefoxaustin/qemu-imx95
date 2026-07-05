@@ -5,9 +5,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The DPU is not modelled (display is punted to v1.0). With the real System
- * Manager powering the display mix, however, Linux's dpu95 driver stops
- * deferring and probes - and its blit-engine bring-up busy-waits with NO
+ * The DPU is not modelled: this base machine is headless, and real display
+ * scanout is a follow-on series. With the real System Manager powering the
+ * display mix, however, Linux's dpu95 driver stops deferring and probes - and
+ * its blit-engine bring-up busy-waits with NO
  * timeout on the command sequencer status register:
  *   dpu95_cs_wait_idle()       spins until CMDSEQ_STATUS.IDLE      is set
  *   dpu95_cs_wait_fifo_space() spins until CMDSEQ_STATUS.FIFOSPACE >= 192
@@ -18,8 +19,9 @@
  * This stub returns CMDSEQ_STATUS with IDLE set and a full FIFOSPACE so both
  * polls pass instantly; every other register reads back zero and writes are
  * dropped. That is enough to let the probe complete (the actual command
- * submission / fence path runs only at runtime, which we never reach). When
- * the DPU is modelled for real in v1.0 this stub is removed.
+ * submission / fence path runs only at runtime, which we never reach). A
+ * follow-on series that models the DPU for real (adding display scanout and
+ * Wayland output) removes this stub.
  */
 
 #include "qemu/osdep.h"

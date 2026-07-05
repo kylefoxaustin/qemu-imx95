@@ -421,7 +421,7 @@ enum FslImx95MemoryRegions {
 
 /*
  * IRQ assignments. All values are GIC SPI numbers extracted from
- * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi.
+ * Linux arch/arm64/boot/dts/freescale/imx95.dtsi.
  */
 enum FslImx95Irqs {
     FSL_IMX95_LPUART1_IRQ   = 19,

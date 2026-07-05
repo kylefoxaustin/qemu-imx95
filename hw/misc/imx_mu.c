@@ -80,9 +80,9 @@ static void imx_mu_reset_state(IMXMUState *s)
     memset(s->rr, 0, sizeof(s->rr));
 }
 
-static void imx_mu_reset_at_boot(DeviceState *dev)
+static void imx_mu_reset_at_boot_hold(Object *obj, ResetType type)
 {
-    IMXMUState *s = IMX_MU(dev);
+    IMXMUState *s = IMX_MU(obj);
 
     imx_mu_reset_state(s);
     imx_mu_update_irq(s);
@@ -400,9 +400,10 @@ static void imx_mu_init(Object *obj)
 static void imx_mu_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx_mu;
-    device_class_set_legacy_reset(dc, imx_mu_reset_at_boot);
+    rc->phases.hold = imx_mu_reset_at_boot_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX Messaging Unit (V2)";
 }

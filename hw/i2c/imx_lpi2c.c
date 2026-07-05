@@ -83,8 +83,8 @@ struct IMXLPI2CState {
     uint32_t        mcfgr1;
 
     uint8_t         rxfifo[RXFIFO_LEN];
-    unsigned        rx_head;
-    unsigned        rx_count;
+    uint32_t        rx_head;
+    uint32_t        rx_count;
 };
 
 static void imx_lpi2c_rx_push(IMXLPI2CState *s, uint8_t b)
@@ -227,9 +227,9 @@ static const MemoryRegionOps imx_lpi2c_ops = {
     },
 };
 
-static void imx_lpi2c_reset(DeviceState *dev)
+static void imx_lpi2c_reset_hold(Object *obj, ResetType type)
 {
-    IMXLPI2CState *s = IMX_LPI2C(dev);
+    IMXLPI2CState *s = IMX_LPI2C(obj);
 
     s->mcr = 0;
     s->msr = 0;
@@ -266,9 +266,10 @@ static const VMStateDescription vmstate_imx_lpi2c = {
 static void imx_lpi2c_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx_lpi2c;
-    device_class_set_legacy_reset(dc, imx_lpi2c_reset);
+    rc->phases.hold = imx_lpi2c_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX LPI2C master";
 }

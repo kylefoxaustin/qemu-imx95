@@ -166,9 +166,9 @@ static const MemoryRegionOps imx95_sysctr_ops = {
     },
 };
 
-static void imx95_sysctr_reset(DeviceState *dev)
+static void imx95_sysctr_reset_hold(Object *obj, ResetType type)
 {
-    IMX95SysctrState *s = IMX95_SYSCTR(dev);
+    IMX95SysctrState *s = IMX95_SYSCTR(obj);
 
     s->cmpcv_lo = 0;
     s->cmpcv_hi = 0;
@@ -205,9 +205,10 @@ static const VMStateDescription vmstate_imx95_sysctr = {
 static void imx95_sysctr_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_sysctr;
-    device_class_set_legacy_reset(dc, imx95_sysctr_reset);
+    rc->phases.hold = imx95_sysctr_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 system counter timer";
 }

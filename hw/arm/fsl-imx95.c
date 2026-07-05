@@ -17,11 +17,11 @@
  * Memory-map addresses and IRQ numbers below come from two sources:
  *   - Linux DTS for direct-MMIO peripherals (LPUART, GIC, SM mailbox,
  *     ELE mailbox, OCRAM, watchdogs):
- *       references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+ *       Linux arch/arm64/boot/dts/freescale/imx95.dtsi
  *   - NXP U-Boot's imx-regs.h for the SCMI-routed peripherals the SPL
  *     pokes before SCMI is up (CCM, ANATOP, IOMUXC, SRC, TRDC, the
  *     BLK_CTRL aggregates):
- *       references/uboot-imx/arch/arm/include/asm/arch-imx9/imx-regs.h
+ *       U-Boot arch/arm/include/asm/arch-imx9/imx-regs.h
  *
  * The SCMI-routed set is logging-stub only at this milestone; the
  * SCMI server stub that takes their place at runtime lands in
@@ -58,7 +58,7 @@
  * Single source of truth for the SoC memory map. Each entry maps a region
  * ID (from enum FslImx95MemoryRegions) to its physical base address, size,
  * and a debug name. Values are taken from the NXP BSP device tree at
- * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi unless
+ * Linux arch/arm64/boot/dts/freescale/imx95.dtsi unless
  * otherwise noted.
  */
 static const struct {
@@ -79,7 +79,7 @@ static const struct {
      * On-chip RAM (OCRAM-A). The Linux DTS only declares a 96 KiB
      * sram1 slice at 0x204C0000, but U-Boot SPL is linked for
      * CONFIG_SPL_TEXT_BASE=0x20480000 with BSS+stack at 0x204D6000
-     * (see references/uboot-imx/configs/imx95_19x19_evk_defconfig).
+     * (see U-Boot configs/imx95_19x19_evk_defconfig).
      * Cover the full SPL run + stack area as one writable region
      * spanning 0x20480000-0x204D8000. Linux's sram1 slice sits
      * inside this range and continues to work unchanged.
@@ -178,7 +178,7 @@ static const struct {
     /*
      * Watchdogs. WDG3 is in the Linux DTS (the kernel sees it); WDG4
      * and WDG5 are SPL-only - U-Boot's arch_cpu_init() disables all
-     * three. Bases from references/uboot-imx/arch/arm/include/asm/
+     * three. Bases from U-Boot arch/arm/include/asm/
      * arch-imx9/imx-regs.h.
      */
     [FSL_IMX95_WDOG2]                = { 0x442e0000, 64 * KiB,   "wdog2" },
@@ -281,7 +281,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
      * unimplemented-device stub is enough to clear the abort.
      *
      * The addresses + names come from
-     * references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+     * Linux arch/arm64/boot/dts/freescale/imx95.dtsi
      * mailbox nodes. We exclude addresses already covered by real
      * models (sm_mu, ele_mu/elemu0, ele_mu1/elemu1, and the six
      * stub_mu[] entries at 0x47320000/0x47350000/0x47540000..0x47570000).
@@ -743,7 +743,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
          * uses these MPIDR values to identify the target CPU; without
          * the override QEMU would default to Aff0=i which doesn't match
          * the DT and PSCI CPU_ON fails for every secondary.
-         * Source: references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
+         * Source: Linux arch/arm64/boot/dts/freescale/imx95.dtsi
          */
         object_property_set_uint(OBJECT(&s->cpu[i]), "mp-affinity",
                                  (uint64_t)i << 8, &error_abort);

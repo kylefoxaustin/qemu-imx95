@@ -134,9 +134,9 @@ static const MemoryRegionOps imx95_wdog_ops = {
     },
 };
 
-static void imx95_wdog_reset(DeviceState *dev)
+static void imx95_wdog_reset_hold(Object *obj, ResetType type)
 {
-    IMX95WDogState *s = IMX95_WDOG(dev);
+    IMX95WDogState *s = IMX95_WDOG(obj);
 
     /* Watchdog disabled at reset: CS = 0 makes disable_wdog() early-exit. */
     s->cs = 0;
@@ -171,9 +171,10 @@ static const VMStateDescription vmstate_imx95_wdog = {
 static void imx95_wdog_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_wdog;
-    device_class_set_legacy_reset(dc, imx95_wdog_reset);
+    rc->phases.hold = imx95_wdog_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 ULP watchdog (stub)";
 }

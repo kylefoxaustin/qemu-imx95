@@ -120,9 +120,9 @@ static const MemoryRegionOps imx95_xcache_ops = {
     },
 };
 
-static void imx95_xcache_reset(DeviceState *dev)
+static void imx95_xcache_reset_hold(Object *obj, ResetType type)
 {
-    IMX95XCacheState *s = IMX95_XCACHE(dev);
+    IMX95XCacheState *s = IMX95_XCACHE(obj);
 
     s->ccr = 0;
     s->clcr = 0;
@@ -156,9 +156,10 @@ static const VMStateDescription vmstate_imx95_xcache = {
 static void imx95_xcache_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_xcache;
-    device_class_set_legacy_reset(dc, imx95_xcache_reset);
+    rc->phases.hold = imx95_xcache_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 XCACHE controller (stub)";
 }

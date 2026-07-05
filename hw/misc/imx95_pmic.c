@@ -106,9 +106,9 @@ static uint8_t pf09_recv(I2CSlave *i2c)
     return val;
 }
 
-static void pf09_reset(DeviceState *dev)
+static void pf09_reset_hold(Object *obj, ResetType type)
 {
-    PF09State *s = PF09_PMIC(dev);
+    PF09State *s = PF09_PMIC(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     s->cur_reg = 0;
@@ -135,13 +135,14 @@ static const VMStateDescription vmstate_pf09 = {
 static void pf09_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     k->event = pf09_event;
     k->recv = pf09_recv;
     k->send = pf09_send;
     dc->vmsd = &vmstate_pf09;
-    device_class_set_legacy_reset(dc, pf09_reset);
+    rc->phases.hold = pf09_reset_hold;
     dc->desc = "NXP PF09 PMIC (i.MX95 SM stub)";
 }
 
@@ -197,9 +198,9 @@ static uint8_t pcal6408a_recv(I2CSlave *i2c)
     return s->regs[s->cur_reg++];
 }
 
-static void pcal6408a_reset(DeviceState *dev)
+static void pcal6408a_reset_hold(Object *obj, ResetType type)
 {
-    PCAL6408AState *s = PCAL6408A(dev);
+    PCAL6408AState *s = PCAL6408A(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     s->cur_reg = 0;
@@ -222,13 +223,14 @@ static const VMStateDescription vmstate_pcal6408a = {
 static void pcal6408a_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     k->event = pcal6408a_event;
     k->recv = pcal6408a_recv;
     k->send = pcal6408a_send;
     dc->vmsd = &vmstate_pcal6408a;
-    device_class_set_legacy_reset(dc, pcal6408a_reset);
+    rc->phases.hold = pcal6408a_reset_hold;
     dc->desc = "NXP PCAL6408A IO expander (i.MX95 SM stub)";
 }
 
@@ -291,9 +293,9 @@ static uint8_t pf53_recv(I2CSlave *i2c)
     return s->regs[s->cur_reg++];
 }
 
-static void pf53_reset(DeviceState *dev)
+static void pf53_reset_hold(Object *obj, ResetType type)
 {
-    PF53State *s = PF53_PMIC(dev);
+    PF53State *s = PF53_PMIC(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     s->cur_reg = 0;
@@ -316,13 +318,14 @@ static const VMStateDescription vmstate_pf53 = {
 static void pf53_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     k->event = pf53_event;
     k->recv = pf53_recv;
     k->send = pf53_send;
     dc->vmsd = &vmstate_pf53;
-    device_class_set_legacy_reset(dc, pf53_reset);
+    rc->phases.hold = pf53_reset_hold;
     dc->desc = "NXP PF53 PMIC (i.MX95 SM stub)";
 }
 

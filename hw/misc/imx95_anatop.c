@@ -142,9 +142,9 @@ static const MemoryRegionOps imx95_anatop_ops = {
     },
 };
 
-static void imx95_anatop_reset(DeviceState *dev)
+static void imx95_anatop_reset_hold(Object *obj, ResetType type)
 {
-    IMX95AnatopState *s = IMX95_ANATOP(dev);
+    IMX95AnatopState *s = IMX95_ANATOP(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
 }
@@ -172,9 +172,10 @@ static const VMStateDescription vmstate_imx95_anatop = {
 static void imx95_anatop_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_anatop;
-    device_class_set_legacy_reset(dc, imx95_anatop_reset);
+    rc->phases.hold = imx95_anatop_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 ANATOP/PLL (stub)";
 }

@@ -27,7 +27,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXMUState, IMX_MU)
 
 /*
  * V2 register offsets. Source: NXP U-Boot imx_mu_cfg_imx95 in
- * references/uboot-imx/drivers/mailbox/imx-mailbox.c.
+ * U-Boot drivers/mailbox/imx-mailbox.c.
  */
 #define IMX_MU_VER              0x000   /* version (RO) */
 #define IMX_MU_PAR              0x004   /* parameter (RO; TR/RR counts) */

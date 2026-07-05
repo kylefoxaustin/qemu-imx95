@@ -100,9 +100,9 @@ static const MemoryRegionOps imx95_gpc_ops = {
     },
 };
 
-static void imx95_gpc_reset(DeviceState *dev)
+static void imx95_gpc_reset_hold(Object *obj, ResetType type)
 {
-    IMX95GPCState *s = IMX95_GPC(dev);
+    IMX95GPCState *s = IMX95_GPC(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
 }
@@ -130,9 +130,10 @@ static const VMStateDescription vmstate_imx95_gpc = {
 static void imx95_gpc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &vmstate_imx95_gpc;
-    device_class_set_legacy_reset(dc, imx95_gpc_reset);
+    rc->phases.hold = imx95_gpc_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "NXP i.MX 95 GPC (stub)";
 }

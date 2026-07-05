@@ -39,7 +39,7 @@
 /*
  * struct ele_get_info_data layout (u32 word offsets), pinned to the
  * U-Boot ele_api.h definition at
- * references/uboot-imx/arch/arm/include/asm/mach-imx/ele_api.h:168.
+ * U-Boot arch/arm/include/asm/mach-imx/ele_api.h:168.
  * Using named offsets here so a future U-Boot rev that reorders or
  * adds fields trips a build/runtime mismatch instead of silently
  * writing into the wrong slot.
@@ -216,9 +216,9 @@ static void ele_on_tr_write(void *opaque, unsigned int idx, uint32_t value)
     }
 }
 
-static void imx95_ele_server_reset(DeviceState *dev)
+static void imx95_ele_server_reset_hold(Object *obj, ResetType type)
 {
-    IMX95ELEServerState *s = IMX95_ELE_SERVER(dev);
+    IMX95ELEServerState *s = IMX95_ELE_SERVER(obj);
 
     s->msg_count = 0;
     s->msg_size  = 0;
@@ -258,10 +258,11 @@ static const VMStateDescription vmstate_imx95_ele_server = {
 static void imx95_ele_server_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->realize = imx95_ele_server_realize;
     dc->vmsd = &vmstate_imx95_ele_server;
-    device_class_set_legacy_reset(dc, imx95_ele_server_reset);
+    rc->phases.hold = imx95_ele_server_reset_hold;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->desc = "qemu-imx95 ELE responder stub (v0.1, get_info only)";
     device_class_set_props(dc, imx95_ele_server_properties);
