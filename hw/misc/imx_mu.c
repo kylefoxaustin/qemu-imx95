@@ -113,14 +113,6 @@ void imx_mu_set_tr_write_handler(IMXMUState *s,
     s->tr_write_opaque  = opaque;
 }
 
-void imx_mu_set_peer(IMXMUState *s, IMXMUState *peer)
-{
-    s->peer = peer;
-    if (peer) {
-        peer->peer = s;
-    }
-}
-
 void imx_mu_deliver_rr(IMXMUState *s, unsigned int idx, uint32_t value)
 {
     if (idx >= IMX_MU_NUM_CHANNELS) {
@@ -386,6 +378,17 @@ static const MemoryRegionOps imx_mu_ops = {
     },
 };
 
+/*
+ * "peer" accepts any TYPE_IMX_MU and is settable at any time: the SM/M7 MUB
+ * endpoint is only created (and hence linkable) once its M-core is realized,
+ * so the SoC establishes the link after realize. A non-NULL check is what
+ * makes the link writable; the type is already enforced by the link itself.
+ */
+static void imx_mu_peer_check(const Object *obj, const char *name,
+                              Object *val, Error **errp)
+{
+}
+
 static void imx_mu_init(Object *obj)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
@@ -395,6 +398,17 @@ static void imx_mu_init(Object *obj)
                           TYPE_IMX_MU, IMX_MU_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
+
+    /*
+     * "peer" links the two endpoints (MUA/MUB) of one physical MU. It is a
+     * weak link - both endpoints are owned by the SoC container, so neither
+     * refs the other - and is settable after realize, because the SM/M7 MUB
+     * side is only created once the M-core it faces exists. That is why this
+     * uses object_property_add_link() rather than a static DEFINE_PROP_LINK
+     * (which forbids setting a link once the device is realized).
+     */
+    object_property_add_link(obj, "peer", TYPE_IMX_MU,
+                             (Object **)&s->peer, imx_mu_peer_check, 0);
 }
 
 static void imx_mu_class_init(ObjectClass *klass, const void *data)

@@ -1374,7 +1374,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(SYS_BUS_DEVICE(mub), 0, mub_base);
         sysbus_connect_irq(SYS_BUS_DEVICE(mub), 0,
             qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_SM_MU_B_M33_IRQ));
-        imx_mu_set_peer(&s->sm_mu, mub);
+        object_property_set_link(OBJECT(&s->sm_mu), "peer", OBJECT(mub),
+                                 &error_abort);
+        object_property_set_link(OBJECT(mub), "peer", OBJECT(&s->sm_mu),
+                                 &error_abort);
 
         memory_region_init_alias(&s->sm_shmem_b, OBJECT(s), "imx95-sm-shmem-b",
                                  &s->sm_shmem, 0,
@@ -1481,7 +1484,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(SYS_BUS_DEVICE(mub), 0, mub_base);
         sysbus_connect_irq(SYS_BUS_DEVICE(mub), 0,
             qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_M7_SM_MU_B_M33_IRQ));
-        imx_mu_set_peer(&s->m7_sm_mu, mub);
+        object_property_set_link(OBJECT(&s->m7_sm_mu), "peer", OBJECT(mub),
+                                 &error_abort);
+        object_property_set_link(OBJECT(mub), "peer", OBJECT(&s->m7_sm_mu),
+                                 &error_abort);
 
         /*
          * 1 KiB SMT page at MUA+0x1000, aliased to MUB+0x1000 so both sides
@@ -1529,7 +1535,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(mub, 0,
             qdev_get_gpio_in(DEVICE(&s->m7), FSL_IMX95_MU7_B_M7_IRQ));
 
-        imx_mu_set_peer(&s->mu7_a, &s->mu7_b);
+        object_property_set_link(OBJECT(&s->mu7_a), "peer",
+                                 OBJECT(&s->mu7_b), &error_abort);
+        object_property_set_link(OBJECT(&s->mu7_b), "peer",
+                                 OBJECT(&s->mu7_a), &error_abort);
     }
 
     /*

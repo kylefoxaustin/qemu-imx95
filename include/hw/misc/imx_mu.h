@@ -107,7 +107,8 @@ struct IMXMUState {
      * matching GSR.GIPn on the peer (raising the peer's IRQ once the peer
      * enables GIER.GIEn), instead of invoking doorbell_handler. This models
      * the A55-side (MUA) <-> M33-side (MUB) cross-connect used to let the
-     * real SM firmware service the A55's SCMI traffic.
+     * real SM firmware service the A55's SCMI traffic. Set via the "peer"
+     * QOM link property (registered in imx_mu_init()).
      */
     IMXMUState          *peer;
 };
@@ -124,12 +125,6 @@ void imx_mu_set_doorbell_handler(IMXMUState *s,
 void imx_mu_set_tr_write_handler(IMXMUState *s,
                                  IMXMUTRWriteHandler handler,
                                  void *opaque);
-
-/*
- * Link two MU endpoints as hardware peers (the MUA and MUB sides of one
- * physical MU). Sets the peer link in both directions. Pass either side.
- */
-void imx_mu_set_peer(IMXMUState *s, IMXMUState *peer);
 
 /*
  * Deliver a response word into RR[idx] and assert RSR.RFn so the
