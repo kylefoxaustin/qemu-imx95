@@ -103,7 +103,10 @@ Two cmdline details are load-bearing:
 For the M7's SM-managed lifecycle (boot, rpmsg, fault recovery), see
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst).
 
-## Scope: what's modelled, what's deferred
+## What runs today
+
+### Scope — what's modelled, what's deferred
+
 
 This machine models the **full i.MX 95 CPU complement** — all three CPU types,
 not a partial SoC. The headline: it boots **real Linux on the A55 cluster, with
@@ -144,7 +147,7 @@ customer-specific real-time peripherals (TSN, DSP) remain further out. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
-## What runs today
+
 
 Stock **NXP Linux 6.12.49** boots to userspace (PID 1) on the 6-core A55
 cluster, on top of the real NXP **System Manager** firmware running on the
@@ -604,36 +607,131 @@ external user would have hit them: an LPUART FIFO read-only-bit storm
 (commit `741af2f5e3`) and an undocumented `file` host-package dependency in a
 test script (commit `7def38532a`).
 
-## Roadmap
+## Interconnect — board-to-board (mission #5)
 
-Near-term focus is **landing this machine upstream** — the series plus its
-three generic-QEMU prereq patches (`target/arm/ptw.c`,
-`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
+Beyond running on one board, the i.MX 95 **passes real data between QEMU
+instances** over its buses, in the per-link socket shape a lab coordinator
+([holobench](https://github.com/kylefoxaustin/holobench)) wires — two emulated
+boards hook up over a stock QEMU socket, no host kernel/root. Every link has a
+byte-exact oracle. Harness: [`tests/interconnect-imx95/`](tests/interconnect-imx95/)
+(all four legs wired into `tests/run-all.sh`).
 
-**NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five
-controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
-host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
-JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
-functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
-under "What runs today" above. **Linux block storage** is now functional too —
-read/write **eMMC + SD** over the uSDHC/ADMA datapath, enough to mount an ext4
-rootfs read-write and boot a **Weston desktop** off it. The **Neutron NPU** also
-comes up end to end (`remoteproc` + driver + LiteRT delegate running
-`benchmark_model`); only its proprietary on-NPU compute is deferred. What
-remains is forward-looking:
+| Transport | Shape | Status |
+|---|---|:--:|
+| **Ethernet** | two 95s, ENETC `eth0` over `-nic socket` | PASS |
+| **UART** | two 95s, LPUART3 `/dev/ttyLP2` over `-chardev socket` | PASS |
+| **SPI** | two 95s, LPSPI7 `/dev/spidev0.0` via the **`spi-link`** device over `-chardev socket` | PASS |
+| **CAN** | two 95s, FlexCAN `can0` via **`can-host-chardev`** over `-chardev socket` | PASS |
 
-| Feature | What | Target |
-|---|---|---|
-| **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera ISP** | The ap1302 firmware-loading ISP front end (basic **MIPI CSI-2 → ISI V4L2 capture is now functional** via the ov5640 sensor — `STREAMON`/`DQBUF` real frames; the ISP's on-chip image processing is what remains) | after display |
-| **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
-| BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
-| GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
-| Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
+Two transports use **shared chardev-bridge devices** pooled across the fleet:
+`can-host-chardev` (`net/can/can_host_chardev.c`) — **authored here** — bridges an
+emulated can-bus to a chardev with no host `vcan`/root; and `spi-link`
+(`hw/ssi/spi_link.c`, from the i.MX 91) bridges an SPI bus to a chardev. Bringing
+SPI up drove out the real fix the LPSPI register qtest had passed over: the 95 runs
+SPI over **eDMA**, which bursts each byte to `TDR`, but the LPSPI MMIO was
+4-byte-only so every DMA byte-write was silently dropped — now it accepts 1..4-byte
+access (a silent-wrong the qtest couldn't see).
 
-The deferred rows are characterized with precise failure points in
-[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md); none is a
-fidelity compromise in the modelled hardware.
+**Cross-SoC validated.** `can-host-chardev` and `spi_link` are proven byte-exact
+across **i.MX 91 / 93 / 95 / MCXN947** — Linux↔bare-metal-M33 and eDMA↔PIO masters
+— so any two boards interoperate
+([`tests/interconnect-imx95/xcheck-spi-91.sh`](tests/interconnect-imx95/xcheck-spi-91.sh),
+[`xcheck-can-mcx.sh`](tests/interconnect-imx95/xcheck-can-mcx.sh)).
+
+## Validation
+
+Correctness rests on **several independent gates**, not one:
+
+1. **Kernel-free qtests** on the `imx95-19x19-evk` machine (2D blit, eDMA, ENETC,
+   LPSPI, FlexCAN, JPEG, Mali GPU-ID, Neutron, ISI) — the matrix is assembled by
+   [`tests/gen-test-matrix.py`](tests/gen-test-matrix.py), which reads Tier from
+   [`docs/validation/test-matrix.yaml`](docs/validation/test-matrix.yaml) and
+   fills the result from the run; a companion anti-drift gate
+   (`tests/check-matrix-drift.sh`) fails the build if the README capability table
+   and the matrix disagree.
+2. **MMIO + eDMA descriptor fuzzers** (ASan+UBSan) that found and fixed two real
+   model bugs (an XCVR 8-byte-read UB and an unbounded eDMA transfer).
+3. **24-hour everything-soak** exercising every modelled datapath concurrently
+   (zero anomalies, flat RSS).
+4. **Functional boot test** — Linux to userspace on the real NXP System Manager
+   ([`tests/functional/aarch64/test_imx95_evk.py`](tests/functional/aarch64/test_imx95_evk.py)),
+   plus mainline-kernel boot.
+5. **Interconnect + cross-SoC** — byte-exact board-to-board over eth/UART/SPI/CAN,
+   cross-validated against the i.MX 91 / 93 / MCXN947 nodes (above).
+
+The model also **compiles and runs real third-party code in-guest on the A55** (the
+code-sweep + in-guest-build tiers). Fidelity judgments live in
+[`docs/validation/fidelity-audit.md`](docs/validation/fidelity-audit.md).
+
+### Smoke tests
+
+
+    # machine registers
+    ./build/qemu-system-aarch64 -M help | grep imx95
+
+    # bare-metal hello (no SM firmware needed - useful to verify the build
+    # itself before assembling the boot artifacts)
+    cd tests/hello-imx95 && make && cd ../..
+    ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
+        -kernel tests/hello-imx95/hello.bin      # -> "Hello from i.MX 95!"
+
+    # M7 fingerprint (no SM firmware needed - verifies the M7 instance + TCMs)
+    make -C tests/cm7-hello TOOLCHAIN=arm-none-eabi-
+    tests/m7-boot/run.sh     # -> "M7 fingerprint 0xC0FFEE07 detected"
+
+    # SM standalone to its monitor
+    SM_ELF=<m33_image.elf> tests/sm-banner/run.sh
+
+    # full Linux to userspace on the real SM
+    tests/swap-boot/run.sh
+
+    # audio: all three ASoC cards register (wm8962 / micfil / bt-sco)
+    SND_MODDIR=<bsp>/lib/modules/<kver>/kernel/sound tests/audio/run.sh
+
+    # HW JPEG codecs register as /dev/video2 (dec) + /dev/video3 (enc)
+    JPEG_MODDIR=<bsp>/lib/modules/<kver>/kernel/drivers/media tests/jpeg/run.sh
+
+    # HW JPEG functional decode through the real GStreamer media stack
+    BSP_ROOTFS=<imx-image-full rootfs> tests/gstreamer/run.sh
+
+    # functional small peripherals: RGPIO, TPM PWM, i.MX93 ADC, LPI2C buses
+    tests/gpio/run.sh ; tests/pwm/run.sh ; tests/adc/run.sh ; tests/i2c/run.sh
+
+    # FlexSPI + serial NOR: enumerate a 64 MiB mtd, read + write/read-back
+    tests/flexspi/run.sh
+
+    # code-sweep: real third-party source cross-built + run on the A55, checked
+    # against each project's own oracle (36 CPU + 8 peripheral items)
+    tests/code-sweep/run.sh ; tests/code-sweep/run-peripheral.sh
+
+    # in-guest build tier: compile AND run on the A55 (self-hosting proof) -
+    # tcc+musl, real gcc/g++ off eMMC, and real upstream projects (bzip2/zlib/lua)
+    # built natively + their own `make test` passing
+    tests/in-guest-build/run.sh ; tests/in-guest-build/run-gcc.sh
+    tests/in-guest-build/run-gcc-build.sh
+
+The per-block fidelity record (which blocks COMPUTE vs FAULT-honestly vs are
+flagged) is [`docs/validation/fidelity-audit.md`](docs/validation/fidelity-audit.md);
+machine-readable results of record are
+[`docs/validation/code-sweep-matrix.yaml`](docs/validation/code-sweep-matrix.yaml).
+
+
+### Methodology & contributing
+
+
+The project is built measure-first: propose a hypothesis, verify it against
+data, and re-plan when measurement disagrees. The debugging techniques that
+recur (the "five pillars"), the register-class triage pattern, the v1.x
+cross-layer patterns (multi-layer probe failures, generic bugs surfaced by
+platform-specific symptoms, one device model serving multiple protocols, "a
+wall is a hypothesis"), and the working mode itself are written up in
+[`docs/imx95/methodology.md`](docs/imx95/methodology.md); a fresh-eyes review
+discipline (the GitHub render-cache pitfall) is in
+[`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
+Per-milestone design and review notes are kept in `docs/reviews/` as local
+working artifacts — they are not committed to the repo (the directory is
+`.gitignore`d), so they won't appear in a clone.
+
 
 ## Required artifacts
 
@@ -669,42 +767,41 @@ Either drop your artifacts there, set `IMX95_ARTIFACTS=/your/dir`, or set the
 individual `SM_ELF`/`KERNEL`/`DTB` vars per run. The scripts print exactly which
 var to set if an artifact is missing.
 
-## Known limitations
+## Building
 
-**Deep cpuidle requires `cpuidle.off=1`.** Without it, Linux hangs shortly
-after `SCMI Notifications - Core Enabled`. The mechanism is fully
-characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
+    mkdir -p build && cd build
+    ../configure --target-list=aarch64-softmmu
+    ninja qemu-system-aarch64
 
-1. Linux's `cpu-pd-wait` idle state has `local-timer-stop`, so an idling core
-   shuts down its per-CPU arch timer and relies on a broadcast clockevent.
-   **The machine model provides this** — `hw/timer/imx95_sysctr.c` is a real
-   system-counter timer (live counter + compare-match IRQ on GIC SPI 72).
-2. On entering that state, Linux's GIC `cpu_pm` notifier disables the per-CPU
-   GIC interface (matching real silicon, where a deeper power state is entered).
-3. **QEMU's GICv3 model does not implement the architectural WakeRequest** — it
-   never wakes a halted CPU on a pending interrupt once the CPU interface is
-   quiesced. So a cross-CPU wake (e.g. a `stop_machine` IPI) can't reach the
-   idle core, and the boot hangs. This affects all GICv3 QEMU machines.
-4. With `cpuidle.off=1`, Linux uses shallow WFI on the still-running per-CPU
-   arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
-   follow-up to qemu-devel.
+**Host packages (Ubuntu 22.04, verified from a clean container).** This exact
+set builds QEMU + runs every test from a pristine Ubuntu with nothing
+pre-installed:
 
-**The GPU and the VPU (Wave6) are not functionally modelled** (no GPU rendering,
-no VPU video codec; the HW JPEG codecs, a separate block, are functional). Linux
-still *sees* both: the Wave6 VPU drivers bind (`/dev/video*` present), and the
-Mali GPU model reports the real Mali-G310 GPU_ID so kbase **identifies** it
-(`GPU identified as 0x4 arch 10.12.0`) and then fails the un-modelled CSF
-bring-up **cleanly** (-EIO) — no hang, no fake `/dev/mali0`. (A fully-bound GPU
-couldn't render anyway: kbase's userspace is Arm's proprietary libmali, not
-Mesa.) The **Neutron NPU brings up end to end**: the remoteproc
-loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
-(`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
-(`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0
-nodes and inference falls back to CPU), since the proprietary firmware's inference
-is out of scope.
+    sudo apt install -y \
+        meson ninja-build python3 python3-venv python3-tomli \
+        gcc libc6-dev pkg-config libglib2.0-dev libpixman-1-dev \
+        binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+        gcc-arm-none-eabi \
+        netcat-openbsd \
+        bison flex libssl-dev libgnutls28-dev efitools
 
-Full diagnoses, including the icount × multi-CPU finding, are in
-[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
+What each group is for:
+
+- `meson ninja-build python3 python3-venv python3-tomli gcc libc6-dev
+  pkg-config libglib2.0-dev libpixman-1-dev` — the QEMU build itself.
+  (`python3-venv` provides `ensurepip` and `python3-tomli` the TOML parser that
+  QEMU's `configure`/meson need; both are stdlib on newer distros but separate
+  packages on 22.04.)
+- `binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu` — the aarch64 bare-metal
+  hello test + a static initramfs init.
+- `gcc-arm-none-eabi` — the Cortex-M7 firmware tests (`tests/cm7-hello`,
+  `tests/m7-boot`).
+- `netcat-openbsd` — the M7 boot/fault tests drive QEMU's HMP monitor over a
+  Unix socket with `nc -U`; the openbsd variant is the one with `-U`.
+- `bison flex libssl-dev libgnutls28-dev efitools` — the U-Boot SPL test.
+
+This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
+`ubuntu:22.04` container: build + smoke tests + a Linux boot to userspace).
 
 ## Architecture overview
 
@@ -756,109 +853,76 @@ addresses and IRQ numbers.
 | `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
 | `docs/imx95/known-limitations.md` | full limitation diagnoses |
 
-## Building
+## Known limitations
 
-    mkdir -p build && cd build
-    ../configure --target-list=aarch64-softmmu
-    ninja qemu-system-aarch64
+**Deep cpuidle requires `cpuidle.off=1`.** Without it, Linux hangs shortly
+after `SCMI Notifications - Core Enabled`. The mechanism is fully
+characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
 
-**Host packages (Ubuntu 22.04, verified from a clean container).** This exact
-set builds QEMU + runs every test from a pristine Ubuntu with nothing
-pre-installed:
+1. Linux's `cpu-pd-wait` idle state has `local-timer-stop`, so an idling core
+   shuts down its per-CPU arch timer and relies on a broadcast clockevent.
+   **The machine model provides this** — `hw/timer/imx95_sysctr.c` is a real
+   system-counter timer (live counter + compare-match IRQ on GIC SPI 72).
+2. On entering that state, Linux's GIC `cpu_pm` notifier disables the per-CPU
+   GIC interface (matching real silicon, where a deeper power state is entered).
+3. **QEMU's GICv3 model does not implement the architectural WakeRequest** — it
+   never wakes a halted CPU on a pending interrupt once the CPU interface is
+   quiesced. So a cross-CPU wake (e.g. a `stop_machine` IPI) can't reach the
+   idle core, and the boot hangs. This affects all GICv3 QEMU machines.
+4. With `cpuidle.off=1`, Linux uses shallow WFI on the still-running per-CPU
+   arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
+   follow-up to qemu-devel.
 
-    sudo apt install -y \
-        meson ninja-build python3 python3-venv python3-tomli \
-        gcc libc6-dev pkg-config libglib2.0-dev libpixman-1-dev \
-        binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
-        gcc-arm-none-eabi \
-        netcat-openbsd \
-        bison flex libssl-dev libgnutls28-dev efitools
+**The GPU and the VPU (Wave6) are not functionally modelled** (no GPU rendering,
+no VPU video codec; the HW JPEG codecs, a separate block, are functional). Linux
+still *sees* both: the Wave6 VPU drivers bind (`/dev/video*` present), and the
+Mali GPU model reports the real Mali-G310 GPU_ID so kbase **identifies** it
+(`GPU identified as 0x4 arch 10.12.0`) and then fails the un-modelled CSF
+bring-up **cleanly** (-EIO) — no hang, no fake `/dev/mali0`. (A fully-bound GPU
+couldn't render anyway: kbase's userspace is Arm's proprietary libmali, not
+Mesa.) The **Neutron NPU brings up end to end**: the remoteproc
+loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
+(`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
+(`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0
+nodes and inference falls back to CPU), since the proprietary firmware's inference
+is out of scope.
 
-What each group is for:
+Full diagnoses, including the icount × multi-CPU finding, are in
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
-- `meson ninja-build python3 python3-venv python3-tomli gcc libc6-dev
-  pkg-config libglib2.0-dev libpixman-1-dev` — the QEMU build itself.
-  (`python3-venv` provides `ensurepip` and `python3-tomli` the TOML parser that
-  QEMU's `configure`/meson need; both are stdlib on newer distros but separate
-  packages on 22.04.)
-- `binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu` — the aarch64 bare-metal
-  hello test + a static initramfs init.
-- `gcc-arm-none-eabi` — the Cortex-M7 firmware tests (`tests/cm7-hello`,
-  `tests/m7-boot`).
-- `netcat-openbsd` — the M7 boot/fault tests drive QEMU's HMP monitor over a
-  Unix socket with `nc -U`; the openbsd variant is the one with `-U`.
-- `bison flex libssl-dev libgnutls28-dev efitools` — the U-Boot SPL test.
+## Roadmap & milestone history
 
-This list is exercised end-to-end by `tests/docker-repro/run.sh` (a clean
-`ubuntu:22.04` container: build + smoke tests + a Linux boot to userspace).
 
-## Smoke tests
+Near-term focus is **landing this machine upstream** — the series plus its
+three generic-QEMU prereq patches (`target/arm/ptw.c`,
+`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
 
-    # machine registers
-    ./build/qemu-system-aarch64 -M help | grep imx95
+**NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five
+controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
+host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
+JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
+functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
+under "What runs today" above. **Linux block storage** is now functional too —
+read/write **eMMC + SD** over the uSDHC/ADMA datapath, enough to mount an ext4
+rootfs read-write and boot a **Weston desktop** off it. The **Neutron NPU** also
+comes up end to end (`remoteproc` + driver + LiteRT delegate running
+`benchmark_model`); only its proprietary on-NPU compute is deferred. What
+remains is forward-looking:
 
-    # bare-metal hello (no SM firmware needed - useful to verify the build
-    # itself before assembling the boot artifacts)
-    cd tests/hello-imx95 && make && cd ../..
-    ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
-        -kernel tests/hello-imx95/hello.bin      # -> "Hello from i.MX 95!"
+| Feature | What | Target |
+|---|---|---|
+| **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
+| **Camera ISP** | The ap1302 firmware-loading ISP front end (basic **MIPI CSI-2 → ISI V4L2 capture is now functional** via the ov5640 sensor — `STREAMON`/`DQBUF` real frames; the ISP's on-chip image processing is what remains) | after display |
+| **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
+| BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
+| GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
+| Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
 
-    # M7 fingerprint (no SM firmware needed - verifies the M7 instance + TCMs)
-    make -C tests/cm7-hello TOOLCHAIN=arm-none-eabi-
-    tests/m7-boot/run.sh     # -> "M7 fingerprint 0xC0FFEE07 detected"
+The deferred rows are characterized with precise failure points in
+[`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md); none is a
+fidelity compromise in the modelled hardware.
 
-    # SM standalone to its monitor
-    SM_ELF=<m33_image.elf> tests/sm-banner/run.sh
 
-    # full Linux to userspace on the real SM
-    tests/swap-boot/run.sh
-
-    # audio: all three ASoC cards register (wm8962 / micfil / bt-sco)
-    SND_MODDIR=<bsp>/lib/modules/<kver>/kernel/sound tests/audio/run.sh
-
-    # HW JPEG codecs register as /dev/video2 (dec) + /dev/video3 (enc)
-    JPEG_MODDIR=<bsp>/lib/modules/<kver>/kernel/drivers/media tests/jpeg/run.sh
-
-    # HW JPEG functional decode through the real GStreamer media stack
-    BSP_ROOTFS=<imx-image-full rootfs> tests/gstreamer/run.sh
-
-    # functional small peripherals: RGPIO, TPM PWM, i.MX93 ADC, LPI2C buses
-    tests/gpio/run.sh ; tests/pwm/run.sh ; tests/adc/run.sh ; tests/i2c/run.sh
-
-    # FlexSPI + serial NOR: enumerate a 64 MiB mtd, read + write/read-back
-    tests/flexspi/run.sh
-
-    # code-sweep: real third-party source cross-built + run on the A55, checked
-    # against each project's own oracle (36 CPU + 8 peripheral items)
-    tests/code-sweep/run.sh ; tests/code-sweep/run-peripheral.sh
-
-    # in-guest build tier: compile AND run on the A55 (self-hosting proof) -
-    # tcc+musl, real gcc/g++ off eMMC, and real upstream projects (bzip2/zlib/lua)
-    # built natively + their own `make test` passing
-    tests/in-guest-build/run.sh ; tests/in-guest-build/run-gcc.sh
-    tests/in-guest-build/run-gcc-build.sh
-
-The per-block fidelity record (which blocks COMPUTE vs FAULT-honestly vs are
-flagged) is [`docs/validation/fidelity-audit.md`](docs/validation/fidelity-audit.md);
-machine-readable results of record are
-[`docs/validation/code-sweep-matrix.yaml`](docs/validation/code-sweep-matrix.yaml).
-
-## Methodology & contributing
-
-The project is built measure-first: propose a hypothesis, verify it against
-data, and re-plan when measurement disagrees. The debugging techniques that
-recur (the "five pillars"), the register-class triage pattern, the v1.x
-cross-layer patterns (multi-layer probe failures, generic bugs surfaced by
-platform-specific symptoms, one device model serving multiple protocols, "a
-wall is a hypothesis"), and the working mode itself are written up in
-[`docs/imx95/methodology.md`](docs/imx95/methodology.md); a fresh-eyes review
-discipline (the GitHub render-cache pitfall) is in
-[`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
-Per-milestone design and review notes are kept in `docs/reviews/` as local
-working artifacts — they are not committed to the repo (the directory is
-`.gitignore`d), so they won't appear in a clone.
-
-## Milestone history
 
 - **v0.0.1–v0.0.2** — scaffold; real memory map from the DTS; `imx.lpuart`
   model + LPUART1 console; bare-metal hello.
