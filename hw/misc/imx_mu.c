@@ -23,6 +23,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 static const VMStateDescription vmstate_imx_mu = {
     .name = TYPE_IMX_MU,
@@ -93,6 +94,7 @@ void imx_mu_assert_gip(IMXMUState *s, unsigned int idx)
     if (idx >= IMX_MU_NUM_CHANNELS) {
         return;
     }
+    trace_imx_mu_gip(idx);
     s->gsr |= IMX_MU_V2_BIT(idx);
     imx_mu_update_irq(s);
 }
@@ -118,6 +120,7 @@ void imx_mu_deliver_rr(IMXMUState *s, unsigned int idx, uint32_t value)
     if (idx >= IMX_MU_NUM_CHANNELS) {
         return;
     }
+    trace_imx_mu_rr_deliver(idx, value);
     s->rr[idx]  = value;
     s->rsr     |= IMX_MU_V2_BIT(idx);
     imx_mu_update_irq(s);
@@ -218,6 +221,7 @@ static void imx_mu_write(void *opaque, hwaddr offset,
         offset < IMX_MU_TR_BASE + IMX_MU_NUM_CHANNELS * 4) {
         unsigned idx = (offset - IMX_MU_TR_BASE) / 4;
         s->tr[idx] = value;
+        trace_imx_mu_tr_write(idx, value);
         /*
          * Writing TR[n] clears TSR.TEn (TX empty). Three delivery modes:
          *  - TR-write handler (C-stub responders): consumes the word
@@ -314,6 +318,7 @@ static void imx_mu_write(void *opaque, hwaddr offset,
             if (!(newly & IMX_MU_V2_BIT(i))) {
                 continue;
             }
+            trace_imx_mu_doorbell(i);
             if (s->peer) {
                 s->peer->gsr |= IMX_MU_V2_BIT(i);
                 imx_mu_update_irq(s->peer);

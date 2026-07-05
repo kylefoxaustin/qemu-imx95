@@ -26,6 +26,7 @@
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_XCACHE "imx95.xcache"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95XCacheState, IMX95_XCACHE)
@@ -61,6 +62,8 @@ static uint64_t imx95_xcache_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMX95XCacheState *s = opaque;
 
+    trace_imx95_xcache_read(offset);
+
     switch (offset) {
     case XCACHE_CCR:
         return s->ccr;
@@ -82,6 +85,8 @@ static void imx95_xcache_write(void *opaque, hwaddr offset,
                                uint64_t value, unsigned size)
 {
     IMX95XCacheState *s = opaque;
+
+    trace_imx95_xcache_write(offset, value);
 
     switch (offset) {
     case XCACHE_CCR:

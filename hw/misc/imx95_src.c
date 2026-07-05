@@ -26,6 +26,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_SRC "imx95.src"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95SRCState, IMX95_SRC)
@@ -138,9 +139,15 @@ static void imx95_src_write(void *opaque, hwaddr offset,
 
         if (!(old & SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX) &&
              (new & SRC_GEN_SCR_BOOT_RESET_RELEASE_M7MIX)) {
+            trace_imx95_src_m7mix_release();
             qemu_irq_raise(s->m7mix_release);
         }
         return;
+    }
+
+    if (offset >= SRC_SLICE_STRIDE &&
+        (offset & (SRC_SLICE_STRIDE - 1)) == SRC_SLICE_SW_CTRL) {
+        trace_imx95_src_slice_ctrl(offset, (uint32_t)value);
     }
 
     s->regs[offset / 4] = value;

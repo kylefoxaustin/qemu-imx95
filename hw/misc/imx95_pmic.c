@@ -21,6 +21,7 @@
 #include "qemu/module.h"
 #include "hw/i2c/i2c.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 /* ---- J1850 CRC (matches imx-sm components/crc/crc.c CRC_J1850) ---- */
 #define CRC_J1850_POLY  0x1Du
@@ -80,6 +81,7 @@ static int pf09_send(I2CSlave *i2c, uint8_t data)
         s->cur_reg = data;          /* register address */
     } else if (s->wcount == 1) {
         s->regs[s->cur_reg] = data; /* data byte */
+        trace_pf09_reg_write(s->cur_reg, data);
     }
     /* wcount >= 2 is the trailing CRC byte: accept and ignore. */
     s->wcount++;
@@ -93,6 +95,7 @@ static uint8_t pf09_recv(I2CSlave *i2c)
 
     if (s->rcount == 0) {
         val = s->regs[s->cur_reg];
+        trace_pf09_reg_read(s->cur_reg, val);
     } else {
         /* CRC over (devAddr<<1)|1, reg, data - what PF09_PmicRead checks. */
         uint8_t buf[3] = {
@@ -185,6 +188,7 @@ static int pcal6408a_send(I2CSlave *i2c, uint8_t data)
     if (s->wcount == 0) {
         s->cur_reg = data;
     } else {
+        trace_pcal6408a_reg_write(s->cur_reg, data);
         s->regs[s->cur_reg++] = data;
     }
     s->wcount++;
@@ -194,8 +198,11 @@ static int pcal6408a_send(I2CSlave *i2c, uint8_t data)
 static uint8_t pcal6408a_recv(I2CSlave *i2c)
 {
     PCAL6408AState *s = PCAL6408A(i2c);
+    uint8_t val = s->regs[s->cur_reg];
 
-    return s->regs[s->cur_reg++];
+    trace_pcal6408a_reg_read(s->cur_reg, val);
+    s->cur_reg++;
+    return val;
 }
 
 static void pcal6408a_reset_hold(Object *obj, ResetType type)
@@ -280,6 +287,7 @@ static int pf53_send(I2CSlave *i2c, uint8_t data)
     if (s->wcount == 0) {
         s->cur_reg = data;
     } else {
+        trace_pf53_reg_write(s->cur_reg, data);
         s->regs[s->cur_reg++] = data;
     }
     s->wcount++;
@@ -289,8 +297,11 @@ static int pf53_send(I2CSlave *i2c, uint8_t data)
 static uint8_t pf53_recv(I2CSlave *i2c)
 {
     PF53State *s = PF53_PMIC(i2c);
+    uint8_t val = s->regs[s->cur_reg];
 
-    return s->regs[s->cur_reg++];
+    trace_pf53_reg_read(s->cur_reg, val);
+    s->cur_reg++;
+    return val;
 }
 
 static void pf53_reset_hold(Object *obj, ResetType type)

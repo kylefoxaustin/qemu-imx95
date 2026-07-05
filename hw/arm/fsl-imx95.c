@@ -100,7 +100,7 @@ static const struct {
     [FSL_IMX95_BBNSM]                = { 0x44440000, 4 * KiB,    "bbnsm" },
     [FSL_IMX95_XCACHE_PC]            = { 0x44400000, 0x800,      "xcache_pc" },
     [FSL_IMX95_XCACHE_PS]            = { 0x44400800, 0x800,      "xcache_ps" },
-    [FSL_IMX95_BLK_CTRL_HSIOMIX]     = { 0x4c010000, 64 * KiB,   "blk_ctrl_hsiomix" },
+    [FSL_IMX95_BLK_CTRL_HSIOMIX]     = { 0x4c010000, 64 * KiB,   "hsiomix" },
     [FSL_IMX95_GPC]                  = { 0x44470000, 64 * KiB,   "gpc" },
 
     /*
@@ -134,10 +134,10 @@ static const struct {
      * (kernel touches it directly per imx95.dtsi:2874); the other three
      * are SCMI-routed from U-Boot imx-regs.h.
      */
-    [FSL_IMX95_BLK_CTRL_S_AONMIX]    = { 0x444f0000, 64 * KiB,   "blk_ctrl_s_aonmix" },
-    [FSL_IMX95_BLK_CTRL_NS_ANOMIX]   = { 0x44210000, 64 * KiB,   "blk_ctrl_ns_anomix" },
-    [FSL_IMX95_BLK_CTRL_WAKEUPMIX]   = { 0x42420000, 64 * KiB,   "blk_ctrl_wakeupmix" },
-    [FSL_IMX95_BLK_CTRL_NETCMIX]     = { 0x4c810000, 64 * KiB,   "blk_ctrl_netcmix" },
+    [FSL_IMX95_BLK_CTRL_S_AONMIX]    = { 0x444f0000, 64 * KiB,   "s_aonmix" },
+    [FSL_IMX95_BLK_CTRL_NS_ANOMIX]   = { 0x44210000, 64 * KiB,   "ns_anomix" },
+    [FSL_IMX95_BLK_CTRL_WAKEUPMIX]   = { 0x42420000, 64 * KiB,   "wakeupmix" },
+    [FSL_IMX95_BLK_CTRL_NETCMIX]     = { 0x4c810000, 64 * KiB,   "netcmix" },
 
     /*
      * System Manager SCMI channel. dtsi: mu2 mailbox@445b0000 (4 KiB) with
@@ -161,7 +161,7 @@ static const struct {
     /* AON_VFCCU (FCCU_BASE), AON_ERMA, NOC_SRAMCTL - SM eMcem/fabric init. */
     [FSL_IMX95_VFCCU_AON]            = { 0x44570000, 64 * KiB,   "vfccu-aon" },
     [FSL_IMX95_ERMA]                 = { 0x44560000, 64 * KiB,   "erma" },
-    [FSL_IMX95_NOC_SRAMCTL]          = { 0x490a0000, 64 * KiB,   "noc-sramctl" },
+    [FSL_IMX95_NOC_SRAMCTL]          = { 0x490a0000, 64 * KiB,   "sramctl" },
 
     /*
      * Other MU instances U-Boot proper probes from DT but we don't

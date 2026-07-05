@@ -21,6 +21,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 static const VMStateDescription vmstate_imx_lpuart = {
     .name = TYPE_IMX_LPUART,
@@ -206,6 +207,7 @@ static void imx_lpuart_write(void *opaque, hwaddr offset,
          * it wrote. Preserve DMA-enable and other configuration bits.
          */
         s->baud = value;
+        trace_imx_lpuart_baud(s->baud);
         break;
 
     case LPUART_STAT:
@@ -234,6 +236,7 @@ static void imx_lpuart_write(void *opaque, hwaddr offset,
          * first enabling TE themselves. Without this, kernel console
          * output vanishes silently and earlycon appears broken.
          */
+        trace_imx_lpuart_tx(ch);
         qemu_chr_fe_write_all(&s->chr, &ch, 1);
         /*
          * TDRE and TC are pinned high; the byte goes out instantly. A
@@ -298,6 +301,7 @@ static void imx_lpuart_receive(void *opaque, const uint8_t *buf, int size)
 
     s->rx_byte = buf[0];
     s->rx_full = true;
+    trace_imx_lpuart_rx(s->rx_byte);
     s->stat |= LPUART_STAT_RDRF;
     imx_lpuart_update_irq(s);
 }

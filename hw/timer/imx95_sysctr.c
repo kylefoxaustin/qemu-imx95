@@ -35,6 +35,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_SYSCTR "imx95.sysctr"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95SysctrState, IMX95_SYSCTR)
@@ -90,6 +91,7 @@ static void imx95_sysctr_update(IMX95SysctrState *s)
         uint64_t deadline = muldiv64(imx95_sysctr_cmpcv(s),
                                      NANOSECONDS_PER_SECOND,
                                      IMX95_SYSCTR_FREQ_HZ);
+        trace_imx95_sysctr_cmp(imx95_sysctr_cmpcv(s));
         timer_mod(&s->timer, deadline);
     } else {
         timer_del(&s->timer);
@@ -102,6 +104,7 @@ static void imx95_sysctr_timer_cb(void *opaque)
     IMX95SysctrState *s = opaque;
 
     if (s->cmpcr & SYSCTR_CMPCR_EN) {
+        trace_imx95_sysctr_expire();
         qemu_set_irq(s->irq, 1);
     }
 }

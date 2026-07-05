@@ -27,6 +27,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/i2c/i2c.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX_LPI2C "imx.lpi2c"
 OBJECT_DECLARE_SIMPLE_TYPE(IMXLPI2CState, IMX_LPI2C)
@@ -106,6 +107,7 @@ static void imx_lpi2c_do_command(IMXLPI2CState *s, uint32_t val)
         /* DATA = (addr << 1) | rw. */
         uint8_t addr = data >> 1;
         bool recv = data & 1;
+        trace_imx_lpi2c_start(addr, recv);
         if (i2c_start_transfer(s->bus, addr, recv) != 0) {
             s->msr |= MSR_NDF;     /* no slave acked the address */
         } else {
@@ -114,6 +116,7 @@ static void imx_lpi2c_do_command(IMXLPI2CState *s, uint32_t val)
         break;
     }
     case MTDR_CMD_TXDATA:
+        trace_imx_lpi2c_send(data);
         if (i2c_send(s->bus, data) != 0) {
             s->msr |= MSR_NDF;
         }
@@ -122,11 +125,14 @@ static void imx_lpi2c_do_command(IMXLPI2CState *s, uint32_t val)
         /* Receive (DATA + 1) bytes. */
         unsigned n = (unsigned)data + 1;
         for (unsigned i = 0; i < n; i++) {
-            imx_lpi2c_rx_push(s, i2c_recv(s->bus));
+            uint8_t b = i2c_recv(s->bus);
+            trace_imx_lpi2c_recv(b);
+            imx_lpi2c_rx_push(s, b);
         }
         break;
     }
     case MTDR_CMD_STOP:
+        trace_imx_lpi2c_stop();
         i2c_end_transfer(s->bus);
         s->msr |= MSR_SDF | MSR_EPF;
         s->msr &= ~(MSR_MBF | MSR_BBF);

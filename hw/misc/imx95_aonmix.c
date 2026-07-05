@@ -28,6 +28,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_AONMIX "imx95.aonmix"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95AonmixState, IMX95_AONMIX)
@@ -55,6 +56,7 @@ static uint64_t imx95_aonmix_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMX95AonmixState *s = opaque;
 
+    trace_imx95_aonmix_read(offset);
     return s->regs[offset / 4];
 }
 
@@ -62,6 +64,8 @@ static void imx95_aonmix_write(void *opaque, hwaddr offset,
                                uint64_t value, unsigned size)
 {
     IMX95AonmixState *s = opaque;
+
+    trace_imx95_aonmix_write(offset, value);
 
     /*
      * M7_CFG.WAIT toggling is the SM holding (set) or releasing (clear) the
@@ -74,7 +78,9 @@ static void imx95_aonmix_write(void *opaque, hwaddr offset,
 
         s->regs[offset / 4] = new;
         if ((old ^ new) & AONMIX_M7_CFG_WAIT) {
-            qemu_set_irq(s->m7_run, (new & AONMIX_M7_CFG_WAIT) ? 0 : 1);
+            int run = (new & AONMIX_M7_CFG_WAIT) ? 0 : 1;
+            trace_imx95_aonmix_m7_gate(run);
+            qemu_set_irq(s->m7_run, run);
         }
         return;
     }

@@ -35,6 +35,7 @@
 #include "hw/core/qdev-properties-system.h"
 #include "system/dma.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 /*
  * struct ele_get_info_data layout (u32 word offsets), pinned to the
@@ -134,6 +135,7 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
     /* Response: header + status. */
     uint32_t resp_hdr = ele_make_header(ELE_VERSION, 2,
                                         ELE_GET_INFO_REQ, ELE_RESP_TAG);
+    trace_imx95_ele_response(ELE_GET_INFO_REQ);
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
 }
@@ -146,6 +148,7 @@ static void ele_handle_generic_ok(IMX95ELEServerState *s, uint8_t command)
 {
     uint32_t resp_hdr = ele_make_header(ELE_VERSION, 2,
                                         command, ELE_RESP_TAG);
+    trace_imx95_ele_response(command);
     imx_mu_deliver_rr(s->mu, 0, resp_hdr);
     imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
 }
@@ -156,6 +159,7 @@ static void ele_dispatch(IMX95ELEServerState *s)
     uint8_t  command = ELE_HDR_COMMAND(header);
     uint8_t  tag     = ELE_HDR_TAG(header);
 
+    trace_imx95_ele_msg(command, tag, s->msg_size);
     qemu_log_mask(LOG_UNIMP,
                   "ele-server: cmd=0x%02x tag=0x%02x size=%u\n",
                   command, tag, s->msg_size);

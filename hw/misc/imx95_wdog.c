@@ -25,6 +25,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_WDOG "imx95.wdog"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95WDogState, IMX95_WDOG)
@@ -89,6 +90,7 @@ static void imx95_wdog_write(void *opaque, hwaddr offset,
          * "wait for RCS" loop at the tail of disable_wdog() exits.
          */
         s->cs = (value & ~CS_RCS) | CS_RCS;
+        trace_imx95_wdog_config(s->cs);
         break;
 
     case WDOG_CNT:
@@ -100,6 +102,7 @@ static void imx95_wdog_write(void *opaque, hwaddr offset,
          */
         if ((uint32_t)value == UNLOCK_WORD) {
             s->cs |= CS_ULK;
+            trace_imx95_wdog_unlock();
         }
         break;
 

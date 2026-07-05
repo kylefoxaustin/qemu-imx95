@@ -27,6 +27,7 @@
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_GPC "imx95.gpc"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95GPCState, IMX95_GPC)
@@ -82,6 +83,11 @@ static void imx95_gpc_write(void *opaque, hwaddr offset,
                             uint64_t value, unsigned size)
 {
     IMX95GPCState *s = opaque;
+
+    if (offset < GPC_GLOBAL_OFF &&
+        (offset & (CPU_CTRL_BLOCK_SIZE - 1)) == CMC_MODE_CTRL) {
+        trace_imx95_gpc_mode(offset, (uint32_t)value & 0x3);
+    }
 
     s->regs[offset / 4] = value;
 }

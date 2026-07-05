@@ -419,3 +419,48 @@ iommu_testdev_dma_read(uint64_t gva, uint32_t len) "gva=0x%" PRIx64 " len=%u"
 iommu_testdev_dma_verify(uint32_t expected, uint32_t actual) "expected=0x%x actual=0x%x"
 iommu_testdev_dma_result(uint32_t result) "DMA completed result=0x%x"
 iommu_testdev_dma_armed(bool armed) "armed=%d"
+
+# imx_mu.c
+imx_mu_tr_write(unsigned idx, uint32_t val) "TR[%u] <- 0x%08x"
+imx_mu_rr_deliver(unsigned idx, uint32_t val) "RR[%u] <- 0x%08x"
+imx_mu_doorbell(unsigned idx) "doorbell GIR channel %u"
+imx_mu_gip(unsigned idx) "GIP assert channel %u"
+
+# imx95_ele_server.c
+imx95_ele_msg(uint8_t command, uint8_t tag, uint32_t size) "received cmd 0x%02x tag 0x%02x size %u"
+imx95_ele_response(uint8_t command) "response cmd 0x%02x"
+
+# imx95_anatop.c
+imx95_anatop_read(uint64_t offset) "read off 0x%" PRIx64
+imx95_anatop_write(uint64_t offset, uint64_t value) "write off 0x%" PRIx64 " <- 0x%08" PRIx64
+
+# imx95_aonmix.c
+imx95_aonmix_read(uint64_t offset) "read off 0x%" PRIx64
+imx95_aonmix_write(uint64_t offset, uint64_t value) "write off 0x%" PRIx64 " <- 0x%08" PRIx64
+imx95_aonmix_m7_gate(int run) "M7 wait gate -> run=%d"
+
+# imx95_gpc.c
+imx95_gpc_mode(uint64_t offset, uint32_t target) "CMC_MODE_CTRL off 0x%" PRIx64 " target %u"
+
+# imx95_src.c
+imx95_src_m7mix_release(void) "SRC_GEN.SCR M7MIX reset released"
+imx95_src_slice_ctrl(uint64_t offset, uint32_t value) "SLICE_SW_CTRL off 0x%" PRIx64 " <- 0x%08x"
+
+# imx95_wdog.c
+imx95_wdog_config(uint32_t cs) "CS <- 0x%08x"
+imx95_wdog_unlock(void) "unlock word written"
+
+# imx95_xcache.c
+imx95_xcache_read(uint64_t offset) "read off 0x%" PRIx64
+imx95_xcache_write(uint64_t offset, uint64_t value) "write off 0x%" PRIx64 " <- 0x%08" PRIx64
+
+# imx95_dpu.c
+imx95_dpu_cmdseq_status(uint32_t value) "CMDSEQ_STATUS -> 0x%08x"
+
+# imx95_pmic.c
+pf09_reg_read(uint8_t reg, uint8_t val) "PF09 reg 0x%02x -> 0x%02x"
+pf09_reg_write(uint8_t reg, uint8_t val) "PF09 reg 0x%02x <- 0x%02x"
+pcal6408a_reg_read(uint8_t reg, uint8_t val) "PCAL6408A reg 0x%02x -> 0x%02x"
+pcal6408a_reg_write(uint8_t reg, uint8_t val) "PCAL6408A reg 0x%02x <- 0x%02x"
+pf53_reg_read(uint8_t reg, uint8_t val) "PF53 reg 0x%02x -> 0x%02x"
+pf53_reg_write(uint8_t reg, uint8_t val) "PF53 reg 0x%02x <- 0x%02x"

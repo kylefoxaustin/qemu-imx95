@@ -31,6 +31,7 @@
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_ANATOP "imx95.anatop"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95AnatopState, IMX95_ANATOP)
@@ -70,6 +71,8 @@ static uint64_t imx95_anatop_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMX95AnatopState *s = opaque;
 
+    trace_imx95_anatop_read(offset);
+
     if (anatop_in_pll_window(offset)) {
         hwaddr blk = offset & ~(hwaddr)(PLL_BLOCK_SIZE - 1);
         uint32_t reg = offset & (PLL_BLOCK_SIZE - 1);
@@ -98,6 +101,8 @@ static void imx95_anatop_write(void *opaque, hwaddr offset,
                                uint64_t value, unsigned size)
 {
     IMX95AnatopState *s = opaque;
+
+    trace_imx95_anatop_write(offset, value);
 
     if (anatop_in_pll_window(offset)) {
         uint32_t reg = offset & (PLL_BLOCK_SIZE - 1);

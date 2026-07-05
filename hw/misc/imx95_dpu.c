@@ -28,6 +28,7 @@
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
+#include "trace.h"
 
 #define TYPE_IMX95_DPU "imx95.dpu"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
@@ -57,7 +58,9 @@ static uint64_t imx95_dpu_read(void *opaque, hwaddr offset, unsigned size)
          * submitted. If a future milestone exercises real DPU command
          * submission, FIFOSPACE must track the command FIFO occupancy instead.
          */
-        return DPU_CMDSEQ_STATUS_IDLE | DPU_CMDSEQ_STATUS_FIFOSPACE;
+        uint32_t status = DPU_CMDSEQ_STATUS_IDLE | DPU_CMDSEQ_STATUS_FIFOSPACE;
+        trace_imx95_dpu_cmdseq_status(status);
+        return status;
     }
     return 0;
 }
