@@ -13,21 +13,32 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 > NETC. The upstream QEMU README is preserved at [`README.rst`](README.rst) —
 > this file describes the i.MX 95-specific work.
 
-qemu-imx95 boots stock NXP BSP Linux to userspace with the **real NXP System
-Manager firmware** running on the emulated Cortex-M33 serving the Cortex-A55
-cluster's SCMI traffic. It brings up much of the EVK: **NETC networking**
-(ENETC, `eth0` up with working ping), **read/write SD/eMMC storage** (a real
-ext4 rootfs over uSDHC/ADMA), the **DPU display** with multi-plane compositing,
-both pixel pipelines and a **Weston/Wayland desktop**, the **2D blit engine**
-(real NXP G2D), **HW JPEG** encode/decode, **FlexCAN**, **USB** (HID keyboard),
-three **ASoC audio cards**, the **Neutron NPU** stack, **expandable I²C** (all
-eight LPI2C, `-device`-attachable), and the **Cortex-M33** real-time core
-running real NXP firmware plus a **Cortex-M7** with A55↔M7 RPMsg. Intended use
-cases are BSP development, System Manager firmware development, peripheral-driver
-development, and CI for the above. It is not cycle-accurate. The GPU and the VPU (Wave6) video codec are stubbed at probe
-time only — no GPU rendering, no VPU video codec — while the HW JPEG codecs are
-functional; and the Neutron NPU brings up end to end but its proprietary compute
-is out of scope (see [Known limitations](#known-limitations)).
+qemu-imx95 is the **first QEMU model of the i.MX 95**, and one node in a fleet of
+NXP QEMU ports (i.MX 91 / 93 / 95 and the MCXN947 microcontroller) that share
+device models and a validation standard. The i.MX 95 sits at the **top of the
+A55 line**: **six Cortex-A55** application cores, a **Cortex-M33** running NXP's
+**System Manager** (SM) firmware, and a **Cortex-M7** real-time core. Its
+defining trait — unlike the i.MX 91 / 93 — is that the SM firmware on the M33 is
+the **only SCMI provider**: Linux's clock, power, reset and sensor operations are
+served by real NXP firmware over a mailbox, not by software inside QEMU. It is
+not cycle-accurate.
+
+It boots stock **NXP BSP Linux to userspace** on the A55 cluster, with the **real
+System Manager firmware** on the emulated Cortex-M33 serving the cluster's SCMI
+traffic. Beyond booting it brings up much of the EVK: **NETC networking** (ENETC,
+`eth0` up with working ping), **read/write SD/eMMC** (a real ext4 rootfs over
+uSDHC/ADMA), the **DPU display** — multi-plane compositing, both pixel pipelines,
+a **Weston/Wayland desktop** — the **2D blit engine** (real NXP G2D), **HW JPEG**
+encode/decode, **FlexCAN**, **USB** HID keyboard, **three ASoC audio cards**, the
+**Neutron NPU** stack, all eight **LPI2C** (`-device`-attachable), and the
+**Cortex-M33** plus a **Cortex-M7** with A55↔M7 RPMsg. Intended use: BSP and
+System-Manager-firmware development, peripheral-driver development, and CI; the
+long-term aim is upstream-mergeability into QEMU mainline.
+
+The **GPU** and the **VPU** (Wave6) video codec are stubbed at probe time only —
+no GPU rendering, no VPU codec — while the HW JPEG codecs are functional; and the
+**Neutron NPU** brings up end to end but its proprietary compute is out of scope
+(see [Known limitations](#known-limitations)).
 
 Structural and stylistic conventions follow the upstream i.MX 8MP code
 (`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`); the long-term aim is to be
@@ -35,6 +46,11 @@ upstream-mergeable into QEMU mainline.
 
 **Maintainer:** Kyle Fox ([@kylefoxaustin](https://github.com/kylefoxaustin))
 (see [`MAINTAINERS`](MAINTAINERS) for the canonical entry).
+
+![i.MX 95 — six Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7, the top of the A55 line](docs/images/imx95-hero.png)
+
+*Part of a consistent hero-image family across the QEMU fleet — solid silicon for
+the emulator repos, one accent per node (i.MX 95 amber).*
 
 ![i.MX 95 booting Linux on the emulated DPU display — six A55 SMP Tux logos](docs/images/dpu-boot-logo.png)
 
@@ -728,6 +744,14 @@ wall is a hypothesis"), and the working mode itself are written up in
 [`docs/imx95/methodology.md`](docs/imx95/methodology.md); a fresh-eyes review
 discipline (the GitHub render-cache pitfall) is in
 [`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
+
+The full **pre-upstream validation pipeline** — the readiness review, the
+security and prompt-injection sweeps, the GitHub secret/dependency checks, the
+cppcheck / clang-analyzer / sparse static analysis (each proven against a planted
+bug), and the QEMU-specific gates (checkpatch, bisectability, docs build, patch
+fidelity) — is written up as a reusable, fleet-ratified playbook in
+[`docs/imx95/upstream-submission-playbook.md`](docs/imx95/upstream-submission-playbook.md).
+
 Per-milestone design and review notes are kept in `docs/reviews/` as local
 working artifacts — they are not committed to the repo (the directory is
 `.gitignore`d), so they won't appear in a clone.
