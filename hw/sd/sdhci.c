@@ -332,6 +332,13 @@ static void sdhci_poweron_reset(DeviceState *dev)
 
 static void sdhci_data_transfer(void *opaque);
 
+/*
+ * Forward decl so sdhci_sdma_transfer_multi_blocks can detect the
+ * i.MX/FSL uSDHC variant via s->io_ops; the actual definition lives
+ * near the other i.MX-specific MemoryRegionOps further down.
+ */
+static const MemoryRegionOps usdhc_mmio_ops;
+
 #define BLOCK_SIZE_MASK (4 * KiB - 1)
 
 static void sdhci_send_command(SDHCIState *s)
@@ -611,12 +618,27 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     }
 
     /*
-     * XXX: Some sd/mmc drivers (for example, u-boot-slp) do not account for
-     * possible stop at page boundary if initial address is not page aligned,
-     * allow them to work properly
+     * The i.MX/FSL uSDHC silicon does not implement the SDHCI "Host SDMA
+     * Buffer Boundary" mechanism; it transfers all blocks back-to-back
+     * regardless of buffer-boundary address alignment. The blksize-quirk
+     * in esdhc_write() forces bits 14:12 to 0b111 (= 512 KiB) so Linux's
+     * "zero this field out" pattern doesn't trip a 4 KiB boundary break,
+     * but the real hardware never pauses for the boundary at all, so
+     * neither should we. Skipping the page-aligned path makes the SDMA
+     * transfer run to completion (blkcnt -> 0) and fire transfer-complete,
+     * which is what the FSL U-Boot SPL driver expects (it doesn't ack
+     * SDMA-boundary IRQs by re-writing SYSAD). Controllers with this
+     * behaviour set SDHCI_QUIRK_NO_SDMA_BOUNDARY.
      */
-    if ((s->sdmasysad % boundary_chk) == 0) {
-        page_aligned = true;
+    if (!(s->quirks & SDHCI_QUIRK_NO_SDMA_BOUNDARY)) {
+        /*
+         * XXX: Some sd/mmc drivers (for example, u-boot-slp) do not
+         * account for possible stop at page boundary if initial address
+         * is not page aligned, allow them to work properly
+         */
+        if ((s->sdmasysad % boundary_chk) == 0) {
+            page_aligned = true;
+        }
     }
 
     s->prnsts |= SDHC_DATA_INHIBIT | SDHC_DAT_LINE_ACTIVE;
@@ -992,9 +1014,26 @@ static void sdhci_data_transfer(void *opaque)
     }
 }
 
+static bool sdhci_clock_is_on(SDHCIState *s)
+{
+    /*
+     * The i.MX (u)SDHC has no software SD-clock-enable bit (the card clock
+     * is auto-gated by hardware), so its driver never sets
+     * SDHC_CLOCK_SDCLK_EN. For such a controller, treat the clock as
+     * running once the internal clock is enabled and stable; otherwise
+     * every command would be silently dropped (no completion/timeout IRQ),
+     * stalling the guest on 10s host-side timeouts.
+     */
+    if (s->quirks & SDHCI_QUIRK_SDCLK_AUTO_GATE) {
+        return (s->clkcon & (SDHC_CLOCK_INT_EN | SDHC_CLOCK_INT_STABLE)) ==
+               (SDHC_CLOCK_INT_EN | SDHC_CLOCK_INT_STABLE);
+    }
+    return SDHC_CLOCK_IS_ON(s->clkcon);
+}
+
 static bool sdhci_can_issue_command(SDHCIState *s)
 {
-    if (!SDHC_CLOCK_IS_ON(s->clkcon) ||
+    if (!sdhci_clock_is_on(s) ||
         (((s->prnsts & SDHC_DATA_INHIBIT) || s->stopped_state) &&
         ((s->cmdreg & SDHC_CMD_DATA_PRESENT) ||
         ((s->cmdreg & SDHC_CMD_RESPONSE) == SDHC_CMD_RSP_WITH_BUSY &&
@@ -1613,6 +1652,9 @@ static void sdhci_bus_class_init(ObjectClass *klass, const void *data)
 
 #define ESDHC_VENDOR_SPEC               0xc0
 #define ESDHC_FRC_SDCLK_ON              (1 << 8)
+#define ESDHC_VENDORSPEC_IPGEN          (1 << 11)
+#define ESDHC_VENDORSPEC_HCKEN          (1 << 12)
+#define ESDHC_VENDORSPEC_CKEN           (1 << 14)
 
 #define ESDHC_DLL_CTRL                  0x60
 
@@ -1706,6 +1748,25 @@ esdhc_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
             s->prnsts &= ~ESDHC_PRNSTS_CLOCK_GATE_OFF;
         } else {
             s->prnsts |= ESDHC_PRNSTS_CLOCK_GATE_OFF;
+        }
+        /*
+         * The FSL/i.MX uSDHC drives the SD clock through VENDORSPEC,
+         * not through the SDHCI CLKCON. Mirror the VENDORSPEC clock-
+         * enable bits into clkcon so the standard SDHCI paths (PRNSTS
+         * .SDSTB derived from CLOCK_INT_STABLE; sdhci_can_issue_command
+         * gating on CLOCK_IS_ON = INT_EN | SDCLK_EN) see the clock as
+         * enabled. Without this the U-Boot fsl_esdhc_imx driver waits
+         * forever for SDSTB and times out at -ETIMEDOUT, and commands
+         * silently never dispatch because can_issue_command returns
+         * false.
+         */
+        if (value & (ESDHC_VENDORSPEC_HCKEN | ESDHC_VENDORSPEC_IPGEN)) {
+            s->clkcon |= SDHC_CLOCK_INT_EN | SDHC_CLOCK_INT_STABLE;
+        }
+        if (value & ESDHC_VENDORSPEC_CKEN) {
+            s->clkcon |= SDHC_CLOCK_SDCLK_EN;
+        } else {
+            s->clkcon &= ~SDHC_CLOCK_SDCLK_EN;
         }
         break;
 
@@ -1862,7 +1923,7 @@ static void fsl_esdhc_be_init(Object *obj)
     DeviceState *dev = DEVICE(obj);
 
     s->io_ops = &esdhc_mmio_be_ops;
-    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ;
+    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ | SDHCI_QUIRK_SDCLK_AUTO_GATE;
     qdev_prop_set_uint8(dev, "sd-spec-version", 2);
 }
 
@@ -1887,7 +1948,7 @@ static void fsl_esdhc_le_init(Object *obj)
     DeviceState *dev = DEVICE(obj);
 
     s->io_ops = &esdhc_mmio_le_ops;
-    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ;
+    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ | SDHCI_QUIRK_SDCLK_AUTO_GATE;
     qdev_prop_set_uint8(dev, "sd-spec-version", 2);
 }
 
@@ -1908,7 +1969,8 @@ static void imx_usdhc_init(Object *obj)
     DeviceState *dev = DEVICE(obj);
 
     s->io_ops = &usdhc_mmio_ops;
-    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ;
+    s->quirks = SDHCI_QUIRK_NO_BUSY_IRQ | SDHCI_QUIRK_SDCLK_AUTO_GATE |
+                SDHCI_QUIRK_NO_SDMA_BOUNDARY;
     qdev_prop_set_uint8(dev, "sd-spec-version", 3);
 }
 
