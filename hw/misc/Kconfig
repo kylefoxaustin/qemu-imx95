@@ -258,3 +258,6 @@ config XLNX_ZYNQ_DDRC
     bool
 
 source macio/Kconfig
+
+config IMX_MU
+    bool
