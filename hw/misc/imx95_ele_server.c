@@ -187,7 +187,7 @@ static void ele_on_tr_write(void *opaque, unsigned int idx, uint32_t value)
     IMX95ELEServerState *s = opaque;
 
     /* Invoked from the MU MMIO write handler, which runs under the BQL. */
-    g_assert(bql_locked());
+    assert(bql_locked());
 
     if (s->msg_count >= IMX95_ELE_MAX_WORDS) {
         qemu_log_mask(LOG_GUEST_ERROR,
