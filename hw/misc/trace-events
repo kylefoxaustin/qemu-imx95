@@ -460,3 +460,9 @@ launch_update_write(void) ""
 vmlaunch_reset_enter(void) ""
 vm_launchupdate_finalize(void) ""
 restore_host_x86_igvm(void) ""
+
+# imx_mu.c
+imx_mu_tr_write(unsigned idx, uint32_t val) "TR[%u] <- 0x%08x"
+imx_mu_rr_deliver(unsigned idx, uint32_t val) "RR[%u] <- 0x%08x"
+imx_mu_doorbell(unsigned idx) "doorbell GIR channel %u"
+imx_mu_gip(unsigned idx) "GIP assert channel %u"
