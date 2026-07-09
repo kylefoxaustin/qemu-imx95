@@ -161,7 +161,43 @@ machine did not back.
 This bug was always there. It needed only one more PCI function to fire, and it
 would have fired on a user's `-device` too.
 
-### 8. A ~30% flake in the two-port NETC test — and a near-miss false bisect
+### 8. TCP over ENETC never worked — TX checksum offload was never implemented
+
+The biggest find of the night, and it was not silicon that found it. Chasing the
+flake below turned up a red gate, and behind that gate was this.
+
+When an skb is `CHECKSUM_PARTIAL` the ENETC driver does **not** checksum in
+software. It sets `TXBD FLAGS_L4CS` (plus `ipcs` for IPv4), leaves only the
+pseudo-header sum in the L4 field, and expects the MAC to finish the job. Our TX
+path transmitted the frame untouched. Every TCP segment therefore arrived at the
+peer with a wrong checksum and was dropped — counted in the peer's
+`TcpExt InCsumErrors`, logged nowhere.
+
+ICMP kept working, because the kernel checksums ICMP in software. So the link
+looked perfectly healthy: carrier up, ping fine, counters climbing, TCP dead.
+The peer's `/proc/net/snmp` told the whole story at a glance:
+
+```
+Tcp: ... InSegs 77   InErrs 77   InCsumErrors 77   OutSegs 0
+```
+
+`enetc4` only takes the offload path when checksum offload is active, which the
+driver enables **at revision 4** — the revision we report, and correctly so per
+silicon. **Reporting the right revision opened a code path we had never
+implemented.** That is a general hazard: a fidelity fix can activate driver
+behaviour the model does not have.
+
+Fixed for IPv4 (via `net_checksum_calculate()`) and for IPv6 (own pseudo-header
+computation, since the shared helper is IPv4-only). The interconnect test now
+proves a byte-exact payload over both, and the IPv6 leg was checked by disabling
+the new code and confirming that leg — and only that leg — fails.
+
+Two harness faults had hidden this for months: `tests/interconnect-imx95/run-eth.sh`
+drove `nc`, which this busybox does not build (both ends failed silently under
+`2>/dev/null`), and its replacement `httpd -p PORT` binds the IPv6 wildcard so
+IPv4 SYNs reached no listener. The gate had been red since at least `imx95-v2.4.0`.
+
+### 9. A ~30% flake in the two-port NETC test — and a near-miss false bisect
 
 While regression-testing the above, `tests/netc/run-2port.sh` failed. It looked
 exactly like an intermittent silent packet-drop in the NIC model: links up, zero
