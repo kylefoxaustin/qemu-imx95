@@ -71,12 +71,20 @@ n=0; while [ \$n -lt 60 ]; do
 done
 [ -n "\$IF" ] || { echo "ZRESULT FAIL (no netdev on 0002:00:00.0)"; poweroff -f; }
 echo "ZIF socket-backed PF 0002:00:00.0 = \$IF"
-if [ "\$ROLE" = server ]; then MY=10.0.0.1; PEER=10.0.0.2; MYMAC=$SRV_MAC; PMAC=$CLI_MAC; else MY=10.0.0.2; PEER=10.0.0.1; MYMAC=$CLI_MAC; PMAC=$SRV_MAC; fi
+if [ "\$ROLE" = server ]; then MY=10.0.0.1; PEER=10.0.0.2; MY6=fd00::1; PEER6=fd00::2; MYMAC=$SRV_MAC; PMAC=$CLI_MAC; else MY=10.0.0.2; PEER=10.0.0.1; MY6=fd00::2; PEER6=fd00::1; MYMAC=$CLI_MAC; PMAC=$SRV_MAC; fi
 # The distinct per-side MAC now comes from the model (-nic mac=, below): the
 # ENETC SI primary-MAC register seeds it so the guest reads a valid station
 # address. (A shared MAC across the two ends of a point-to-point link breaks L2,
 # hence distinct MACs per side.) MYMAC is what we expect the model to report.
 ip addr add \$MY/24 dev \$IF; ip link set \$IF up
+# IPv6: skip DAD (a tentative address cannot be bound) and pin the peer's
+# neighbour entry, exactly as the IPv4 side does.
+echo 0 > /proc/sys/net/ipv6/conf/\$IF/accept_dad 2>/dev/null
+echo 0 > /proc/sys/net/ipv6/conf/all/accept_dad 2>/dev/null
+ip -6 addr add \$MY6/64 dev \$IF
+ip -6 neigh replace \$PEER6 lladdr \$PMAC dev \$IF nud permanent 2>/dev/null
+sleep 1
+echo "ZADDR6 \$(ip -6 addr show dev \$IF 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
 echo "ZMAC \$IF=\$(cat /sys/class/net/\$IF/address) (expect \$MYMAC)"
 # static neighbour: take ARP timing out of the loop (we know the peer's MAC).
 ip neigh replace \$PEER lladdr \$PMAC dev \$IF nud permanent 2>/dev/null
@@ -100,8 +108,25 @@ if [ "\$ROLE" = server ]; then
     done
     [ -s /tmp/rx ] || echo "ZFETCH FAIL (no payload after \$m tries)"
     got=\$(cat /tmp/rx 2>/dev/null); want=\$(cat /payload)
+    # Same proof over IPv6: the driver requests L4 checksum offload for v6 too,
+    # and net_checksum_calculate() cannot do v6 - so this catches a v6-only
+    # checksum regression that the IPv4 transfer above would miss.
+    m6=0
+    while [ \$m6 -lt 30 ]; do
+        if wget -q -T 3 -O /tmp/rx6 "http://[\$PEER6]:\$PORT/payload" 2>/dev/null && [ -s /tmp/rx6 ]; then
+            echo "ZFETCH6 ok (try \$m6)"; break
+        fi
+        sleep 1; m6=\$((m6+1))
+    done
+    got6=\$(cat /tmp/rx6 2>/dev/null)
+    [ -s /tmp/rx6 ] || echo "ZFETCH6 FAIL (no IPv6 payload after \$m6 tries)"
+    echo "ZTCPERR \$(sed -n '/^Tcp:/{n;p}' /proc/net/snmp 2>/dev/null)"
     echo "ZSTATS \$IF tx=\$(cat /sys/class/net/\$IF/statistics/tx_packets) rx=\$(cat /sys/class/net/\$IF/statistics/rx_packets)"
-    if [ "\$got" = "\$want" ]; then echo "ZRESULT PASS (rx byte-exact: \$got)"; else echo "ZRESULT FAIL (got=[\$got] want=[\$want])"; fi
+    if [ "\$got" = "\$want" ] && [ "\$got6" = "\$want" ]; then
+        echo "ZRESULT PASS (rx byte-exact over IPv4 and IPv6: \$got)"
+    else
+        echo "ZRESULT FAIL (v4=[\$got] v6=[\$got6] want=[\$want])"
+    fi
 else
     # client: warm the link with ICMP first so BOTH RX rings are posted before
     # the short-lived TCP transfer. A frame arriving before ndo_open() finishes
@@ -113,7 +138,9 @@ else
     # Bind the IPv4 address explicitly: with a bare -p PORT busybox httpd binds
     # the IPv6 wildcard (:::PORT) and never answers the peer's IPv4 SYNs.
     httpd -f -p \$MY:\$PORT -h / &
+    httpd -f -p [\$MY6]:\$PORT -h / &
     sleep 2
+    echo "ZLISTEN6 \$(netstat -ltn 2>/dev/null | grep -F "\$MY6" || echo NONE)"
     echo "ZLISTEN \$(netstat -ltn 2>/dev/null | grep ":\$PORT" || echo NONE)"
     if netstat -ltn 2>/dev/null | grep -q "\$MY:\$PORT"; then
         echo "ZSENT ok (httpd serving /payload on \$MY:\$PORT)"
