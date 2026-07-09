@@ -210,6 +210,28 @@ Do not chase these in QEMU. The real board prints all of them:
 - `imx8mq-usb-phy ...: supply vbus not found, using dummy regulator`.
 - `hwmon hwmon2: temp1_input not attached to any thermal zone`.
 
+## Silent-wrong sweep: what we answer 0 for
+
+Booting to userspace with `-d guest_errors,unimp` yields **2376 write-warnings
+but only 104 read-warnings** across a whole boot. Writes to an unimplemented
+register are absorbed and harmless; a *read* that returns 0 is the silent-wrong
+candidate. Reading those exact addresses on silicon:
+
+| Register | Silicon | Ours | |
+|---|---|---|---|
+| netcmix-blk-ctrl `0x4c810004` | `0x00000000` | 0 | ✅ our zero is correct |
+| netc-prb `0x4cdf0104` | `0x00000000` | 0 | ✅ correct |
+| display-csr `0x4b010000` | `0x00000002` | 0 | diverges |
+| lvds-csr `0x4b0c0000` | `0x00000014` | 0 | diverges |
+| camera-csr `0x4ac10000` | `0x00000073` | 0 | diverges |
+| usb3-phy `0x4c1f0000` | `0x0020f003` | 0 | diverges |
+| vpu-csr `0x4c410000` | (power-gated, faults) | 0 | unknown |
+
+All the divergences are `syscon`/CSR regmap blocks that drivers read-modify-write
+rather than branch on, and display, LVDS, camera and USB3 all come up in the
+emulator today. Left alone; recorded here so a future consumer that *does* branch
+has the real values to hand.
+
 ## Neutron: the standing silent-wrong
 
 Real silicon runs yolov8n at **22.2 IPS**, delegating 5 NeutronGraph partitions
@@ -225,8 +247,28 @@ default. The honest-fault lever exists and is off:
 qom-set /machine/soc/neutron neutron-uncomputed-errcode 0x<errcode>
 ```
 
-Whether that default should flip is a policy call, not a code call. Raised for
-discussion — see the open questions below.
+**What the board says about that choice.** Reading the real mailbox during a
+successful inference:
+
+```
+MBOX3 = 0x00000269 (RUN)      MBOX0 = 0x000000a3 (RUN_ACK)   MBOX1 = 0x00000000
+MBOX3 = 0x00023637 (RESET)    MBOX0 = 0x00000000 (RESET_VAL) MBOX1 = 0x00000000
+APPCTRL = 0xf8070400          APPSTATUS = 0x00000010
+```
+
+Three things follow. First, **`MBOX0` really does return to `RESET_VAL` when
+`RESET` lands in `MBOX3`** — direct silicon confirmation of the fix above, which
+was inferred from the driver before the board was available. Second, `APPCTRL`
+carries the `0xF807` firmware-up handshake exactly as we model it. Third, and
+most relevant to the policy call: **real hardware reports `error_code = 0` on a
+successful inference.** So our default of 0 is *faithful* — turning on the
+honest-fault errcode is a deliberate, deliberate-and-documented departure from
+silicon, trading fidelity-of-the-register for honesty-about-the-result. That is
+exactly the trade the directive exists to adjudicate, and it is Kyle's call.
+
+One further delta: silicon posts `MBOX0 = 0xA3` (`RUN_ACK`) before `DONE`; our
+model jumps straight to `DONE`. The driver only tests `MBOX0 != 0` for tx-ack
+and `== DONE` for completion, so both work — but the intermediate ack is real.
 
 ## Open questions for Kyle
 
