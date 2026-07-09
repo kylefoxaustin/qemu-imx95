@@ -28,8 +28,8 @@ DTC=$KBUILD/scripts/dtc/dtc
 DEFAULT_CPIO=${DEFAULT_CPIO:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
 PORT=${PORT:-12390}
 TMO=${TMO:-300}
-SRV_MAC=00:04:9f:06:11:22   # server eth0 - passed via -nic mac= (model seeds it)
-CLI_MAC=00:04:9f:06:12:22   # client eth0 - distinct -nic mac= (point-to-point L2)
+SRV_MAC=00:04:9f:06:11:22   # server port - passed via -nic mac= (model seeds it)
+CLI_MAC=00:04:9f:06:12:22   # client port - distinct -nic mac= (point-to-point L2)
 PAYLOAD="IMX95-INTERCONNECT-ETH-PAYLOAD-0123456789-abcdef-byte-exact-OK"
 
 skip() { echo "SKIP: $*"; exit 0; }
@@ -60,18 +60,27 @@ cat > "$root/init" <<INIT
 /bin/busybox mkdir -p /tmp   # initramfs has no /tmp; nc -l writes /tmp/rx
 ROLE=\$(sed -n 's/.*ig_role=\\([a-z]*\\).*/\\1/p' /proc/cmdline)
 PORT=$PORT
-n=0; while [ ! -d /sys/class/net/eth0 ] && [ \$n -lt 60 ]; do sleep 1; n=\$((n+1)); done
-[ -d /sys/class/net/eth0 ] || { echo "ZRESULT FAIL (no eth0)"; poweroff -f; }
+# Only ENETC PF0 (devfn 00.0) carries the -nic socket backend, but the machine
+# has three PFs and Linux names netdevs in probe-completion order - so "eth0" is
+# NOT reliably PF0. Resolve the interface from its PCI address instead (the same
+# race made tests/netc/run-2port.sh flake ~30% of the time).
+n=0; while [ \$n -lt 60 ]; do
+    IF=\$(ls /sys/bus/pci/devices/0002:00:00.0/net 2>/dev/null | head -1)
+    [ -n "\$IF" ] && break
+    sleep 1; n=\$((n+1))
+done
+[ -n "\$IF" ] || { echo "ZRESULT FAIL (no netdev on 0002:00:00.0)"; poweroff -f; }
+echo "ZIF socket-backed PF 0002:00:00.0 = \$IF"
 if [ "\$ROLE" = server ]; then MY=10.0.0.1; PEER=10.0.0.2; MYMAC=$SRV_MAC; PMAC=$CLI_MAC; else MY=10.0.0.2; PEER=10.0.0.1; MYMAC=$CLI_MAC; PMAC=$SRV_MAC; fi
 # The distinct per-side MAC now comes from the model (-nic mac=, below): the
 # ENETC SI primary-MAC register seeds it so the guest reads a valid station
 # address. (A shared MAC across the two ends of a point-to-point link breaks L2,
 # hence distinct MACs per side.) MYMAC is what we expect the model to report.
-ip addr add \$MY/24 dev eth0; ip link set eth0 up
-echo "ZMAC eth0=\$(cat /sys/class/net/eth0/address) (expect \$MYMAC)"
+ip addr add \$MY/24 dev \$IF; ip link set \$IF up
+echo "ZMAC \$IF=\$(cat /sys/class/net/\$IF/address) (expect \$MYMAC)"
 # static neighbour: take ARP timing out of the loop (we know the peer's MAC).
-ip neigh replace \$PEER lladdr \$PMAC dev eth0 nud permanent 2>/dev/null
-echo "ZBOOT role=\$ROLE my=\$MY peer=\$PEER carrier=\$(cat /sys/class/net/eth0/carrier 2>/dev/null)"
+ip neigh replace \$PEER lladdr \$PMAC dev \$IF nud permanent 2>/dev/null
+echo "ZBOOT role=\$ROLE my=\$MY peer=\$PEER carrier=\$(cat /sys/class/net/\$IF/carrier 2>/dev/null)"
 echo "ZIF: \$(ls /sys/class/net 2>/dev/null | tr '\n' ' ')"
 allstats() { for d in /sys/class/net/eth*; do i=\${d##*/}; echo "ZALL \$i tx=\$(cat \$d/statistics/tx_packets) rx=\$(cat \$d/statistics/rx_packets) carrier=\$(cat \$d/carrier 2>/dev/null) mac=\$(cat \$d/address)"; done; }
 if [ "\$ROLE" = server ]; then
@@ -79,17 +88,17 @@ if [ "\$ROLE" = server ]; then
     nc -l -p \$PORT > /tmp/rx 2>/dev/null &
     m=0; while [ ! -s /tmp/rx ] && [ \$m -lt 90 ]; do sleep 1; m=\$((m+1)); done
     got=\$(cat /tmp/rx 2>/dev/null); want=\$(cat /payload)
-    echo "ZSTATS eth0 tx=\$(cat /sys/class/net/eth0/statistics/tx_packets) rx=\$(cat /sys/class/net/eth0/statistics/rx_packets)"
+    echo "ZSTATS \$IF tx=\$(cat /sys/class/net/\$IF/statistics/tx_packets) rx=\$(cat /sys/class/net/\$IF/statistics/rx_packets)"
     if [ "\$got" = "\$want" ]; then echo "ZRESULT PASS (rx byte-exact: \$got)"; else echo "ZRESULT FAIL (got=[\$got] want=[\$want])"; fi
 else
     # client: warm the link with ICMP first so BOTH RX rings are posted before
     # the short-lived TCP transfer. A frame arriving before ndo_open() finishes
     # posting RX buffers is discarded (RX overrun, see fsl_enetc model), and
     # nc's connect timeout is too short to ride out those early-boot drops.
-    p=0; while [ \$p -lt 30 ]; do if ping -c1 -W1 -I eth0 \$PEER >/dev/null 2>&1; then echo "ZPING client->server OK (warm \$p)"; break; fi; p=\$((p+1)); done
+    p=0; while [ \$p -lt 30 ]; do if ping -c1 -W1 -I \$IF \$PEER >/dev/null 2>&1; then echo "ZPING client->server OK (warm \$p)"; break; fi; p=\$((p+1)); done
     # now the byte-exact TCP payload transfer over the warm link.
     s=0; while [ \$s -lt 12 ]; do if nc -w3 \$PEER \$PORT < /payload 2>/dev/null; then echo "ZSENT ok (try \$s)"; break; fi; sleep 1; s=\$((s+1)); done
-    echo "ZSTATS eth0 tx=\$(cat /sys/class/net/eth0/statistics/tx_packets) rx=\$(cat /sys/class/net/eth0/statistics/rx_packets)"
+    echo "ZSTATS \$IF tx=\$(cat /sys/class/net/\$IF/statistics/tx_packets) rx=\$(cat /sys/class/net/\$IF/statistics/rx_packets)"
 fi
 allstats
 sleep 2; poweroff -f
