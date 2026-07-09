@@ -1124,15 +1124,21 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                     ecam_alias);
 
         /*
-         * 32-bit MMIO/BAR window (sysbus region 1) @0x4cc00000. Sized to the
-         * dtsi ECAM ranges (ENETC/EMDIO/timer BARs, 0x4cc00000..0x4cd20000)
-         * and kept clear of the netc-blk-ctrl ierb/prb stubs at 0x4cde0000/
-         * 0x4cdf0000 (a wider window would shadow them and wedge the driver's
-         * IERB lock poll).
+         * 32-bit MMIO/BAR window (sysbus region 1) @0x4cc00000. The dtsi
+         * declares four ECAM ranges - 0x4cc00000+0xe0000, 0x4cd00000+0x10000
+         * (pref), 0x4cd20000+0x60000 and 0x4cd80000+0x60000 (pref) - so the
+         * window must span 0x4cc00000..0x4cddffff. It previously stopped at
+         * 0x4cd20000: every BAR happened to fit below that, until a fourth PCI
+         * function (the NETC timer) pushed the ENETC MSI-X BARs into the third
+         * range, where an unbacked MSI-X table read aborted the guest.
+         *
+         * It must still stop short of the netc-blk-ctrl ierb/prb stubs at
+         * 0x4cde0000/0x4cdf0000 - a wider window shadows them and wedges the
+         * driver's IERB lock poll.
          */
         mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(pcie), 1);
         memory_region_init_alias(mmio_alias, OBJECT(pcie), "netc-pcie-mmio",
-                                 mmio_reg, 0x4cc00000, 0x120000);
+                                 mmio_reg, 0x4cc00000, 0x1e0000);
         memory_region_add_subregion(get_system_memory(), 0x4cc00000,
                                     mmio_alias);
 
@@ -1173,6 +1179,14 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                       &error_fatal);
             }
         }
+
+        /*
+         * The NETC Timer (PCI 1131:ee02) shares the bus with the ENETC PFs at
+         * devfn 0x18.0 - ethernet@18,0 in the EVK dtb - and gives the guest its
+         * IEEE 1588 PHC (/dev/ptp0) via ptp_netc.
+         */
+        pci_realize_and_unref(pci_new(PCI_DEVFN(0x18, 0), "imx95-netc-timer"),
+                              s->netc_pcie_bus, &error_fatal);
     }
 
     /*
