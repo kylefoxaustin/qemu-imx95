@@ -229,8 +229,20 @@ packet-drop, which is why it is worth fixing rather than re-running.
 
 | Function | Silicon | Ours |
 |---|---|---|
-| `1131:e001` Root Complex Event Collector | two instances bind | not modelled |
-| VPU codec window | `0x4c480000` size `0x10000` | we map `0x40000` (4x oversized, overlapping three *disabled* codec instances) |
+| `1131:e001` Root Complex Event Collector | two instances bind | not modelled (nothing depends on it beyond `lspci` symmetry) |
+
+The VPU codec window has since been trimmed to the silicon `0x10000`.
+
+### Also considered, deliberately not changed
+
+**Neutron `RUN_ACK`.** Silicon posts `MBOX0 = 0xA3` (`RUN_ACK`) when it accepts a
+job, and `0xAD0` (`DONE`) when it finishes. We jump straight to `DONE`. The
+driver only tests `MBOX0 != 0` for tx-ack and `== DONE` for completion, so both
+sequences work. Modelling the intermediate ack faithfully means making `DONE`
+asynchronous — which would also, correctly, stop reporting a ~0 ms inference —
+but it puts timing into the NPU path and the Tier-1 qtest asserts synchronous
+completion. Real destabilisation risk, cosmetic gain, on a device whose compute
+is not modelled. Left alone, recorded here.
 
 ## What silicon also fails at (the baseline)
 
