@@ -89,9 +89,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
 
 /* mailbox return codes (uapi: the driver keys completion on DONE) */
 #define N_RET_DONE            0xAD0
+#define N_RET_RESET           0x0
 
-/* mailbox command in MBOX3 (driver: RUN = run inference). */
+/* mailbox commands in MBOX3 (driver: RUN = run inference, RESET = re-arm). */
 #define N_CMD_RUN             0x269
+#define N_CMD_RESET           0x23637
 
 struct IMX95NeutronState {
     SysBusDevice parent_obj;
@@ -259,6 +261,19 @@ static void neutron_dev_write(void *opaque, hwaddr off, uint64_t val,
     case N_INTENA:
         ndev_w(s, N_INTENA, val);
         neutron_update_irq(s);
+        return;
+    case N_MBOX3:
+        ndev_w(s, N_MBOX3, val);
+        /*
+         * RESET is the one command the driver does NOT ring the doorbell for:
+         * mbox_send_reset() writes it and then polls MBOX0 for RESET_VAL,
+         * relying on the running firmware to pick it up. Re-arm the mailbox
+         * here, or the driver declares "failed to reset neutron state" and
+         * hw-resets + reloads firmware before every subsequent inference.
+         */
+        if (val == N_CMD_RESET) {
+            ndev_w(s, N_MBOX0, N_RET_RESET);
+        }
         return;
     default:
         ndev_w(s, off, val);
