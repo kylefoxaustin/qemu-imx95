@@ -444,7 +444,13 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             /* usb2 (0x4c200000) is a real ChipIdea model; usbmisc stub below. */
             /* pcie0/pcie1 (dbi/app/atu @0x4c3x) are real imx95.pcie hosts. */
             { 0x4c410000, 64 * KiB }, /* syscon */
-            { 0x4c480000, 0x40000 },  /* vpu */
+            /*
+             * vpu@4c480000 is 0x10000 on silicon (and in the EVK dtb). The
+             * three further codec instances at 0x4c490000/0x4c4a0000/
+             * 0x4c4b0000 are status="disabled", so a 0x40000 window here only
+             * shadowed addresses nothing touches.
+             */
+            { 0x4c480000, 64 * KiB }, /* vpu */
             { 0x4c4c0000, 64 * KiB }, /* vpu-ctrl */
             /* jpegdec/jpegenc (0x4c500000/4c550000) are real models below. */
             { 0x4c810000, 64 * KiB }, /* syscon */
