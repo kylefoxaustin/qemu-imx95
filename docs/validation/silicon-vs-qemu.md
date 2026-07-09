@@ -161,6 +161,34 @@ machine did not back.
 This bug was always there. It needed only one more PCI function to fire, and it
 would have fired on a user's `-device` too.
 
+### 8. A ~30% flake in the two-port NETC test — and a near-miss false bisect
+
+While regression-testing the above, `tests/netc/run-2port.sh` failed. It looked
+exactly like an intermittent silent packet-drop in the NIC model: links up, zero
+packets received, both directions.
+
+It was not. The machine has three ENETC PFs but the test gives `-nic hubport` to
+only the first two. It then drove `eth0`/`eth1` by name — and Linux names
+netdevs in probe-completion order, with the three PFs probing concurrently. In
+about a third of boots one of those names landed on `0002:00:10.0`, which has no
+peer on the hub. `/proc/interrupts` settled it: **every** failing run had
+`eth0` or `eth1` bound to `0002:00:10.0`. Fixed by resolving both interfaces
+from their PCI addresses; 3/10 failures before, 12/12 passes after.
+
+Two process lessons, both expensive:
+
+- **A single run of a flaky test produced a confident, wrong bisect.** It
+  pointed at the PCI-window commit, which was innocent. Re-running the "known
+  good" base commit five times (4 pass, 1 fail) exposed the noise. Never bisect
+  on n=1.
+- **Instrumenting the model made the bug disappear** (8/8 pass with
+  `-d guest_errors`). That is itself a signal — it says "race, not logic" — but
+  it also means the probe must go where it does not perturb timing. The guest's
+  own `/proc/interrupts` cost nothing and answered the question immediately.
+
+A flaky datapath test is indistinguishable from an intermittent silent
+packet-drop, which is why it is worth fixing rather than re-running.
+
 ## Remaining gaps
 
 | Function | Silicon | Ours |
