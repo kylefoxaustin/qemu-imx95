@@ -205,8 +205,14 @@ fail() { echo "FAIL: $*"; exit 1; }
 
 grep -qa '/dev/neutron'  "$LOG" || fail "/dev/neutron0 absent (driver did not bind)"
 grep -qa 'benchmark rc=0' "$LOG" || fail "benchmark_model did not complete (rc!=0)"
-grep -qaiE 'external abort|Unhandled fault|Internal error|timeout' "$LOG" \
-    && fail "fault/timeout during the converted-model run"
+# Anomaly check. Match kernel fault signatures only: a bare case-insensitive
+# "timeout" also hits benign boot chatter ("SCMI max-rx-timeout: 5000ms", the
+# mali "*_TIMEOUT is capped ..." lines), which every boot prints - so it used to
+# fail unconditionally the moment a converted fixture was supplied.
+grep -qaE 'external abort|Unhandled fault|Internal error|Kernel panic|Oops|BUG:' "$LOG" \
+    && fail "kernel fault during the converted-model run"
+grep -qaiE 'neutron.*(timed out|send timeout)|rproc.*timed out' "$LOG" \
+    && fail "neutron mailbox timeout during the converted-model run"
 
 # Delegation assertion: the delegate must have CLAIMED the NeutronGraph node, not
 # fallen back to CPU. TFLite/LiteRT prints "... executed by the delegate w/ N
