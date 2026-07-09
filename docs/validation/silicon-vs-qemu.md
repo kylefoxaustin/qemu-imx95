@@ -306,6 +306,21 @@ One further delta: silicon posts `MBOX0 = 0xA3` (`RUN_ACK`) before `DONE`; our
 model jumps straight to `DONE`. The driver only tests `MBOX0 != 0` for tx-ack
 and `== DONE` for completion, so both work — but the intermediate ack is real.
 
+## Follow-ups not done tonight
+
+- **The netdev-naming race probably affects more tests.** `run-2port.sh` and the
+  interconnect `run-eth.sh` are fixed. `tests/netc/load-soak-2port.sh` (13
+  hard-coded `ethN` references, no speed-based identification) is the most
+  exposed; `load-soak.sh` and `code-sweep/run-peripheral.sh` also name-match.
+  The 10G tests already identify ports by reported speed and are safe. Not fixed
+  here because a soak takes too long to validate in one sitting, and an unvalidated
+  change to a soak is worse than a known-flaky one.
+- **IPv6 extension headers** are not walked in the TX checksum path: if the next
+  header is neither TCP nor UDP the frame is left untouched rather than
+  corrupted. Fine today; would matter for IPsec/fragmentation.
+- **`ptp_netc` PPS / periodic output / external timestamp** are unmodelled and
+  degrade honestly (no event ever fires). `TMR_STAT.ETSx_VLD` must stay clear.
+
 ## Open questions for Kyle
 
 1. **Flip the Neutron default?** Making `neutron-uncomputed-errcode` non-zero by
