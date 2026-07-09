@@ -247,7 +247,8 @@ static void emdio_realize(PCIDevice *pci_dev, Error **errp)
 
     pci_set_word(cfg + PCI_VENDOR_ID, EMDIO_VENDOR_ID);
     pci_set_word(cfg + PCI_DEVICE_ID, EMDIO_DEVICE_ID);
-    pci_set_word(cfg + PCI_CLASS_DEVICE, PCI_CLASS_NETWORK_ETHERNET);
+    pci_set_word(cfg + PCI_CLASS_DEVICE, PCI_CLASS_SYSTEM_OTHER);
+    pci_config_set_prog_interface(cfg, 0x01);
     pci_config_set_interrupt_pin(cfg, 0);
 
     memory_region_init_io(&s->bar0, OBJECT(s), &emdio_bar0_ops, s,
@@ -279,8 +280,14 @@ static void emdio_class_init(ObjectClass *klass, const void *data)
     k->realize = emdio_realize;
     k->vendor_id = EMDIO_VENDOR_ID;
     k->device_id = EMDIO_DEVICE_ID;
-    k->class_id = PCI_CLASS_NETWORK_ETHERNET;
-    k->revision = 1;
+    /*
+     * Real i.MX 95 silicon presents EMDIO as a system peripheral (class 0880,
+     * prog-if 01) at revision 4, not as an Ethernet controller. The kernel
+     * binds enetc_pci_mdio by vendor/device ID, so this is identification
+     * only, but lspci in the guest should match the board.
+     */
+    k->class_id = PCI_CLASS_SYSTEM_OTHER;
+    k->revision = 4;
     dc->desc = "i.MX 95 NETC EMDIO (MDIO + Aquantia c45 PHY)";
     dc->vmsd = &vmstate_emdio;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
