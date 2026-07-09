@@ -202,14 +202,85 @@ static uint64_t enetc_ring_base(FslEnetcState *s, hwaddr bar0_off)
  * offload is not handled here; the driver sets l3t for IPv6 and we would need
  * to compute the v6 pseudo-header ourselves.
  */
+/*
+ * IPv6 L4 checksum insertion. net_checksum_calculate() only knows IPv4, but the
+ * driver requests offload for IPv6 too (it sets l3t and still asks for L4CS),
+ * so without this every IPv6 TCP segment we transmit carries a pseudo-header
+ * partial sum and the peer drops it.
+ *
+ * Extension headers are not walked: if the next header is not TCP or UDP the
+ * frame is left alone rather than corrupted.
+ */
+static void enetc_tx_csum_ipv6(uint8_t *frame, size_t len, size_t l3_off)
+{
+    uint8_t *ip6 = frame + l3_off;
+    uint8_t pseudo[40];
+    size_t l4_off, csum_off;
+    uint16_t plen, csum;
+    uint32_t sum;
+    uint8_t nh;
+
+    if (l3_off + sizeof(struct ip6_header) > len) {
+        return;
+    }
+    plen = lduw_be_p(ip6 + 4);
+    nh = ip6[6];
+    if (nh != IP_PROTO_TCP && nh != IP_PROTO_UDP) {
+        return;
+    }
+    l4_off = l3_off + sizeof(struct ip6_header);
+    if (l4_off + plen > len) {
+        return;
+    }
+    csum_off = (nh == IP_PROTO_TCP) ? 16 : 6;
+    if (plen < csum_off + 2) {
+        return;
+    }
+
+    /* The field must read as zero while its own checksum is computed. */
+    stw_be_p(frame + l4_off + csum_off, 0);
+
+    memcpy(pseudo, ip6 + 8, 32);          /* src + dst */
+    stl_be_p(pseudo + 32, plen);          /* upper-layer packet length */
+    stl_be_p(pseudo + 36, nh);            /* zero-padded next header */
+
+    sum = net_checksum_add(sizeof(pseudo), pseudo);
+    sum += net_checksum_add(plen, frame + l4_off);
+    csum = net_checksum_finish(sum);
+    if (nh == IP_PROTO_UDP && csum == 0) {
+        csum = 0xffff;                    /* 0 means "no checksum" for UDP */
+    }
+    stw_be_p(frame + l4_off + csum_off, csum);
+}
+
 static void enetc_tx_insert_csum(uint8_t *frame, size_t len, uint32_t lstatus)
 {
+    size_t l3_off = sizeof(struct eth_header);
+    uint16_t proto;
     int flags;
 
     if (!(lstatus & (ENETC_TXBD_FLAGS_L4CS << ENETC_TXBD_FLAGS_OFF))) {
         return;
     }
+    if (len < sizeof(struct eth_header)) {
+        return;
+    }
 
+    proto = lduw_be_p(frame + 12);
+    if (proto == ETH_P_VLAN || proto == ETH_P_DVLAN) {
+        l3_off += sizeof(struct vlan_header);
+        if (len < l3_off) {
+            return;
+        }
+        proto = lduw_be_p(frame + 16);
+    }
+
+    if (proto == ETH_P_IPV6) {
+        enetc_tx_csum_ipv6(frame, len, l3_off);
+        return;
+    }
+
+    /* IPv4 (and its VLAN forms) are handled by the shared helper. */
     flags = CSUM_TCP | CSUM_UDP;
     if (lstatus & ENETC_TXBD_IPCS) {
         flags |= CSUM_IP;
