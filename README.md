@@ -241,7 +241,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | Subsystem | Tier | Evidence |
 |---|:--:|---|
 | CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7 | A | Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong) |
-| Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) | A | BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0) |
+| Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC | A | BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time |
 | Storage — uSDHC (SD + eMMC) + FlexSPI NOR | A | SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents |
 | eDMA v3/v5 | A | Real TCD execution — audio FIFO drains, SPI/I2C, full-duplex byte-locked interleave |
 | Serial console — LPUART x8 | A | Console I/O on ttyLP0; LPUART3 RX-DMA drives the UART interconnect |

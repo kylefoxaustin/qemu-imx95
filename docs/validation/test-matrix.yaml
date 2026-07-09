@@ -29,6 +29,7 @@ present:
   # --- Networking (Tier A) ---
   - { block: "ENETC x3 (2x1G + 10G)",              tier: A, test: "qtest:fsl-enetc-test",     evidence: "BD-ring DMA + MSI-X via ITS; links + traffic; board-to-board" }
   - { block: "NETC EMDIO + AQR113C + xPCS (10G real chain)", tier: A, test: "harness:netc-real10g", evidence: "Stock 10G node links @10Gbps through the real PHY chain (v2.4.0)" }
+  - { block: "NETC Timer (IEEE 1588 PHC)",         tier: A, test: "harness:ptp",               evidence: "ptp_netc binds at 0002:00:18.0; PHC registers and TMR_CUR_TIME advances", caveat: "PPS/periodic-output/external-timestamp capture not modelled" }
   # --- Storage (Tier A) ---
   - { block: "uSDHC (SD + eMMC)",                  tier: A, test: "harness:sd-emmc",          evidence: "SDHCI/ADMA block r/w; ext4 mmcblk r/w/sync; Weston off eMMC rootfs" }
   - { block: "FlexSPI + serial NOR",               tier: A, test: boot,                       evidence: "JEDEC + read; boots from real flash contents" }
@@ -88,9 +89,9 @@ readme_groups:
   - { label: "CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7", tier: A,
       evidence: "Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong)",
       blocks: ["6x Cortex-A55 (application cluster)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
-  - { label: "Networking — 3x ENETC (two 1G + one 10G through the real PHY chain)", tier: A,
-      evidence: "BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0)",
-      blocks: ["ENETC x3 (2x1G + 10G)", "NETC EMDIO + AQR113C + xPCS (10G real chain)"] }
+  - { label: "Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC", tier: A,
+      evidence: "BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time",
+      blocks: ["ENETC x3 (2x1G + 10G)", "NETC EMDIO + AQR113C + xPCS (10G real chain)", "NETC Timer (IEEE 1588 PHC)"] }
   - { label: "Storage — uSDHC (SD + eMMC) + FlexSPI NOR", tier: A,
       evidence: "SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents",
       blocks: ["uSDHC (SD + eMMC)", "FlexSPI + serial NOR"] }
