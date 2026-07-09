@@ -189,10 +189,15 @@ static uint64_t imx95_gpio_read(void *opaque, hwaddr off, unsigned size)
     }
 
     switch (off) {
+    /*
+     * Read back from every RGPIO instance of a real i.MX 95. PARAM is NOT a pin
+     * count (silicon reports 2, not 32) - gpio-vf610 hardcodes 32 pins per port
+     * and never reads either register, so these are identification only.
+     */
     case RGPIO_VERID:
-        return 0x02000000;          /* arbitrary version */
+        return 0x02010001;
     case RGPIO_PARAM:
-        return IMX95_GPIO_PINS;      /* pin count in [7:0] */
+        return 0x00000002;
     case RGPIO_PDOR:
         return s->pdor;
     case RGPIO_PSOR:
