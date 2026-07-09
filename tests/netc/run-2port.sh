@@ -82,12 +82,26 @@ cat > "$root/init" <<'INIT'
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox --install -s /bin 2>/dev/null
 echo "ZBOOT two-port back-to-back test"
+# The machine has THREE ENETC PFs but only the first two (devfn 00.0 and 08.0)
+# get a -nic hubport. Linux names netdevs in probe-completion order, and the
+# three PFs probe concurrently, so eth0/eth1 do NOT reliably land on the two
+# hub-backed PFs - about a third of boots named one of them after 0002:00:10.0,
+# which has no peer, and the ping failed for reasons that had nothing to do with
+# the model. Resolve the interfaces from their PCI addresses instead.
+PCI0=0002:00:00.0
+PCI1=0002:00:08.0
 n=0
-while { [ ! -d /sys/class/net/eth0 ] || [ ! -d /sys/class/net/eth1 ]; } && [ $n -lt 60 ]; do
+while [ $n -lt 60 ]; do
+    IF0=$(ls /sys/bus/pci/devices/$PCI0/net 2>/dev/null | head -1)
+    IF1=$(ls /sys/bus/pci/devices/$PCI1/net 2>/dev/null | head -1)
+    [ -n "$IF0" ] && [ -n "$IF1" ] && break
     sleep 1; n=$((n+1))
 done
 echo "ZIF present: $(ls /sys/class/net 2>/dev/null | tr '\n' ' ')"
-if [ ! -d /sys/class/net/eth1 ]; then echo "ZRESULT FAIL (eth1 never appeared)"; poweroff -f; fi
+echo "ZIF hub pair: $PCI0=$IF0 $PCI1=$IF1"
+if [ -z "$IF0" ] || [ -z "$IF1" ]; then
+    echo "ZRESULT FAIL (hub-backed ENETC netdevs never appeared)"; poweroff -f
+fi
 
 # Hold a fresh net namespace open with a sleeper; move eth1 into it so a
 # same-host ping must cross the modelled wire (no kernel loopback shortcut).
@@ -95,29 +109,29 @@ unshare -n /bin/busybox sleep 100000 &
 NSPID=$!
 sleep 1
 echo "ZNS pid=$NSPID ns=$(readlink /proc/$NSPID/ns/net 2>/dev/null)"
-ip link set eth1 netns $NSPID || echo "ZERR move eth1 failed"
+ip link set $IF1 netns $NSPID || echo "ZERR move $IF1 failed"
 
-ip addr add 10.0.0.1/24 dev eth0; ip link set eth0 up
+ip addr add 10.0.0.1/24 dev $IF0; ip link set $IF0 up
 nsenter -t $NSPID -n ip link set lo up
-nsenter -t $NSPID -n ip addr add 10.0.0.2/24 dev eth1
-nsenter -t $NSPID -n ip link set eth1 up
+nsenter -t $NSPID -n ip addr add 10.0.0.2/24 dev $IF1
+nsenter -t $NSPID -n ip link set $IF1 up
 sleep 3
-echo "ZLINK eth0 operstate=$(cat /sys/class/net/eth0/operstate) carrier=$(cat /sys/class/net/eth0/carrier 2>/dev/null)"
-echo "ZADDR eth0: $(ip -o -4 addr show eth0 2>/dev/null)"
-echo "ZADDR eth1: $(nsenter -t $NSPID -n ip -o -4 addr show eth1 2>/dev/null)"
+echo "ZLINK $IF0 operstate=$(cat /sys/class/net/$IF0/operstate) carrier=$(cat /sys/class/net/$IF0/carrier 2>/dev/null)"
+echo "ZADDR $IF0: $(ip -o -4 addr show $IF0 2>/dev/null)"
+echo "ZADDR $IF1: $(nsenter -t $NSPID -n ip -o -4 addr show $IF1 2>/dev/null)"
 
-echo "--- ping eth0(10.0.0.1) -> eth1(10.0.0.2) ---"
-ping -c 5 -I eth0 10.0.0.2; R1=$?
-echo "--- ping eth1(10.0.0.2) -> eth0(10.0.0.1) [from netns] ---"
-nsenter -t $NSPID -n ping -c 5 -I eth1 10.0.0.1; R2=$?
+echo "--- ping $IF0(10.0.0.1) -> $IF1(10.0.0.2) ---"
+ping -c 5 -I $IF0 10.0.0.2; R1=$?
+echo "--- ping $IF1(10.0.0.2) -> $IF0(10.0.0.1) [from netns] ---"
+nsenter -t $NSPID -n ping -c 5 -I $IF1 10.0.0.1; R2=$?
 
 # eth0's counters plus the bidirectional ping above prove both ports' TX and
 # RX datapaths (eth1, in the netns, both sent replies and received pings).
-echo "ZSTATS eth0 tx=$(cat /sys/class/net/eth0/statistics/tx_packets) rx=$(cat /sys/class/net/eth0/statistics/rx_packets)"
+echo "ZSTATS $IF0 tx=$(cat /sys/class/net/$IF0/statistics/tx_packets) rx=$(cat /sys/class/net/$IF0/statistics/rx_packets)"
 # Per-direction verdicts so a failure pins the broken path without a re-run.
-[ "$R1" = 0 ] && echo "ZDIR eth0->eth1: OK" || echo "ZDIR eth0->eth1: FAIL (TX on eth0 / RX on eth1)"
-[ "$R2" = 0 ] && echo "ZDIR eth1->eth0: OK" || echo "ZDIR eth1->eth0: FAIL (TX on eth1 / RX on eth0)"
-if [ "$R1" = 0 ] && [ "$R2" = 0 ]; then echo "ZRESULT PASS"; else echo "ZRESULT FAIL (eth0->eth1=$R1 eth1->eth0=$R2)"; fi
+[ "$R1" = 0 ] && echo "ZDIR $IF0->$IF1: OK" || echo "ZDIR $IF0->$IF1: FAIL (TX on $IF0 / RX on $IF1)"
+[ "$R2" = 0 ] && echo "ZDIR $IF1->$IF0: OK" || echo "ZDIR $IF1->$IF0: FAIL (TX on $IF1 / RX on $IF0)"
+if [ "$R1" = 0 ] && [ "$R2" = 0 ]; then echo "ZRESULT PASS"; else echo "ZRESULT FAIL ($IF0->$IF1=$R1 $IF1->$IF0=$R2)"; fi
 poweroff -f
 INIT
 chmod +x "$root/init"
