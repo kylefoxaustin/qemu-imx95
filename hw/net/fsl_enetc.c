@@ -22,6 +22,7 @@
 #include "hw/pci/pci.h"
 #include "migration/vmstate.h"
 #include "net/eth.h"
+#include "net/checksum.h"
 
 /* --- BAR0 sub-block bases --- */
 #define ENETC_SI_BASE       0x00000
@@ -116,6 +117,8 @@
 #define ENETC_BD_SIZE        16
 #define ENETC_TXBD_FLAGS_F   (1u << 7)   /* final BD of a frame */
 #define ENETC_TXBD_FLAGS_OFF 24          /* flags live in lstatus[31:24] */
+#define ENETC_TXBD_FLAGS_L4CS (1u << 0)  /* insert the L4 checksum */
+#define ENETC_TXBD_IPCS      (1u << 7)   /* lstatus[7]: also insert IPv4 csum */
 #define ENETC_RXBD_INET_CSUM_OFF 0       /* RX writeback: inet_csum __le16 */
 #define ENETC_L2_HLEN          14         /* Ethernet MAC header (no VLAN) */
 #define ENETC_RXBD_BUFLEN_OFF 8          /* RX writeback: buf_len __le16 */
@@ -182,6 +185,38 @@ static uint64_t enetc_ring_base(FslEnetcState *s, hwaddr bar0_off)
  * ring length (in BDs) is TBLENR. Multi-BD frames are gathered until the F
  * (final) flag.
  */
+/*
+ * TX checksum offload. When the skb is CHECKSUM_PARTIAL the driver does NOT
+ * checksum in software - it sets TXBD FLAGS_L4CS (and ipcs for IPv4) and
+ * leaves only the pseudo-header sum in the L4 checksum field, expecting the
+ * MAC to finish the job. A model that transmits the frame untouched therefore
+ * puts a wrong L4 checksum on the wire, and the peer silently drops every
+ * segment (Linux counts them in TcpExt InCsumErrors, nothing is logged). ICMP
+ * still works because the kernel checksums it in software, which is exactly
+ * why this looked like "the link is up but TCP is dead".
+ *
+ * enetc4 only takes this path when checksum offload is active, which the
+ * driver enables for revision 4 - the revision we report.
+ *
+ * net_checksum_calculate() understands Ethernet/VLAN + IPv4 TCP/UDP. IPv6 L4
+ * offload is not handled here; the driver sets l3t for IPv6 and we would need
+ * to compute the v6 pseudo-header ourselves.
+ */
+static void enetc_tx_insert_csum(uint8_t *frame, size_t len, uint32_t lstatus)
+{
+    int flags;
+
+    if (!(lstatus & (ENETC_TXBD_FLAGS_L4CS << ENETC_TXBD_FLAGS_OFF))) {
+        return;
+    }
+
+    flags = CSUM_TCP | CSUM_UDP;
+    if (lstatus & ENETC_TXBD_IPCS) {
+        flags |= CSUM_IP;
+    }
+    net_checksum_calculate(frame, len, flags);
+}
+
 static void enetc_tx_kick(FslEnetcState *s)
 {
     hwaddr tbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_TX, 0);
@@ -192,6 +227,7 @@ static void enetc_tx_kick(FslEnetcState *s)
     PCIDevice *pci = PCI_DEVICE(s);
     uint8_t frame[ENETC_FRAME_MAX];
     uint32_t frame_len = 0;
+    uint32_t frame_lstatus = 0;
 
     if (!len) {
         return;
@@ -208,6 +244,11 @@ static void enetc_tx_kick(FslEnetcState *s)
         buf_len = lduw_le_p(bd + 8);
         lstatus = ldl_le_p(bd + 12);
 
+        /* The csum-offload fields live in the FIRST BD of a frame. */
+        if (frame_len == 0) {
+            frame_lstatus = lstatus;
+        }
+
         if (frame_len + buf_len <= sizeof(frame)) {
             pci_dma_read(pci, addr, frame + frame_len, buf_len);
             frame_len += buf_len;
@@ -215,6 +256,7 @@ static void enetc_tx_kick(FslEnetcState *s)
 
         if (lstatus & (ENETC_TXBD_FLAGS_F << ENETC_TXBD_FLAGS_OFF)) {
             if (frame_len) {
+                enetc_tx_insert_csum(frame, frame_len, frame_lstatus);
                 qemu_send_packet(qemu_get_queue(s->nic), frame, frame_len);
             }
             frame_len = 0;
