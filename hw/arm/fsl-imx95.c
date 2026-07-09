@@ -725,30 +725,54 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
 #define M7_HANDOVER_VER         0x0002u
 #define M7_HANDOVER_SIZE        0x0100u
 /*
- * img->flags: bits[7:0] = cpu (M7 = CPU_IDX_M7P = 1), [15:8] = type (EXEC = 0).
+ * img->flags: bits[7:0] = cpu, [15:8] = type (EXEC = 0). CPU_IDX_M7P = 1,
+ * CPU_IDX_A55C0 = 2 (imx-sm devices/MIMX95/drivers/fsl_cpu.h).
  */
-#define M7_HANDOVER_IMG_FLAGS   0x00000001u
+#define M7_HANDOVER_IMG_FLAGS    0x00000001u
+#define A55C0_HANDOVER_IMG_FLAGS 0x00000002u
+#define HANDOVER_IMG_STRIDE      0x10
 
-static void fsl_imx95_write_m7_handover(FslImx95State *s)
+/*
+ * Fabricate the boot-ROM handover the SM reads at startup. Entries are the
+ * cores the SM owns and their boot vectors: the A55 always (it is the AP,
+ * and the SM must release its CPUWAIT), plus the M7 when its firmware was
+ * staged.
+ *
+ * The A55 vector we advertise is core 0's reset PC, which QEMU has already
+ * programmed from -kernel or a -device loader. The SM latches it into
+ * CA55_RVBARADDR0, which our aonmix model stores but does not act on - the
+ * CPU resumes at the PC QEMU set, and the two agree by construction.
+ */
+static void fsl_imx95_write_rom_handover(FslImx95State *s)
 {
     uint8_t *dtcm = memory_region_get_ram_ptr(&s->m33_dtcm);
     uint8_t *h = dtcm + M7_HANDOVER_DTCM_OFFSET;
     const void *m7_itcm = memory_region_get_ram_ptr(&s->m7_itcm);
-
-    /* Only if M7 firmware was actually staged into its ITCM. */
-    if (ldl_le_p(m7_itcm) == 0) {
-        return;
-    }
+    uint8_t *img;
+    unsigned n = 0;
 
     memset(h, 0, M7_HANDOVER_SIZE);
     stl_le_p(h + 0x00, M7_HANDOVER_BARKER);     /* barker */
     stw_le_p(h + 0x04, M7_HANDOVER_VER);        /* ver   */
     stw_le_p(h + 0x06, M7_HANDOVER_SIZE);       /* size  */
-    h[0x08] = 1;                                /* num images */
-    /* img[0] at 0x10: addr(u64), cpu(u16), resv(u16), flags(u32). */
-    stq_le_p(h + 0x10, FSL_IMX95_M7_ITCM_SYSVIEW);
-    stw_le_p(h + 0x18, 1);                      /* cpu = CPU_IDX_M7P */
-    stl_le_p(h + 0x1c, M7_HANDOVER_IMG_FLAGS);
+
+    /* img[n] at 0x10 + n * 0x10: addr(u64), cpu(u16), resv(u16), flags(u32). */
+    img = h + 0x10 + n * HANDOVER_IMG_STRIDE;
+    stq_le_p(img + 0x00, s->cpu[0].env.pc);
+    stw_le_p(img + 0x08, 2);                    /* cpu = CPU_IDX_A55C0 */
+    stl_le_p(img + 0x0c, A55C0_HANDOVER_IMG_FLAGS);
+    n++;
+
+    /* Only if M7 firmware was actually staged into its ITCM. */
+    if (ldl_le_p(m7_itcm) != 0) {
+        img = h + 0x10 + n * HANDOVER_IMG_STRIDE;
+        stq_le_p(img + 0x00, FSL_IMX95_M7_ITCM_SYSVIEW);
+        stw_le_p(img + 0x08, 1);                /* cpu = CPU_IDX_M7P */
+        stl_le_p(img + 0x0c, M7_HANDOVER_IMG_FLAGS);
+        n++;
+    }
+
+    h[0x08] = n;                                /* num images */
 }
 
 /*
@@ -769,6 +793,22 @@ static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
     cpu->env.halt_reason = run ? NOT_HALTED : HALT_PSCI;
 }
 
+/*
+ * Release A55 core 0. Driven either by the SM clearing CA55_CPUWAIT.CPU0_WAIT
+ * (the silicon path) or directly by the machine when no SM firmware is staged.
+ * Idempotent: the SM writes CPUWAIT more than once during CpuStart.
+ */
+static void fsl_imx95_a55c0_release(FslImx95State *s)
+{
+    CPUState *cs = CPU(&s->cpu[0]);
+
+    if (!cs->halted) {
+        return;
+    }
+    fsl_imx95_set_cpu_run(cs, true);
+    cpu_resume(cs);
+}
+
 static void fsl_imx95_m33_start_bh(void *opaque)
 {
     FslImx95State *s = opaque;
@@ -777,11 +817,20 @@ static void fsl_imx95_m33_start_bh(void *opaque)
 
     if (initial_sp != 0 && s->m33.cpu) {
         CPUState *cs = CPU(s->m33.cpu);
-        /* Place the M7 boot-ROM handover before the SM starts. */
-        fsl_imx95_write_m7_handover(s);
+        /* Place the boot-ROM handover before the SM starts. */
+        fsl_imx95_write_rom_handover(s);
         fsl_imx95_set_cpu_run(cs, true);
         cpu_resume(cs);
+        return;
     }
+
+    /*
+     * No System Manager firmware was staged, so nothing will ever boot the AP
+     * logical machine and clear CA55_CPUWAIT. Stand in for the whole boot ROM
+     * and release core 0 directly, preserving the plain "-kernel with no SM"
+     * boot. (Such a guest has no SCMI provider anyway.)
+     */
+    fsl_imx95_a55c0_release(s);
 }
 
 /*
@@ -911,6 +960,24 @@ static void fsl_imx95_m7_sysresetreq_handler(void *opaque, int n, int level)
                                   FSL_IMX95_M7_SYSRESETREQ_M33_IRQ), level);
 }
 
+static void fsl_imx95_a55c0_run_bh(void *opaque)
+{
+    fsl_imx95_a55c0_release(opaque);
+}
+
+static void fsl_imx95_a55c0_run_handler(void *opaque, int n, int level)
+{
+    /*
+     * Only the release edge matters: the SM never re-asserts CPU0_WAIT once
+     * Linux is running, and a "hold" here would stop the boot CPU from inside
+     * the M33's own TCG block. Defer like the M7 path does.
+     */
+    if (level) {
+        aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                                fsl_imx95_a55c0_run_bh, opaque);
+    }
+}
+
 static void fsl_imx95_m7_run_handler(void *opaque, int n, int level)
 {
     FslImx95State *s = opaque;
@@ -1004,11 +1071,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         object_property_set_int(OBJECT(&s->cpu[i]), "psci-conduit",
                                 QEMU_PSCI_CONDUIT_SMC, &error_abort);
 
-        if (i) {
-            /* Secondary CPUs come up via PSCI / SRC. */
-            object_property_set_bool(OBJECT(&s->cpu[i]), "start-powered-off",
-                                     true, &error_abort);
-        }
+        /*
+         * All A55 cores come out of SoC reset held in CPUWAIT. Core 0 is
+         * released by the SM when it boots the AP logical machine (see the
+         * ROM handover below and the aonmix CA55_CPUWAIT gate); cores 1-5
+         * are released by the OS through PSCI. Holding core 0 is what orders
+         * the AP behind the SM's SCMI bring-up - without it the A55 races
+         * ahead and U-Boot SPL's imx9_probe_mu() times out on SCMI before
+         * the SM has booted, hanging before the console is even up.
+         */
+        object_property_set_bool(OBJECT(&s->cpu[i]), "start-powered-off",
+                                 true, &error_abort);
 
         if (!qdev_realize(DEVICE(&s->cpu[i]), NULL, errp)) {
             return;
@@ -1779,6 +1852,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                     fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_S_AONMIX].addr);
     qdev_connect_gpio_out_named(s->aonmix, "m7-run", 0,
         qemu_allocate_irq(fsl_imx95_m7_run_handler, s, 0));
+    qdev_connect_gpio_out_named(s->aonmix, "a55c0-run", 0,
+        qemu_allocate_irq(fsl_imx95_a55c0_run_handler, s, 0));
 
     /*
      * ANATOP/PLL: the SM's DVFS path powers a PLL up and polls

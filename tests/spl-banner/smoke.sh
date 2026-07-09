@@ -27,6 +27,11 @@ cd "$(dirname "$0")/../.."
 
 TIMEOUT_S=${TIMEOUT_S:-30}
 SPL_BIN=tests/spl-banner/uboot-build/spl/u-boot-spl.bin
+# The SPL cannot print anything until SCMI answers: imx9_probe_mu() runs before
+# preloader_console_init() and hang()s on failure. SCMI is served by the real
+# System Manager on the M33, and the SM is also what releases the A55 from
+# CPUWAIT - so the SM firmware is not optional for this test.
+SM_ELF=${SM_ELF:-${SMELF:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.elf}}
 QEMU=build/qemu-system-aarch64
 EXPECT='U-Boot SPL 2025.04'
 LOG=$(mktemp -t imx95-smoke.XXXXXX.log)
@@ -40,12 +45,18 @@ if [ ! -f "$SPL_BIN" ]; then
     exit 2
 fi
 
+if [ ! -f "$SM_ELF" ]; then
+    echo "smoke: SM firmware not found at $SM_ELF (set SM_ELF=)" >&2
+    exit 2
+fi
+
 echo "smoke: running SPL for up to ${TIMEOUT_S}s, log -> $LOG"
 timeout --foreground "${TIMEOUT_S}" "$QEMU" \
     -M imx95-19x19-evk \
     -nographic \
     -m 2G \
     -device loader,file="$SPL_BIN",addr=0x20480000,cpu-num=0,force-raw=on \
+    -device loader,file="$SM_ELF",cpu-num=6 \
     >"$LOG" 2>&1 || true
 
 if grep -q "$EXPECT" "$LOG"; then

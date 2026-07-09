@@ -38,6 +38,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95AonmixState, IMX95_AONMIX)
 #define AONMIX_M7_CFG           0x124       /* M7 configure register */
 #define AONMIX_M7_CFG_WAIT      0x10        /* bit 4: M7 CPU-WAIT (hold) */
 
+#define AONMIX_CA55_CPUWAIT     0x160       /* CPUWAIT settings for the CA55 */
+#define AONMIX_CA55_CPU0_WAIT   0x01        /* bit 0: A55 core 0 CPU-WAIT */
+#define AONMIX_CA55_WAIT_ALL    0x3f        /* all six cores held at reset */
+
 struct IMX95AonmixState {
     SysBusDevice    parent_obj;
     MemoryRegion    iomem;
@@ -49,6 +53,15 @@ struct IMX95AonmixState {
      * the M7 on release and halts it on hold.
      */
     qemu_irq        m7_run;
+
+    /*
+     * A55 core-0 run gate, driven by CA55_CPUWAIT.CPU0_WAIT (level: 1 =
+     * released/run, 0 = held). On silicon the SM clears this bit from
+     * LMM_CpuStart once it has booted the AP logical machine, which is what
+     * orders the AP behind the SM's own SCMI bring-up. Cores 1-5 are brought
+     * up by the OS through PSCI, so only core 0 is gated here.
+     */
+    qemu_irq        a55c0_run;
 };
 
 static uint64_t imx95_aonmix_read(void *opaque, hwaddr offset, unsigned size)
@@ -79,6 +92,19 @@ static void imx95_aonmix_write(void *opaque, hwaddr offset,
         return;
     }
 
+    /* Same gate for A55 core 0: the SM clears CPU0_WAIT to release the AP. */
+    if (offset == AONMIX_CA55_CPUWAIT) {
+        uint32_t old = s->regs[offset / 4];
+        uint32_t new = (uint32_t)value;
+
+        s->regs[offset / 4] = new;
+        if ((old ^ new) & AONMIX_CA55_CPU0_WAIT) {
+            qemu_set_irq(s->a55c0_run,
+                         (new & AONMIX_CA55_CPU0_WAIT) ? 0 : 1);
+        }
+        return;
+    }
+
     s->regs[offset / 4] = value;
 }
 
@@ -103,6 +129,8 @@ static void imx95_aonmix_reset(DeviceState *dev)
     memset(s->regs, 0, sizeof(s->regs));
     /* M7 held at reset: the SM sees HOLD and runs its full CpuStart. */
     s->regs[AONMIX_M7_CFG / 4] = AONMIX_M7_CFG_WAIT;
+    /* All A55 cores held at reset, exactly as the SoC comes out of reset. */
+    s->regs[AONMIX_CA55_CPUWAIT / 4] = AONMIX_CA55_WAIT_ALL;
 }
 
 static void imx95_aonmix_init(Object *obj)
@@ -115,6 +143,7 @@ static void imx95_aonmix_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 
     qdev_init_gpio_out_named(DEVICE(obj), &s->m7_run, "m7-run", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->a55c0_run, "a55c0-run", 1);
 }
 
 static const VMStateDescription vmstate_imx95_aonmix = {
