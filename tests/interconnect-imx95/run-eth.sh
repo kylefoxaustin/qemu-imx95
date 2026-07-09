@@ -84,9 +84,21 @@ echo "ZBOOT role=\$ROLE my=\$MY peer=\$PEER carrier=\$(cat /sys/class/net/\$IF/c
 echo "ZIF: \$(ls /sys/class/net 2>/dev/null | tr '\n' ' ')"
 allstats() { for d in /sys/class/net/eth*; do i=\${d##*/}; echo "ZALL \$i tx=\$(cat \$d/statistics/tx_packets) rx=\$(cat \$d/statistics/rx_packets) carrier=\$(cat \$d/carrier 2>/dev/null) mac=\$(cat \$d/address)"; done; }
 if [ "\$ROLE" = server ]; then
-    # primary proof: receive a byte-exact TCP payload from the client.
-    nc -l -p \$PORT > /tmp/rx 2>/dev/null &
-    m=0; while [ ! -s /tmp/rx ] && [ \$m -lt 90 ]; do sleep 1; m=\$((m+1)); done
+    # Primary proof: pull a byte-exact TCP payload from the client, so the
+    # payload bytes travel client TX -> server RX across the modelled wire.
+    # (This used nc, which this busybox does not build - both ends failed
+    # silently under 2>/dev/null, nothing ever listened, and the test had been
+    # red since before v2.4.0. httpd/wget are built in; use those.)
+    m=0
+    while [ \$m -lt 40 ]; do
+        # -T bounds each attempt: busybox wget otherwise blocks indefinitely on
+        # a peer whose httpd is not up yet, and the whole test times out.
+        if wget -q -T 3 -O /tmp/rx "http://\$PEER:\$PORT/payload" 2>/dev/null && [ -s /tmp/rx ]; then
+            echo "ZFETCH ok (try \$m)"; break
+        fi
+        sleep 1; m=\$((m+1))
+    done
+    [ -s /tmp/rx ] || echo "ZFETCH FAIL (no payload after \$m tries)"
     got=\$(cat /tmp/rx 2>/dev/null); want=\$(cat /payload)
     echo "ZSTATS \$IF tx=\$(cat /sys/class/net/\$IF/statistics/tx_packets) rx=\$(cat /sys/class/net/\$IF/statistics/rx_packets)"
     if [ "\$got" = "\$want" ]; then echo "ZRESULT PASS (rx byte-exact: \$got)"; else echo "ZRESULT FAIL (got=[\$got] want=[\$want])"; fi
@@ -96,8 +108,24 @@ else
     # posting RX buffers is discarded (RX overrun, see fsl_enetc model), and
     # nc's connect timeout is too short to ride out those early-boot drops.
     p=0; while [ \$p -lt 30 ]; do if ping -c1 -W1 -I \$IF \$PEER >/dev/null 2>&1; then echo "ZPING client->server OK (warm \$p)"; break; fi; p=\$((p+1)); done
-    # now the byte-exact TCP payload transfer over the warm link.
-    s=0; while [ \$s -lt 12 ]; do if nc -w3 \$PEER \$PORT < /payload 2>/dev/null; then echo "ZSENT ok (try \$s)"; break; fi; sleep 1; s=\$((s+1)); done
+    # Serve the payload over TCP; the server pulls it. Hold the link up long
+    # enough for the server's retry loop to succeed, then report.
+    # Bind the IPv4 address explicitly: with a bare -p PORT busybox httpd binds
+    # the IPv6 wildcard (:::PORT) and never answers the peer's IPv4 SYNs.
+    httpd -f -p \$MY:\$PORT -h / &
+    sleep 2
+    echo "ZLISTEN \$(netstat -ltn 2>/dev/null | grep ":\$PORT" || echo NONE)"
+    if netstat -ltn 2>/dev/null | grep -q "\$MY:\$PORT"; then
+        echo "ZSENT ok (httpd serving /payload on \$MY:\$PORT)"
+    else
+        echo "ZSENT FAIL (httpd not listening on \$MY:\$PORT)"
+    fi
+    w=0; while [ \$w -lt 60 ]; do sleep 1; w=\$((w+1)); done
+    # The raw Tcp: counter line is the canary for TX-checksum-offload
+    # regressions: if the MAC stops inserting the L4 checksum, every TCP
+    # segment the peer receives fails its checksum (InCsumErrors, the last
+    # field) and is dropped with nothing logged.
+    echo "ZTCPERR \$(sed -n '/^Tcp:/{n;p}' /proc/net/snmp 2>/dev/null)"
     echo "ZSTATS \$IF tx=\$(cat /sys/class/net/\$IF/statistics/tx_packets) rx=\$(cat /sys/class/net/\$IF/statistics/rx_packets)"
 fi
 allstats
