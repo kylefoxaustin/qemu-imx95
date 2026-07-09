@@ -55,6 +55,24 @@ if [ ! -e "$INITRD" ]; then
 fi
 need INITRD "$INITRD"
 
+# The committed load initramfs drives "eth0" by name, but Linux names netdevs in
+# probe-completion order and only ENETC PF0 carries the -nic backend. Repack the
+# cpio with the canonicalising helper and a call to it, so eth0 is always PF0.
+# (tests/netc/build-load-initramfs.sh bakes this in for freshly built images.)
+INITRD_SRC=$INITRD
+if ! zcat "$INITRD_SRC" | cpio -t --quiet 2>/dev/null | grep -q '^bin/enetc-names$'; then
+    # No EXIT trap: this script launches QEMU detached and returns, so removing
+    # the repacked image on exit would race the guest's read of it.
+    IRWORK=$(mktemp -d -t netc-load-initrd-XXXXXX)
+    _ir="$IRWORK/initrd-fixed"; mkdir -p "$_ir"
+    ( cd "$_ir" && zcat "$INITRD_SRC" | cpio -idmu --quiet )
+    install -m 0755 "$ROOT/tests/lib/guest-enetc-names.sh" "$_ir/bin/enetc-names"
+    sed -i 's|^n=0; while \[ ! -d /sys/class/net/eth0 \]|n=0; while [ ! -d /sys/bus/pci/devices/0002:00:00.0/net ]|' "$_ir/init"
+    sed -i '/^ip link set eth0 address/i /bin/enetc-names' "$_ir/init"
+    ( cd "$_ir" && find . | cpio -o -H newc --quiet | gzip ) > "$IRWORK/initrd-fixed.cpio.gz"
+    INITRD="$IRWORK/initrd-fixed.cpio.gz"
+fi
+
 RUN="$ROOT/build/netc-load-soak-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN"
 

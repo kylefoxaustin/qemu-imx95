@@ -54,7 +54,9 @@ fi
 [ -n "${RECIPES// }" ] || skip "no peripheral recipes found"
 
 mkdir -p "$CACHE"
-WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+WORK=$(mktemp -d)
+# KEEPWORK=1 preserves the guest serial logs for post-mortem.
+if [ -z "${KEEPWORK:-}" ]; then trap 'rm -rf "$WORK"' EXIT; else echo "KEEPWORK: $WORK"; fi
 SHARE="$WORK/share"; mkdir -p "$SHARE/items" "$SHARE/results"
 SRCWORK="$WORK/src"; mkdir -p "$SRCWORK"
 
@@ -120,6 +122,10 @@ fi
 # ---- stage the busybox initramfs runner -----------------------------------
 STAGE="$WORK/root"; mkdir -p "$STAGE"
 zcat "$INITRD" | (cd "$STAGE" && cpio -idmu 2>/dev/null)
+# ethN must mean a fixed ENETC port: Linux names netdevs in probe order, so a
+# bare "eth0" is not reliably the PF the -nic backend is attached to. A miss
+# here shows up as "eth0 DHCP failed (net tests will skip)" - a silent skip.
+install -m 0755 "$ROOT/tests/lib/guest-enetc-names.sh" "$STAGE/bin/enetc-names"
 { echo "#!/bin/busybox sh"; echo "CASE_TMO=$CASE_TMO"; cat <<'INIT'
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
@@ -140,6 +146,7 @@ for d in /dev/mmcblk*; do
 done
 [ "$mounted" = 1 ] || echo "WARN: no eMMC ext4 mounted (storage tests will skip)"
 # Bring up eth0 over the ENETC NIC (best-effort DHCP via slirp).
+/bin/enetc-names
 ip link set eth0 up 2>/dev/null
 udhcpc -i eth0 -n -q -t 5 -T 2 >/dev/null 2>&1 && echo "eth0 up: $(ip -4 addr show eth0 2>/dev/null | grep -o 'inet [0-9.]*')" || echo "WARN: eth0 DHCP failed (net tests will skip)"
 if timeout 1 true 2>/dev/null; then TFORM=new; else TFORM=old; fi

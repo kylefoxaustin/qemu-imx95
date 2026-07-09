@@ -70,13 +70,18 @@ python3 "$HERE/patch-dtb.py" "$WORK/base.dts" >"$WORK/netc.dts"
 root="$WORK/root"; mkdir -p "$root"
 ( cd "$root" && zcat "$LOADCPIO" | cpio -idmu --quiet )
 [ -x "$root/usr/bin/iperf" ] || { echo "error: $LOADCPIO has no /usr/bin/iperf" >&2; exit 1; }
+# Only the first two ENETC PFs carry a -nic hubport, but Linux names netdevs in
+# probe order, so eth0/eth1 are not reliably those two. Canonicalise by PCI
+# address before anything pairs a name with a port.
+install -m 0755 "$ROOT/tests/lib/guest-enetc-names.sh" "$root/bin/enetc-names"
 
 cat > "$root/init" <<INIT
 #!/bin/busybox sh
 /bin/busybox mount -t proc proc /proc; /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox --install -s /bin 2>/dev/null
 export LD_LIBRARY_PATH=/usr/lib
-n=0; while { [ ! -d /sys/class/net/eth0 ] || [ ! -d /sys/class/net/eth1 ]; } && [ \$n -lt 60 ]; do sleep 1; n=\$((n+1)); done
+n=0; while { [ ! -d /sys/bus/pci/devices/0002:00:00.0/net ] || [ ! -d /sys/bus/pci/devices/0002:00:08.0/net ]; } && [ \$n -lt 60 ]; do sleep 1; n=\$((n+1)); done
+/bin/enetc-names
 echo "Z2SOAK-IF \$(ls /sys/class/net | tr '\n' ' ')"
 # Hold a net+mount namespace (own sysfs) so eth1's counters are readable.
 unshare -n -m /bin/busybox sh -c 'mount --make-rprivate / 2>/dev/null; mount -t sysfs sysfs /sys 2>/dev/null; exec /bin/busybox sleep 1000000000' &

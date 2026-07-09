@@ -46,6 +46,7 @@ mkdir -p "$root"/{bin,proc,sys,dev,lib,usr/bin,usr/lib}
 [ -e "$DEFAULT_CPIO" ] || { echo "error: default initramfs not found: $DEFAULT_CPIO" >&2; exit 1; }
 ( cd "$WORK" && zcat "$DEFAULT_CPIO" | cpio -idmu --quiet 'bin/busybox' )
 cp "$WORK/bin/busybox" "$root/bin/busybox"
+install -m 0755 "$ROOT/tests/lib/guest-enetc-names.sh" "$root/bin/enetc-names"
 
 # --- iperf + runtime libs (fetched debs) ---
 fetch_x() { # url destdir
@@ -82,7 +83,10 @@ cat > "$root/init" <<INIT
 /bin/busybox mount -t proc proc /proc; /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox --install -s /bin 2>/dev/null
 export LD_LIBRARY_PATH=/usr/lib
-n=0; while [ ! -d /sys/class/net/eth0 ] && [ \$n -lt 40 ]; do sleep 1; n=\$((n+1)); done
+n=0; while [ ! -d /sys/bus/pci/devices/0002:00:00.0/net ] && [ \$n -lt 40 ]; do sleep 1; n=\$((n+1)); done
+# The -nic backend is on ENETC PF0, but Linux names netdevs in probe order, so
+# eth0 is not reliably that PF. Canonicalise by PCI address first.
+/bin/enetc-names
 ip link set eth0 address $MAC; ip link set eth0 up
 ip addr add $GUEST_IP/24 dev eth0; ip route add default via $GW 2>/dev/null
 sleep 2
