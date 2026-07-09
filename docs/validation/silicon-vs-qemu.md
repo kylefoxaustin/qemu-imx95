@@ -127,18 +127,46 @@ Flagged for discussion rather than "fixed".
 | ENETC `SICAPR0` ring counts | 6 TX / 6 RX | 1 / 1 | Honest simplification; the driver sizes itself from what we advertise. |
 | LPUART `PARAM` | `0x00000404` | `0` | Never read on the i.MX95 path (the driver's FIFO sizing reads hw offset `0x28`). Depth 1 is conservative. |
 
-## Gaps: hardware silicon has that our guest never sees
+### 6. NETC Timer (PTP) did not exist — now modelled
+
+Silicon binds `ptp_netc` to PCI function `1131:ee02` at `0002:00:18.0` and
+registers an IEEE 1588 PHC. We had no such function, so the guest had no NETC
+PTP clock. Added as `hw/net/imx95_netc_timer.c`; its BAR0 now lands at
+`0x4ccc0000`, the same address silicon assigns.
+
+The trap worth recording: `gettimex64()` reads `TMR_CUR_TIME` (BAR0 + 0xf0), not
+the `TMR_CNT` registers it wrote — on hardware `CUR_TIME` is the free-running
+counter plus offset. A backing-store register file would have registered a PHC
+whose `clock_gettime()` **succeeds and returns a constant, plausible, wrong
+time**. Nothing errors; the clock simply lies. `CUR_TIME` is computed on read
+from `QEMU_CLOCK_VIRTUAL` instead, and `tests/ptp/run.sh` asserts the clock
+*advances* rather than merely existing.
+
+PPS, periodic output and external-timestamp capture are left unimplemented and
+degrade honestly. `TMR_STAT.ETSx_VLD` stays clear on purpose:
+`netc_timer_handle_etts_event()` spins while that bit is set, so faking a
+capture would hang the guest.
+
+### 7. A latent PCI window bug, exposed by adding a device
+
+Adding a fourth PCI function to the NETC bus immediately produced a synchronous
+external abort in `msix_prepare_msi_desc()` while enabling **ENETC PF0**.
+
+The `netc-pcie-mmio` alias covered `0x4cc00000..0x4cd20000`, but the dtsi
+declares four ECAM ranges reaching `0x4cddffff`. Every BAR had happened to fit
+below the alias. The new function's BAR0 filled the first range, pushing the
+three ENETC MSI-X BARs into the third — which Linux happily assigned and the
+machine did not back.
+
+This bug was always there. It needed only one more PCI function to fire, and it
+would have fired on a user's `-device` too.
+
+## Remaining gaps
 
 | Function | Silicon | Ours |
 |---|---|---|
-| `1131:ee02` NETC Timer (PTP) | `ptp_netc` binds at `0002:00:18.0` | **not modelled** — guest has no NETC PHC |
 | `1131:e001` Root Complex Event Collector | two instances bind | not modelled |
 | VPU codec window | `0x4c480000` size `0x10000` | we map `0x40000` (4x oversized, overlapping three *disabled* codec instances) |
-
-The PTP timer is the substantive one, and the directive is explicit that Linux
-must *see* the hardware. Its DT node carries no `clocks` property yet probes
-fine, so a model is feasible: one MMIO BAR, exactly one MSI-X vector, and an
-init path that is almost entirely writes with no ID gate.
 
 ## What silicon also fails at (the baseline)
 
@@ -176,12 +204,14 @@ discussion — see the open questions below.
 
 1. **Flip the Neutron default?** Making `neutron-uncomputed-errcode` non-zero by
    default trades "the stack runs end to end" for "the guest is never lied to".
-   The directive says silent-wrong is the worst class.
-2. **Model `ptp_netc` (ee02)?** Real gap, self-contained, spec in hand.
-3. **uSDHC capabilities**: leave conservative, or model uSDHC's own capability
+   The directive says silent-wrong is the worst class. This is the one real
+   policy call left, and it is yours.
+2. **uSDHC capabilities**: leave conservative, or model uSDHC's own capability
    register properly (not the generic SDHCI default) and only advertise modes we
    can honour?
-4. **VPU window size** — trim `0x40000` to the real `0x10000`?
+3. **VPU window size** — trim `0x40000` to the real `0x10000`?
+4. **Model the Root Complex Event Collectors** (`1131:e001`)? Low value; nothing
+   depends on them beyond `lspci` symmetry.
 
 ## Nothing here implicates upstream QEMU
 
