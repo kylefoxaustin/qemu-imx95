@@ -9,7 +9,8 @@
  * rejecting an arch-0 stub) and then fails the un-modelled CSF bring-up cleanly.
  * The one value that has to be exactly right is GPU_ID at offset 0: a wrong
  * arch_minor builds an incomplete kbase regmap and oopses the probe. Assert the
- * real Mali-G310 / TVAX id (arch 10.12.0, product 4).
+ * real Mali-G310 / TVAX id (arch 10.12.7, product 4), as read back from the
+ * GPU_ID register of a real i.MX 95.
  */
 
 #include "qemu/osdep.h"
@@ -19,7 +20,7 @@
 #define MALI_GPU_ID   0x0
 
 /* Mali-G310 = TVAX: arch_major=10, arch_minor=12, arch_rev=0, product_major=4. */
-#define GPU_ID_G310   0xAC040000u
+#define GPU_ID_G310   0xAC740001u
 
 static void test_mali_gpu_id(void)
 {

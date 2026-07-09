@@ -17,7 +17,7 @@
  * With the old reads-as-0 stub kbase read GPU_ID = 0, got arch 0, and rejected
  * the GPU ("Unknown GPU Product ID 0", -EINVAL) before identifying it. This
  * model reports the real Mali-G310 GPU_ID, so kbase identifies it ("GPU
- * identified as 0x4 arch 10.12.0"), reads its property registers, then fails
+ * identified as 0x4 arch 10.12.7"), reads its property registers, then fails
  * the CSF bring-up with -EIO ("Miscellaneous device initialization failed")
  * when the un-modelled reset/power/firmware handshake times out - a clean,
  * honest probe failure that still reaches userspace. Modelling the full CSF
@@ -49,13 +49,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95MaliState, IMX95_MALI)
 
 /*
  * Mali-G310 (Valhall, CSF) GPU_ID = product TVAX = arch_major=10,
- * arch_minor=12, arch_rev=0, product_major=4, version 0 = 0xAC040000.
+ * arch_minor=12, arch_rev=7, product_major=4, version_status=1. Read back
+ * from the GPU_ID register of a real i.MX 95 (FRDM-IMX95-PRO), where kbase
+ * reports "GPU identified as 0x4 arch 10.12.7 r0p0".
  * (arch_minor MUST be 12: kbase builds its register-map LUT from
  * arch_major.minor.rev, and a wrong minor selects an incomplete map -> gpuprops
- * dereferences a NULL regmap entry and oopses. 12.x is the real TVAX revision,
- * per kbase's own GPU_ID2_MAKE table.)
+ * dereferences a NULL regmap entry and oopses.)
  */
-#define MALI_GPU_ID_G310 0xAC040000u
+#define MALI_GPU_ID_G310 0xAC740001u
 
 struct IMX95MaliState {
     SysBusDevice parent_obj;
