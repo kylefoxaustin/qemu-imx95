@@ -24,6 +24,7 @@ present:
   - { block: "Cortex-M33 System Manager (real SM fw)", tier: A, test: boot,                  evidence: "Runs real NXP SM firmware; Linux's sole SCMI provider over MU" }
   - { block: "Cortex-M7 (real-time domain)",       tier: A, test: "harness:m7-rpmsg",        evidence: "SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip" }
   - { block: "GICv3 + ITS",                        tier: A, test: boot,                       evidence: "Underpins boot + MSI-X for NETC/PCIe" }
+  - { block: "U-Boot boot chain + network boot",   tier: A, test: "harness:uboot",             evidence: "ROM tables -> SM -> SPL -> U-Boot off eMMC; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace" }
   - { block: "MU mailbox cross-connect",           tier: A, test: boot,                       evidence: "SCMI + rpmsg + ELE transports" }
   - { block: "eDMA v3/v5",                         tier: A, test: "qtest:imx95-edma-test",    evidence: "Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave" }
   # --- Networking (Tier A) ---
@@ -89,6 +90,9 @@ readme_groups:
   - { label: "CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7", tier: A,
       evidence: "Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong)",
       blocks: ["6x Cortex-A55 (application cluster)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
+  - { label: "U-Boot boot chain + network boot", tier: A,
+      evidence: "The full sequence a board runs: ROM handover/passover tables -> SM -> SPL -> U-Boot proper off eMMC -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell",
+      blocks: ["U-Boot boot chain + network boot"] }
   - { label: "Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC", tier: A,
       evidence: "BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time",
       blocks: ["ENETC x3 (2x1G + 10G)", "NETC EMDIO + AQR113C + xPCS (10G real chain)", "NETC Timer (IEEE 1588 PHC)"] }

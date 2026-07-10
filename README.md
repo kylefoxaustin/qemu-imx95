@@ -25,15 +25,19 @@ not cycle-accurate.
 
 It boots stock **NXP BSP Linux to userspace** on the A55 cluster, with the **real
 System Manager firmware** on the emulated Cortex-M33 serving the cluster's SCMI
-traffic. Beyond booting it brings up much of the EVK: **NETC networking** (ENETC,
-`eth0` up with working ping), **read/write SD/eMMC** (a real ext4 rootfs over
-uSDHC/ADMA), the **DPU display** — multi-plane compositing, both pixel pipelines,
-a **Weston/Wayland desktop** — the **2D blit engine** (real NXP G2D), **HW JPEG**
-encode/decode, **FlexCAN**, **USB** HID keyboard, **three ASoC audio cards**, the
-**Neutron NPU** stack, all eight **LPI2C** (`-device`-attachable), and the
-**Cortex-M33** plus a **Cortex-M7** with A55↔M7 RPMsg. Intended use: BSP and
-System-Manager-firmware development, peripheral-driver development, and CI; the
-long-term aim is upstream-mergeability into QEMU mainline.
+traffic. It also runs the **full boot chain a real board does** — boot-ROM
+handover tables → SM → SPL → **U-Boot proper off eMMC** → a U-Boot prompt that
+**writes eMMC** and **network-boots a Linux kernel over Ethernet** (`tftp` + `booti`)
+all the way to a userspace shell. Beyond booting it brings up much of the EVK:
+**NETC networking** (ENETC, TCP/IP verified byte-exact board-to-board), **read/write
+SD/eMMC** (a real ext4 rootfs over uSDHC/ADMA), the **DPU display** — multi-plane
+compositing, both pixel pipelines, a **Weston/Wayland desktop** — the **2D blit
+engine** (real NXP G2D), **HW JPEG** encode/decode, **FlexCAN**, **USB** HID
+keyboard, **three ASoC audio cards**, the **Neutron NPU** stack, all eight
+**LPI2C** (`-device`-attachable), and the **Cortex-M33** plus a **Cortex-M7** with
+A55↔M7 RPMsg. Intended use: BSP and System-Manager-firmware development,
+peripheral-driver development, and CI; the long-term aim is
+upstream-mergeability into QEMU mainline.
 
 The **GPU** and the **VPU** (Wave6) video codec are stubbed at probe time only —
 no GPU rendering, no VPU codec — while the HW JPEG codecs are functional; and the
@@ -188,9 +192,17 @@ Run /init as init process
   verified under sustained load).
 - **Interactive Linux serial console** over ttyLP0 (BusyBox initramfs): typed
   commands reach the shell and output reaches the host terminal.
-- **Full U-Boot boot chain** — SPL banner, SPL → U-Boot proper handoff over an
-  emulated SD boot chain, and the U-Boot interactive prompt; the SM also boots
-  standalone to its debug-monitor prompt (`tests/sm-banner/`).
+- **Full U-Boot boot chain, to a network-booted Linux.** The real sequence a
+  board runs: the machine writes the boot-ROM handover + passover tables, the SM
+  boots and releases the A55 from CPUWAIT, SPL probes SCMI and loads **U-Boot
+  proper off eMMC**, and U-Boot reaches its prompt. From there it **writes and
+  reads back eMMC** (a scratch sector, byte-verified) and **TFTPs a kernel + dtb
+  + initramfs over ENETC and `booti`s it to a Linux userspace shell**
+  (`tests/uboot/run-linux.sh`) — as well as fetching a byte-exact file over the
+  wire (`tests/uboot/run.sh`). The SM also boots standalone to its debug-monitor
+  prompt (`tests/sm-banner/`). This is the "stand-in for a real board" milestone:
+  it boots its own bootloader, drives its own storage and network, and
+  network-boots an OS.
 - **Reproducible from a clean clone** — including a clean `ubuntu:24.04`
   container as a different user with only the README-documented dependencies.
 - **24 h+ stability soak** (A55 + M33 path) — ran past its 24 h target to
@@ -241,6 +253,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | Subsystem | Tier | Evidence |
 |---|:--:|---|
 | CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7 | A | Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong) |
+| U-Boot boot chain + network boot | A | The full sequence a board runs: ROM handover/passover tables -> SM -> SPL -> U-Boot proper off eMMC -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell |
 | Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC | A | BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time |
 | Storage — uSDHC (SD + eMMC) + FlexSPI NOR | A | SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents |
 | eDMA v3/v5 | A | Real TCD execution — audio FIFO drains, SPI/I2C, full-duplex byte-locked interleave |
@@ -1065,6 +1078,21 @@ fidelity compromise in the modelled hardware.
   timeout. Also lands the **board-to-board SPI + CAN interconnect** (joining
   eth/UART): `net/can/can_host_chardev.c` and a real eDMA-driven `fsl-lpspi`
   over `spi_link`, cross-validated 95↔91 (SPI) and 95↔MCX (CAN).
+- **Silicon-validated fidelity + the full U-Boot boot chain (on `imx95-netc`).**
+  Diffed the model against a **real i.MX 95 board** and corrected what silicon
+  disagreed with: the Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO
+  identity registers, and a Neutron mailbox RESET that was quietly reloading NPU
+  firmware before every inference (average inference 165 ms → 41 ms). Modelled
+  the **A55/SM boot order** (all A55 cores held in `CA55_CPUWAIT` until the SM
+  boots the AP), which un-broke the SPL banner, and added the **ROM
+  handover/passover tables** so **U-Boot proper loads off eMMC and reaches its
+  prompt**. Fixed **three ENETC RX-descriptor bugs that Linux had hidden** (R-bit
+  ownership, swapped F/R status bits, ignored `RBPIR` writes) and added the
+  **EMDIO clause-22 PHY** — so U-Boot **writes eMMC and network-boots a Linux
+  kernel over Ethernet to userspace** (`tests/uboot/run.sh`,
+  `tests/uboot/run-linux.sh`). Also added the **NETC 1588 PHC** (`ptp_netc`) and
+  proved TCP is byte-exact board-to-board (a missing ENETC TX-checksum-offload
+  fix — TCP had never actually worked, only ping had).
 
 ## License & credits
 
