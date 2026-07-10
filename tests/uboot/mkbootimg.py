@@ -31,6 +31,7 @@ usage: mkbootimg.py <u-boot.bin> <out.img> [--text-base 0x90200000]
 """
 import argparse
 import struct
+import subprocess
 import sys
 
 CONTAINER_TAG = 0x87
@@ -71,11 +72,38 @@ def main():
     ap.add_argument('uboot')
     ap.add_argument('out')
     ap.add_argument('--text-base', default='0x90200000')
+    ap.add_argument('--uboot-elf',
+                    help='u-boot ELF; if given, the OP-TEE device-tree fixup '
+                         'is neutralised (see --no-optee)')
+    ap.add_argument('--no-optee', action='store_true',
+                    help='Build boot media for a U-Boot with no OP-TEE. The '
+                         'vendor imx95_evk U-Boot fabricates an optee '
+                         'reserved-memory node from rom_pointer[], which SPL '
+                         'only fills when it loads OP-TEE as BL32. With no '
+                         'OP-TEE those registers are garbage and the node '
+                         'reserves nonsense, panicking Linux. This machine '
+                         'does not model OP-TEE, so patch ft_add_optee_node to '
+                         'return early - exactly what CONFIG_OPTEE=n does.')
     args = ap.parse_args()
 
     text_base = int(args.text_base, 0)
     with open(args.uboot, 'rb') as f:
-        uboot = f.read()
+        uboot = bytearray(f.read())
+
+    if args.no_optee:
+        if not args.uboot_elf:
+            sys.exit('--no-optee requires --uboot-elf to locate the symbol')
+        out = subprocess.check_output(
+            ['aarch64-linux-gnu-nm', args.uboot_elf], text=True)
+        sym = [l for l in out.splitlines() if l.endswith(' ft_add_optee_node')]
+        if not sym:
+            sys.exit('ft_add_optee_node not found in ' + args.uboot_elf)
+        off = int(sym[0].split()[0], 16) - text_base
+        if not 0 <= off < len(uboot) - 8:
+            sys.exit('ft_add_optee_node offset 0x%x out of range' % off)
+        # mov w0, #0 ; ret  -> the function becomes "return 0"
+        uboot[off:off + 8] = struct.pack('<II', 0x52800000, 0xd65f03c0)
+        print('no-optee: patched ft_add_optee_node at u-boot+0x%x' % off)
 
     img = bytearray(b'\0' * IMAGE_SIZE)
 
