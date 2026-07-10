@@ -49,6 +49,46 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NetcEmdio, IMX95_NETC_EMDIO)
 
 #define AQR_PHY_ADDR        8
 
+/*
+ * Clause-22 copper PHY at MDIO address 1. The real 19x19 EVK has a 1 Gb
+ * YT8521 there (silicon dmesg: "PHY [0003:01:00.0:01] driver [YT8521]"), and
+ * the stock device tree's ethernet-phy@1 points at it. Without something
+ * answering C22 at this address U-Boot's enetc probe fails outright ("Could
+ * not get PHY for emdio-0: addr 1" -> "No ethernet found"), which is what kept
+ * U-Boot from having any network at all.
+ *
+ * We present a generic auto-negotiated 1000BASE-T full-duplex PHY rather than
+ * a YT8521: a vendor ID would pull in that vendor's init sequence, which pokes
+ * extended registers we do not model. genphy is the honest, working choice.
+ */
+#define C22_PHY_ADDR        1
+
+#define C22_BMCR            0x00
+#define C22_BMSR            0x01
+#define C22_PHYSID1         0x02
+#define C22_PHYSID2         0x03
+#define C22_ADVERTISE       0x04
+#define C22_LPA             0x05
+#define C22_CTRL1000        0x09
+#define C22_STAT1000        0x0a
+#define C22_ESTATUS         0x0f
+
+/*
+ * A flat-zero PHY ID reads as "no device" (U-Boot's create_phy_by_mask skips
+ * it, since a C45 PHY answers 0 to C22 reads), and an all-ones ID likewise.
+ * Use a non-zero ID that matches no vendor driver, so both U-Boot and Linux
+ * fall back to their generic PHY driver rather than running a vendor init
+ * sequence against registers we do not model.
+ */
+#define C22_PHYSID1_VALUE   0x0000
+#define C22_PHYSID2_VALUE   0x00a0
+
+/* Link up, autoneg done+capable, extended status present, 10/100 abilities. */
+#define C22_BMSR_VALUE      0x796d
+#define C22_LPA_VALUE       0x41e1      /* ACK + 100/10 full+half */
+#define C22_STAT1000_VALUE  0x0800      /* link partner 1000BASE-T full */
+#define C22_ESTATUS_VALUE   0x2000      /* 1000BASE-T full capable */
+
 /* c45 status/id register numbers (per MMD). */
 #define C45_STAT1           0x0001      /* MDIO_STAT1 (LSTATUS bit 2) */
 #define C45_PHYSID1         0x0002
@@ -101,7 +141,57 @@ struct IMX95NetcEmdio {
     uint32_t ctl;
     uint32_t data;
     uint32_t addr;
+
+    /* Writable registers of the clause-22 PHY at C22_PHY_ADDR. */
+    uint16_t c22_bmcr;
+    uint16_t c22_advertise;
+    uint16_t c22_ctrl1000;
 };
+
+/* Clause-22 register read for the generic 1 Gb copper PHY at address 1. */
+static uint16_t c22_phy_read(IMX95NetcEmdio *s, int reg)
+{
+    switch (reg) {
+    case C22_BMCR:
+        return s->c22_bmcr;
+    case C22_BMSR:
+        return C22_BMSR_VALUE;
+    case C22_PHYSID1:
+        return C22_PHYSID1_VALUE;
+    case C22_PHYSID2:
+        return C22_PHYSID2_VALUE;
+    case C22_ADVERTISE:
+        return s->c22_advertise;
+    case C22_LPA:
+        return C22_LPA_VALUE;
+    case C22_CTRL1000:
+        return s->c22_ctrl1000;
+    case C22_STAT1000:
+        return C22_STAT1000_VALUE;
+    case C22_ESTATUS:
+        return C22_ESTATUS_VALUE;
+    default:
+        return 0;
+    }
+}
+
+static void c22_phy_write(IMX95NetcEmdio *s, int reg, uint16_t val)
+{
+    switch (reg) {
+    case C22_BMCR:
+        /* Self-clearing: reset and restart-autoneg complete immediately. */
+        s->c22_bmcr = val & ~(0x8000 | 0x0200);
+        break;
+    case C22_ADVERTISE:
+        s->c22_advertise = val;
+        break;
+    case C22_CTRL1000:
+        s->c22_ctrl1000 = val;
+        break;
+    default:
+        break;
+    }
+}
 
 /* Model the embedded Aquantia AQR113C c45 PHY at MDIO addr 8. */
 static uint16_t aqr_c45_read(int devad, int reg)
@@ -173,6 +263,26 @@ static void emdio_do_ctl(IMX95NetcEmdio *s, uint32_t ctl)
 
     s->ctl = ctl;
     s->cfg &= ~MDIO_CFG_RD_ER;
+
+    /*
+     * With CFG.ENC45 clear the transaction is clause 22 and the CTL "device
+     * address" field carries the register number instead (enetc_mdio.c builds
+     * ENETC_MDC_RA(regnum) into the same bits).
+     */
+    if (!(s->cfg & MDIO_CFG_ENC45)) {
+        if (port != C22_PHY_ADDR) {
+            s->cfg |= MDIO_CFG_RD_ER;   /* no clause-22 device here */
+            s->data = 0xffff;
+            return;
+        }
+        if (ctl & MDIO_CTL_READ) {
+            s->data = c22_phy_read(s, devad);
+        } else {
+            c22_phy_write(s, devad, s->data & 0xffff);
+        }
+        return;
+    }
+
     if (!(ctl & MDIO_CTL_READ)) {
         return;                 /* address/port latch only */
     }
@@ -244,6 +354,10 @@ static void emdio_realize(PCIDevice *pci_dev, Error **errp)
 {
     IMX95NetcEmdio *s = IMX95_NETC_EMDIO(pci_dev);
     uint8_t *cfg = pci_dev->config;
+
+    s->c22_bmcr = 0x1140;        /* autoneg enable, 1000 Mb/s, full duplex */
+    s->c22_advertise = 0x01e1;   /* 100/10 full+half, 802.3 selector */
+    s->c22_ctrl1000 = 0x0200;    /* advertise 1000BASE-T full */
 
     pci_set_word(cfg + PCI_VENDOR_ID, EMDIO_VENDOR_ID);
     pci_set_word(cfg + PCI_DEVICE_ID, EMDIO_DEVICE_ID);
