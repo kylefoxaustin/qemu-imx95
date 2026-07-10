@@ -730,6 +730,20 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
 #define M7_HANDOVER_BARKER      0xc0ffee16u
 #define M7_HANDOVER_VER         0x0002u
 #define M7_HANDOVER_SIZE        0x0100u
+
+/*
+ * ROM passover, the second table the ROM leaves for the SM (imx-sm
+ * devices/MIMX95/sm/dev_sm_rom.c). U-Boot SPL asks the SM for it over SCMI
+ * (vendor MISC protocol, ROM_PASSOVER_GET) to learn which device it booted
+ * from and where the image set lives; without it the SPL prints "Failed to get
+ * ROM passover data" and then "failed to boot from all boot devices".
+ */
+#define PASSOVER_DTCM_OFFSET    (0x2003de00ULL - FSL_IMX95_M33_DTCM_BASE)
+#define PASSOVER_TAG            0x504fu
+#define PASSOVER_LEN            0x80u
+#define PASSOVER_VER            0x02u
+#define PASSOVER_BOOT_STAGE_PRI 0x06u   /* U-Boot prints "Primary" for 0x6 */
+#define PASSOVER_BT_DEV_MMC     0x02u   /* BT_DEV_TYPE_MMC -> BOOT_DEVICE_MMC1 */
 /*
  * img->flags: bits[7:0] = cpu, [15:8] = type (EXEC = 0). CPU_IDX_M7P = 1,
  * CPU_IDX_A55C0 = 2 (imx-sm devices/MIMX95/drivers/fsl_cpu.h).
@@ -782,6 +796,33 @@ static void fsl_imx95_write_rom_handover(FslImx95State *s)
 }
 
 /*
+ * The boot device the emulated ROM "booted" from. Reported to U-Boot SPL via
+ * the SM. Defaults to eMMC on uSDHC1 (the SPL dtb's mmc0) at a 32 KiB image
+ * offset, which is where tests/uboot places the container set. A machine with
+ * no such drive simply has SPL fail to read it, exactly as a board with blank
+ * media would.
+ */
+#define PASSOVER_IMG_OFS        0x8000u
+
+static void fsl_imx95_write_rom_passover(FslImx95State *s)
+{
+    uint8_t *dtcm = memory_region_get_ram_ptr(&s->m33_dtcm);
+    uint8_t *p = dtcm + PASSOVER_DTCM_OFFSET;
+
+    memset(p, 0, PASSOVER_LEN);
+    stw_le_p(p + 0x00, PASSOVER_TAG);
+    p[0x02] = PASSOVER_LEN;                     /* len (0x80)          */
+    p[0x03] = PASSOVER_VER;                     /* ver                 */
+    p[0x18] = PASSOVER_BOOT_STAGE_PRI;          /* boot_stage          */
+    p[0x19] = 0;                                /* img_set_sel         */
+    p[0x25] = 0;                                /* boot_dev_inst       */
+    p[0x26] = PASSOVER_BT_DEV_MMC;              /* boot_dev_type       */
+    stl_le_p(p + 0x28, 512);                    /* dev_page_size       */
+    stl_le_p(p + 0x2c, PASSOVER_IMG_OFS);       /* cnt_header_ofs      */
+    stl_le_p(p + 0x30, PASSOVER_IMG_OFS);       /* img_ofs             */
+}
+
+/*
  * Start/stop an M-core (M33 SM, M7), keeping its PSCI power_state and
  * halt_reason consistent with cs->halted. The SM/boot drives the M33/M7
  * lifecycle directly (not via the PSCI powerctl path), so we must maintain
@@ -823,8 +864,9 @@ static void fsl_imx95_m33_start_bh(void *opaque)
 
     if (initial_sp != 0 && s->m33.cpu) {
         CPUState *cs = CPU(s->m33.cpu);
-        /* Place the boot-ROM handover before the SM starts. */
+        /* Place the boot-ROM tables before the SM starts. */
         fsl_imx95_write_rom_handover(s);
+        fsl_imx95_write_rom_passover(s);
         fsl_imx95_set_cpu_run(cs, true);
         cpu_resume(cs);
         return;
