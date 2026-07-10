@@ -123,7 +123,8 @@
 #define ENETC_L2_HLEN          14         /* Ethernet MAC header (no VLAN) */
 #define ENETC_RXBD_BUFLEN_OFF 8          /* RX writeback: buf_len __le16 */
 #define ENETC_RXBD_LSTATUS_OFF 12        /* RX writeback: lstatus __le32 */
-#define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final BD */
+#define ENETC_RXBD_LSTATUS_R (1u << 30)  /* RX writeback: BD holds a frame */
+#define ENETC_RXBD_LSTATUS_F (1u << 31)  /* RX writeback: final BD of a frame */
 
 /*
  * Largest frame we gather (TX) or scatter (RX). Generous enough for jumbo
@@ -436,6 +437,17 @@ static void fsl_enetc_bar0_write(void *opaque, hwaddr off, uint64_t val,
         /* Driver posted more empty RX buffers (consumer index advanced). */
         enetc_set(s, off, val);
         return;
+    case ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0) + ENETC_RBPIR:
+        /*
+         * RBPIR is hardware-owned in steady state, but the driver writes it
+         * (to 0) when it sets the ring up - Linux in enetc_setup_rxbdr(), and
+         * U-Boot every time it re-inits the interface. Honour the write, or a
+         * second ring setup leaves us producing at a stale index while the
+         * driver polls from 0 and never sees another frame.
+         */
+        s->rx_pi = val & ENETC_RBCIR_IDX_MASK;
+        enetc_set(s, off, val);
+        return;
     case ENETC_PORT_BASE + ENETC_IMDIO_BASE + ENETC_MDIO_CTL:
         enetc_set(s, off, val);
         if (val & ENETC_MDIO_CTL_READ) {
@@ -471,19 +483,45 @@ static const MemoryRegionOps fsl_enetc_bar0_ops = {
 
 /* --- NIC backend --- */
 
-/* Number of posted (driver-owned, empty) RX BDs available to fill. */
-static uint32_t fsl_enetc_rx_free_bds(FslEnetcState *s)
+/*
+ * Is there room for `need` more RX BDs, starting at the producer index?
+ *
+ * Ownership lives in the descriptor, not in the indices: hardware sets
+ * LSTATUS_R when it fills a BD, and software clears it when it consumes the
+ * BD and posts a fresh buffer. A BD whose R bit is still set has not been
+ * consumed, so writing it would overrun the driver.
+ *
+ * Do NOT infer this from RBPIR/RBCIR. The two drivers keep those indices to
+ * different conventions: Linux writes RBCIR = next_to_use (one past the last
+ * posted buffer), while U-Boot posts the whole ring up front and leaves RBCIR
+ * at 0. An index-difference check reads U-Boot's ring as permanently full and
+ * silently discards every inbound frame - the link comes up, ARP goes out, and
+ * nothing ever arrives.
+ */
+static bool fsl_enetc_rx_has_room(FslEnetcState *s, uint32_t need)
 {
     hwaddr rbase = ENETC_BDR_BASE + ENETC_BDR(ENETC_BDR_RX, 0);
     uint32_t len = enetc_reg(s, rbase + ENETC_RBLENR) & ENETC_RBCIR_IDX_MASK;
-    uint32_t ci;
+    uint64_t ring = enetc_ring_base(s, rbase + ENETC_RBBAR0);
+    PCIDevice *pci = PCI_DEVICE(s);
+    uint32_t i;
 
-    if (!len || !(enetc_reg(s, rbase + ENETC_RBMR) & ENETC_MR_EN)) {
-        return 0;
+    if (!len || need > len ||
+        !(enetc_reg(s, rbase + ENETC_RBMR) & ENETC_MR_EN)) {
+        return false;
     }
-    /* RBCIR (driver's next_to_use) is one past the last posted buffer. */
-    ci = enetc_reg(s, rbase + ENETC_RBCIR) & ENETC_RBCIR_IDX_MASK;
-    return ci >= s->rx_pi ? ci - s->rx_pi : len - s->rx_pi + ci;
+
+    for (i = 0; i < need; i++) {
+        uint32_t idx = (s->rx_pi + i) % len;
+        uint8_t lstatus[4];
+
+        pci_dma_read(pci, ring + (uint64_t)idx * ENETC_BD_SIZE +
+                     ENETC_RXBD_LSTATUS_OFF, lstatus, sizeof(lstatus));
+        if (ldl_le_p(lstatus) & ENETC_RXBD_LSTATUS_R) {
+            return false;       /* not yet consumed by the driver */
+        }
+    }
+    return true;
 }
 
 static bool fsl_enetc_can_receive(NetClientState *nc)
@@ -563,7 +601,7 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
     if (need == 0) {
         need = 1; /* zero-length frame still consumes one BD */
     }
-    if (fsl_enetc_rx_free_bds(s) < need) {
+    if (!fsl_enetc_rx_has_room(s, need)) {
         return size; /* no RX buffer posted: discard (overrun) */
     }
 
@@ -600,9 +638,12 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
 
         /*
          * Write back the BD in the union enetc_rx_bd.r layout: buf_len
-         * (__le16) at offset 8 and lstatus (__le32) at offset 12. Only the
-         * final BD sets LSTATUS_F; non-final BDs are full (bufsz) and the
-         * driver takes their size from RBBSR, so just mark them ready.
+         * (__le16) at offset 8 and lstatus (__le32) at offset 12.
+         *
+         * Every filled BD gets LSTATUS_R ("holds a frame"); only the last BD
+         * of the frame also gets LSTATUS_F. Linux tests lstatus != 0 and uses
+         * F to find the end of a frame, but U-Boot tests R specifically - so a
+         * BD marked F-without-R is invisible to U-Boot's receive path.
          */
         memset(bd, 0, sizeof(bd));
         if (off == 0) {
@@ -610,7 +651,7 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
         }
         stw_le_p(bd + ENETC_RXBD_BUFLEN_OFF, (uint16_t)chunk);
         stl_le_p(bd + ENETC_RXBD_LSTATUS_OFF,
-                 final ? ENETC_RXBD_LSTATUS_F : ENETC_RXBD_LSTATUS_F >> 1);
+                 ENETC_RXBD_LSTATUS_R | (final ? ENETC_RXBD_LSTATUS_F : 0));
         pci_dma_write(pci, bd_addr, bd, sizeof(bd));
 
         if (++s->rx_pi == len) {
