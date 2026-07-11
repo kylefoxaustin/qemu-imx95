@@ -287,12 +287,17 @@ of 82 nodes. Our model accepts the same converted artifact and produces the same
 partitioning — but the NPU compute is proprietary and unmodelled, so the output
 buffer is **never written** while `MBOX0` returns `DONE`.
 
-By default a guest app therefore sees `STATUS_DONE` and reads uncomputed output.
-That is the worst bug class in the fidelity taxonomy, and it is the current
-default. The honest-fault lever exists and is off:
+A guest app that trusted `STATUS_DONE` would read uncomputed output — the worst
+bug class in the fidelity taxonomy. **As of 2026-07-10 the honest-fault lever is
+on by default** (`neutron-uncomputed-errcode = 0x95E0`): every uncomputed
+inference returns that recognisable non-zero `error_code` in `MBOX1`, which the
+driver surfaces to userspace, so the guest is told "did not compute" instead of
+being lied to. A guest that tolerates uncomputed output (e.g. a delegate that
+offloads 0 nodes and falls back to CPU) can opt back into silicon-faithful
+happy-path success:
 
 ```
-qom-set /machine/soc/neutron neutron-uncomputed-errcode 0x<errcode>
+qom-set /machine/soc/neutron neutron-uncomputed-errcode 0
 ```
 
 **What the board says about that choice.** Reading the real mailbox during a
@@ -309,10 +314,13 @@ Three things follow. First, **`MBOX0` really does return to `RESET_VAL` when
 was inferred from the driver before the board was available. Second, `APPCTRL`
 carries the `0xF807` firmware-up handshake exactly as we model it. Third, and
 most relevant to the policy call: **real hardware reports `error_code = 0` on a
-successful inference.** So our default of 0 is *faithful* — turning on the
-honest-fault errcode is a deliberate, deliberate-and-documented departure from
-silicon, trading fidelity-of-the-register for honesty-about-the-result. That is
-exactly the trade the directive exists to adjudicate, and it is Kyle's call.
+successful inference.** A default of 0 would therefore be *register-faithful* —
+but our model cannot actually compute, so a register-faithful 0 is a silent
+wrong answer, the worst class. **Kyle's call (2026-07-10): flip it.** The default
+is now the non-zero honest-fault errcode: a deliberate, documented departure
+from silicon's register value that trades fidelity-of-the-register for
+honesty-about-the-result, exactly as the directive prioritises. `= 0` remains a
+one-line opt-out for anyone who wants the register-faithful happy path.
 
 One further delta: silicon posts `MBOX0 = 0xA3` (`RUN_ACK`) before `DONE`; our
 model jumps straight to `DONE`. The driver only tests `MBOX0 != 0` for tx-ack
@@ -335,10 +343,11 @@ and `== DONE` for completion, so both work — but the intermediate ack is real.
 
 ## Open questions for Kyle
 
-1. **Flip the Neutron default?** Making `neutron-uncomputed-errcode` non-zero by
-   default trades "the stack runs end to end" for "the guest is never lied to".
-   The directive says silent-wrong is the worst class. This is the one real
-   policy call left, and it is yours.
+1. **Flip the Neutron default?** — **RESOLVED 2026-07-10: flipped.**
+   `neutron-uncomputed-errcode` now defaults to `0x95E0`, so an uncomputed
+   inference faults honestly to the guest rather than lying with `DONE` +
+   uncomputed output. `= 0` opts back into the register-faithful happy path.
+   The directive's "silent-wrong is the worst class" won the trade.
 2. **uSDHC capabilities**: leave conservative, or model uSDHC's own capability
    register properly (not the generic SDHCI default) and only advertise modes we
    can honour?

@@ -68,35 +68,15 @@ static void run_inference(QTestState *qts)
 }
 
 /*
- * Default (no operator opt-in): the model is faithful to real silicon - an
- * uncomputed inference still completes DONE and reports error_code 0 (success)
- * in MBOX1. (The output is uncomputed; honesty is operator-side via QMP.)
+ * Default honest-fault: the NPU compute is unmodelled, so an uncomputed
+ * inference completes DONE in MBOX0 (the driver never hangs) AND reports a
+ * recognisable non-zero error_code (0x95e0) in MBOX1, which the driver surfaces
+ * to the guest app via NEUTRON_IOCTL_INFERENCE_STATE - a guest-visible "did not
+ * compute" fault by default, rather than a silent wrong answer.
  */
-static void test_neutron_errcode_faithful(void)
+static void test_neutron_errcode_honest_default(void)
 {
     QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
-
-    run_inference(qts);
-    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
-    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX1), ==, 0);
-
-    qtest_quit(qts);
-}
-
-/*
- * Operator opt-in honest-fault: after the operator sets neutron-uncomputed-
- * errcode (via qom-set, as the farm control-plane would), the model returns
- * DONE in MBOX0 (so the driver never hangs) AND the chosen non-zero error_code
- * in MBOX1, which the driver surfaces to the guest app via
- * NEUTRON_IOCTL_INFERENCE_STATE - a guest-visible "did not compute" fault.
- */
-static void test_neutron_errcode_honest(void)
-{
-    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
-
-    qtest_qmp_assert_success(qts,
-        "{'execute':'qom-set','arguments':{'path':'/machine/soc/neutron',"
-        "'property':'neutron-uncomputed-errcode','value':38368}}");  /* 0x95e0 */
 
     run_inference(qts);
     g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
@@ -105,12 +85,34 @@ static void test_neutron_errcode_honest(void)
     qtest_quit(qts);
 }
 
+/*
+ * Happy-path opt-out: after the operator sets neutron-uncomputed-errcode to 0
+ * (via qom-set, as the farm control-plane would for a guest that tolerates
+ * uncomputed output), the model is silicon-faithful - DONE in MBOX0 and
+ * error_code 0 (success) in MBOX1.
+ */
+static void test_neutron_errcode_faithful_optout(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+
+    qtest_qmp_assert_success(qts,
+        "{'execute':'qom-set','arguments':{'path':'/machine/soc/neutron',"
+        "'property':'neutron-uncomputed-errcode','value':0}}");
+
+    run_inference(qts);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX1), ==, 0);
+
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("imx95/neutron/bringup", test_neutron_bringup);
-    qtest_add_func("imx95/neutron/errcode-faithful",
-                   test_neutron_errcode_faithful);
-    qtest_add_func("imx95/neutron/errcode-honest", test_neutron_errcode_honest);
+    qtest_add_func("imx95/neutron/errcode-honest-default",
+                   test_neutron_errcode_honest_default);
+    qtest_add_func("imx95/neutron/errcode-faithful-optout",
+                   test_neutron_errcode_faithful_optout);
     return g_test_run();
 }

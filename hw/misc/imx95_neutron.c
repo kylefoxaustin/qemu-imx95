@@ -27,14 +27,15 @@
  * So inferences run end to end but return uncomputed output — a "brings up"
  * model, not a functional NPU. See docs/imx95/known-limitations.md.
  *
- * Because the output is uncomputed, a guest that trusts NPU results gets a
- * silent wrong answer. Completion gates only on MBOX0 == DONE, but the driver
- * also reads an error_code from MBOX1 and surfaces it to userspace
- * (NEUTRON_IOCTL_INFERENCE_STATE). So the model offers an operator opt-in:
- * the "neutron-uncomputed-errcode" property (default 0 = faithful success)
- * makes the model return a recognisable non-zero error_code in MBOX1 for every
- * uncomputed inference (an honest, guest-visible fault) without hanging the
- * driver. See docs/validation/fidelity-audit.md.
+ * Because the output is uncomputed, a guest that trusts NPU results would get a
+ * silent wrong answer - the worst fidelity bug class. Completion gates only on
+ * MBOX0 == DONE, but the driver also reads an error_code from MBOX1 and copies
+ * it to userspace (NEUTRON_IOCTL_INFERENCE_STATE). So the model faults honestly
+ * by default: the "neutron-uncomputed-errcode" property defaults to a non-zero
+ * value (0x95E0), making the model return that recognisable error_code in MBOX1
+ * for every uncomputed inference - a guest-visible fault, without hanging the
+ * driver (MBOX0 stays DONE). Set the property to 0 to opt back into silicon-
+ * faithful happy-path success. See docs/validation/fidelity-audit.md.
  */
 
 #include "qemu/osdep.h"
@@ -95,6 +96,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
 #define N_CMD_RUN             0x269
 #define N_CMD_RESET           0x23637
 
+/*
+ * Default guest-visible error_code for an uncomputed inference. Non-zero by
+ * default: the NPU compute is proprietary and unmodelled, so an inference that
+ * "completes" returns uncomputed output - an honest fault to the guest beats a
+ * silent wrong answer. 0x95E0 reads as "95, Error, 0" and is recognisable in a
+ * guest's NEUTRON_IOCTL_INFERENCE_STATE. Set the property to 0 to opt back into
+ * happy-path (silicon-faithful success) for a guest that tolerates uncomputed
+ * output (e.g. a delegate that offloads 0 nodes and falls back to CPU).
+ */
+#define NEUTRON_UNCOMPUTED_ERRCODE_DEFAULT  0x95E0u
+
 struct IMX95NeutronState {
     SysBusDevice parent_obj;
     MemoryRegion rctl_iomem;        /* RESETCTRL @0x4ab00000 */
@@ -125,12 +137,13 @@ struct IMX95NeutronState {
      * inference did not really compute" to a guest app WITHOUT hanging the
      * driver (completion does not depend on MBOX1).
      *
-     * Default 0 = faithful to real silicon (a successful inference returns
-     * error_code 0). Set a non-zero value at runtime
-     * (qom-set /machine/soc/neutron neutron-uncomputed-errcode 0x95E0) to make
-     * the model emit that recognisable error_code on every uncomputed RUN, so
-     * the farm can choose guest-visible honesty over happy-path fidelity.
-     * Preserved across reset (it is operator configuration, not device state).
+     * Default NEUTRON_UNCOMPUTED_ERRCODE_DEFAULT (0x95E0) = honest fault: every
+     * uncomputed RUN emits that recognisable error_code, so a guest that trusts
+     * NPU output learns it did not really compute rather than getting a silent
+     * wrong answer. Set to 0 at runtime
+     * (qom-set /machine/soc/neutron neutron-uncomputed-errcode 0) to opt back
+     * into silicon-faithful happy-path success for a guest that tolerates
+     * uncomputed output. Preserved across reset (operator config, not state).
      */
     uint32_t uncomputed_errcode;
 };
@@ -170,11 +183,11 @@ static void neutron_doorbell(IMX95NeutronState *s)
     if (cmd == N_CMD_RUN) {
         s->acked_uncomputed++;         /* an inference "completed" uncomputed */
         /*
-         * Surface the operator-selected honest-fault error_code to the guest in
-         * MBOX1. Default 0 keeps the happy-path (success) faithful; a non-zero
-         * value makes a guest app's NEUTRON_IOCTL_INFERENCE_STATE see an error
-         * for this uncomputed inference. MBOX0 stays DONE either way, so the
-         * driver never hangs.
+         * Surface the honest-fault error_code to the guest in MBOX1. Non-zero
+         * by default so a guest app's NEUTRON_IOCTL_INFERENCE_STATE sees an
+         * error for this uncomputed inference rather than a silent wrong
+         * answer; set the property to 0 to opt back into happy-path success.
+         * MBOX0 stays DONE either way, so the driver never hangs.
          */
         ndev_w(s, N_MBOX1, s->uncomputed_errcode);
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -184,8 +197,8 @@ static void neutron_doorbell(IMX95NeutronState *s)
                       "guest error_code (MBOX1) = 0x%x%s\n",
                       s->acked_uncomputed, s->uncomputed_errcode,
                       s->uncomputed_errcode ? "" :
-                      " (operator opt-in: set neutron-uncomputed-errcode to "
-                      "fault honestly to the guest)");
+                      " (happy-path opt-out: neutron-uncomputed-errcode = 0, "
+                      "guest sees success despite uncomputed output)");
     } else {
         qemu_log_mask(LOG_UNIMP,
                       "imx95-neutron: cmd 0x%x acked (DONE)\n", cmd);
@@ -333,10 +346,11 @@ static void neutron_realize(DeviceState *dev, Error **errp)
     object_property_add_uint64_ptr(OBJECT(dev), "inferences-acked-uncomputed",
                                    &s->acked_uncomputed, OBJ_PROP_FLAG_READ);
     /*
-     * Operator opt-in honest-fault: the error_code the model returns to the
-     * guest (MBOX1) on each uncomputed inference. 0 (default) = faithful
-     * success; non-zero = guest-visible honest fault. Settable at runtime via
-     * qom-set, like the ADC's operator-driven conversion values.
+     * Honest-fault error_code the model returns to the guest (MBOX1) on each
+     * uncomputed inference. Non-zero by default (seeded in instance_init) =
+     * guest-visible honest fault; set to 0 for silicon-faithful happy-path
+     * success. Settable at runtime via qom-set, like the ADC's operator-driven
+     * conversion values.
      */
     object_property_add_uint32_ptr(OBJECT(dev), "neutron-uncomputed-errcode",
                                    &s->uncomputed_errcode,
@@ -357,6 +371,18 @@ static void neutron_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
 }
 
+static void neutron_init(Object *obj)
+{
+    IMX95NeutronState *s = IMX95_NEUTRON(obj);
+
+    /*
+     * Seed the honest-fault default here (not in reset) so it behaves like
+     * operator configuration: a -global or qom-set override survives, and it is
+     * not clobbered on a guest reboot. reset deliberately leaves it untouched.
+     */
+    s->uncomputed_errcode = NEUTRON_UNCOMPUTED_ERRCODE_DEFAULT;
+}
+
 static void neutron_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -370,6 +396,7 @@ static const TypeInfo imx95_neutron_info = {
     .name           = TYPE_IMX95_NEUTRON,
     .parent         = TYPE_SYS_BUS_DEVICE,
     .instance_size  = sizeof(IMX95NeutronState),
+    .instance_init  = neutron_init,
     .class_init     = neutron_class_init,
 };
 

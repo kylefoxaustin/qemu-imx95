@@ -77,7 +77,7 @@ present:
   # --- Registration only, compute proprietary (Tier C) ---
   - { block: "Mali-G310 GPU (Valhall CSF)",        tier: C, test: "qtest:imx95-mali-test",    evidence: "kbase identifies GPU arch 10.12.0, then fails CSF bring-up cleanly (-EIO)", caveat: "compute needs proprietary libmali" }
   - { block: "VPU (Wave6 / cnm633c)",              tier: C, test: boot,                       evidence: "wave6-vpu binds, /dev/video* present; no codec firmware -> no frames", caveat: "decode/encode is proprietary firmware" }
-  - { block: "Neutron NPU",                        tier: C, test: "qtest:imx95-neutron-test",                       evidence: "driver binds e2e; opt-in guest honest-fault via MBOX1 error_code", caveat: "compute is NXP-proprietary; flagged, do not trust NPU output" }
+  - { block: "Neutron NPU",                        tier: C, test: "qtest:imx95-neutron-test",                       evidence: "driver binds e2e; default-on guest honest-fault via MBOX1 error_code (qom-set 0 to opt out)", caveat: "compute is NXP-proprietary; flagged, do not trust NPU output" }
 
 absent:
   - { block: "FEC / ENET (dwmac)",  reason: "i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair of i.MX 91/93" }
@@ -151,7 +151,7 @@ readme_groups:
       evidence: "cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7)",
       blocks: ["Audio capture bring-up (BT-SCO + SAI RX)"] }
   - { label: "Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary", tier: C,
-      evidence: "kbase identifies the Mali-G310 (arch 10.12.0) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with an opt-in guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result",
+      evidence: "kbase identifies the Mali-G310 (arch 10.12.0) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result",
       blocks: ["Mali-G310 GPU (Valhall CSF)", "VPU (Wave6 / cnm633c)", "Neutron NPU"] }
 
 readme_absent:

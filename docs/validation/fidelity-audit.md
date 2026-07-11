@@ -23,7 +23,7 @@ Detectors that reproduce these verdicts live in `tests/code-sweep/fidelity/`.
 
 | Block | Class | Evidence |
 |-------|-------|----------|
-| **Neutron NPU** | **FLAGGED (default) → can FAULT-honestly to the guest (operator opt-in)** | Compute is NXP-proprietary firmware → un-modellable. The model keeps acking `DONE` (completion gates only on MBOX0, so it must). Two honesty layers: (1) *operator*: per-inference `LOG_GUEST_ERROR` + QMP `qom-get /machine/soc/neutron compute-modelled` (= `false`) + `inferences-acked-uncomputed`. (2) *guest*: the driver reads an `error_code` from **MBOX1** *after* `DONE` and surfaces it to userspace via `NEUTRON_IOCTL_INFERENCE_STATE` — and that read does **not** gate completion. So `qom-set /machine/soc/neutron neutron-uncomputed-errcode <nonzero>` makes the model return that recognisable error_code on every uncomputed inference: a guest-visible "did not compute" fault, **without hanging** the driver. Default 0 = faithful to silicon (happy-path success). Output is still uncomputed — do not trust NPU results — but the guest can now be told. `hw/misc/imx95_neutron.c`. |
+| **Neutron NPU** | **FLAGGED → FAULTS honestly to the guest by default** | Compute is NXP-proprietary firmware → un-modellable. The model keeps acking `DONE` (completion gates only on MBOX0, so it must). Two honesty layers: (1) *operator*: per-inference `LOG_GUEST_ERROR` + QMP `qom-get /machine/soc/neutron compute-modelled` (= `false`) + `inferences-acked-uncomputed`. (2) *guest*: the driver reads an `error_code` from **MBOX1** *after* `DONE` and surfaces it to userspace via `NEUTRON_IOCTL_INFERENCE_STATE` — and that read does **not** gate completion. `neutron-uncomputed-errcode` **defaults to `0x95E0`** (Kyle's call, 2026-07-10), so the model returns that recognisable error_code on every uncomputed inference: a guest-visible "did not compute" fault by default, **without hanging** the driver. `qom-set /machine/soc/neutron neutron-uncomputed-errcode 0` opts back into the register-faithful happy path (silicon reports `error_code 0` on success). Output is still uncomputed — do not trust NPU results — but by default the guest is told. `hw/misc/imx95_neutron.c`. |
 | **ADC** | **FIXED → COMPUTES (operator-driven)** | Was SILENT-WRONG (hidden constant `0x100+ch*0x111`). Now each channel is a read/write QOM property `adc-ch0..7` settable at runtime via `qom-set /machine/soc/adc adc-ch<N> <value>` — whatever the operator injects is what the guest reads (the model's analog of the board's pin voltage). Default = a documented distinct-per-channel test pattern, so an un-driven channel is deterministic, not a hidden lie. Verified: injected `adc-ch5=2748` → guest `in_voltage5_raw=2748` while undriven channels read their defaults. `hw/misc/imx93_adc.c`. |
 | **DPU 2D blit** | COMPUTES | `hw/dpu/imx95_dpu.c:1093-1266` — copy/fill/blend(Porter-Duff)/scale/rotate/colour-convert all read source + write computed result to guest memory. (Display *scanout* to console is a stub, but the 2D engine is real.) |
 | **eDMA v3/v5** | COMPUTES | `hw/dma/imx95_edma.c:195-210` — actually `address_space_read`→`address_space_write`s the data; DONE/IRQ after the move. |
@@ -38,15 +38,17 @@ USB-BOT, GPIO, I²C, RTC) are all **COMPUTES** — verified by integrity oracles
 
 ## Silent-wrong blocks — status
 
-1. **Neutron NPU** — **FLAGGED → can FAULT-honestly to the guest (opt-in)**
+1. **Neutron NPU** — **FLAGGED → FAULTS honestly to the guest by default**
    (was silent). Can't compute (proprietary fw), so the model keeps acking
    `DONE`. Honesty: a loud per-inference log + QMP `compute-modelled=false` /
-   `inferences-acked-uncomputed` (operator level), **and** an operator opt-in
-   `neutron-uncomputed-errcode` property that returns a non-zero error_code in
-   MBOX1 — surfaced to the guest app by the driver (see the corrected fleet
-   finding below) — so a guest that checks inference state learns it didn't
-   compute. Default 0 keeps the happy path faithful. Real fix (run the model)
-   needs the proprietary firmware/ISA.
+   `inferences-acked-uncomputed` (operator level), **and** the
+   `neutron-uncomputed-errcode` property — **now non-zero (0x95E0) by default**
+   (Kyle's call, 2026-07-10) — returns that error_code in MBOX1, surfaced to the
+   guest app by the driver (see the corrected fleet finding below), so a guest
+   that checks inference state learns it didn't compute rather than trusting a
+   silent-wrong result. Set the property to `0` to opt back into the register-
+   faithful happy path. Real fix (run the model) needs the proprietary
+   firmware/ISA.
 2. ~~**ADC**~~ — **FIXED** (operator-driven conversion values via `qom-set`;
    default is a documented test pattern). No longer a hidden constant.
 
@@ -95,9 +97,11 @@ checked its small Neutron 2026-06-29): NXP remote-accelerator drivers split by
 The invariant across all three: **a poll/arrival-gated completion can never carry
 the error — the honest fault must travel a separate, non-gating channel** (a
 side-band register for the poll-gated accels, the in-band status field for the
-arrival-gated one), never the completion signal itself. All three models ship the
-fault as an operator opt-in on a default-faithful (looks-like-success) base, so
-real-silicon behaviour is the default and the farm flips honesty on per its needs.
+arrival-gated one), never the completion signal itself. All three models expose
+the fault on that non-gating channel as a runtime-settable property; the i.MX 95
+Neutron now **defaults it on** (honest fault by default, per the directive that
+silent-wrong is the worst class), with `= 0` as the opt-out back to the register-
+faithful looks-like-success base.
 
 ## Fixing vs flagging
 
