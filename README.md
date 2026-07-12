@@ -648,6 +648,7 @@ byte-exact oracle. Harness: [`tests/interconnect-imx95/`](tests/interconnect-imx
 | Transport | Shape | Status |
 |---|---|:--:|
 | **Ethernet** | two 95s, ENETC `eth0` over `-nic socket` | PASS |
+| **Ethernet — 3-node, cross-silicon** | 95 (A55/Linux/ENETC) + MCX-N947 (M33/ENET-QoS) + RT1180 (M33/NETC) on one `-nic socket,mcast=` L2 segment | PASS |
 | **UART** | two 95s, LPUART3 `/dev/ttyLP2` over `-chardev socket` | PASS |
 | **SPI** | two 95s, LPSPI7 `/dev/spidev0.0` via the **`spi-link`** device over `-chardev socket` | PASS |
 | **CAN** | two 95s, FlexCAN `can0` via **`can-host-chardev`** over `-chardev socket` | PASS |
@@ -666,6 +667,21 @@ across **i.MX 91 / 93 / 95 / MCXN947** — Linux↔bare-metal-M33 and eDMA↔PIO
 — so any two boards interoperate
 ([`tests/interconnect-imx95/xcheck-spi-91.sh`](tests/interconnect-imx95/xcheck-spi-91.sh),
 [`xcheck-can-mcx.sh`](tests/interconnect-imx95/xcheck-can-mcx.sh)).
+
+**Three-node cross-silicon L2 segment — the board farm has a network.** Beyond the
+two-board links above, the 95's Linux/A55 ENETC node has shared **one** QEMU
+socket-mcast wire with a Cortex-M33 **MCX-N947** (ENET-QoS) *and* a Cortex-M33
+**RT1180** (NETC) at the same time — three different SoC models, three different
+MAC IPs, three vendor firmware stacks — with **every node independently confirming
+the other two** by its own "saw both peers" assertion (no monitor in the loop).
+The 95's node lives in [`tests/enet-lab3/`](tests/enet-lab3/): a reproducible
+3-instance **self-test** of the ENETC socket-mcast datapath, a **negative** test
+(a live-but-incomplete segment must *not* pass), and a `JOIN=1` mode that lights up
+the real cross-silicon segment alongside the sibling emulators. Building it drew out
+a test-design law worth keeping: the class of bug a multi-node lab exposes lives in
+**time, not topology** — not `N>2`, but `N>2` *plus asynchronous arrival and
+departure*; a rehearsal where every node boots and leaves together is structurally
+blind to it, however many nodes it uses.
 
 ## Validation
 
