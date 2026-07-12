@@ -66,6 +66,7 @@ int main(int argc, char **argv)
     struct sockaddr_ll to;
     const char *dl_env;
     long dl_ms, deadline, next_send = 0, pass_at = 0;
+    long post_pass_ms = POST_PASS_MS;
 
     if (argc < 4) {
         fprintf(stderr,
@@ -120,6 +121,19 @@ int main(int argc, char **argv)
     dl_env = getenv("LAB_DEADLINE_MS");
     dl_ms = dl_env ? strtol(dl_env, NULL, 0) : 120000;   /* 120s hard cap */
     deadline = now_ms() + dl_ms;
+
+    /*
+     * How long to keep broadcasting after PASS. Longer lets late/slow peers
+     * (e.g. a node that PASSes fast then exits) stay on the wire long enough
+     * for the others to observe it - needed to close a 3-node "all see all".
+     */
+    {
+        const char *pp = getenv("LAB_POST_PASS_MS");
+
+        if (pp) {
+            post_pass_ms = strtol(pp, NULL, 0);
+        }
+    }
 
     for (;;) {
         long t = now_ms();
@@ -193,7 +207,7 @@ int main(int argc, char **argv)
             printf(")\n");
             fflush(stdout);
             passed = 1;
-            pass_at = t + POST_PASS_MS;
+            pass_at = t + post_pass_ms;
         }
     }
 }

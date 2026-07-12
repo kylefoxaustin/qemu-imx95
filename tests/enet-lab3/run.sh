@@ -67,6 +67,8 @@ ET=$(sed -n 's/.*lab_et=\([^ ]*\).*/\1/p' /proc/cmdline)
 PEERS=$(sed -n 's/.*lab_peers=\([^ ]*\).*/\1/p' /proc/cmdline | tr ',' ' ')
 DL=$(sed -n 's/.*lab_deadline=\([^ ]*\).*/\1/p' /proc/cmdline)
 [ -n "$DL" ] && export LAB_DEADLINE_MS="$DL"
+PP=$(sed -n 's/.*lab_postpass=\([^ ]*\).*/\1/p' /proc/cmdline)
+[ -n "$PP" ] && export LAB_POST_PASS_MS="$PP"
 # ENETC PF0 (devfn 00.0) carries the -nic backend; resolve its netdev by PCI
 # address (probe-order makes "eth0" unreliable, per run-eth.sh).
 n=0; while [ $n -lt 60 ]; do
@@ -88,7 +90,7 @@ chmod +x "$root/init"
 boot() { # $1=name $2=mcast-group $3=mac $4=my_et $5=peers-csv $6=logfile [$7=deadline_ms]
     timeout --signal=KILL "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
         -kernel "$IMAGE" -dtb "$WORK/enetc.dtb" -initrd "$WORK/lab.cpio.gz" \
-        -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000}" \
+        -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000} lab_postpass=${LAB_POST_PASS_MS:-3000}" \
         -device loader,file="$SM_ELF",cpu-num=6 \
         -nic "socket,mcast=$2,model=fsl-enetc,mac=$3" \
         -serial file:"$6" -serial null -monitor none >/dev/null 2>&1 || true
