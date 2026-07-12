@@ -263,6 +263,106 @@ static void test_edma_tcd64_playback(void)
     qtest_quit(qts);
 }
 
+/*
+ * Negative tests for the peripheral-triggered (cyclic/ESG) path, per
+ * rt1180emulator's eDMA "ERQ audit": a model whose CH_CSR.ERQ is a dead bit,
+ * or that runs a cyclic TCD without an actual peripheral DMA request, still
+ * reports bytes moved - so a "did it complete?" test passes on a broken model.
+ * These assert the ABSENCE of a transfer. (rt1180's third case - servicing a
+ * request inline and silently dropping it while still reporting DONE - is that
+ * model's own re-entrancy bug; this model services each dma-req synchronously
+ * and has no such path, so it is not reproduced here.)
+ */
+static void program_micfil_cyclic_tcd(QTestState *qts)
+{
+    qtest_writel(qts, CH(0) + TCD_SADDR, MICFIL_BASE + MICFIL_DATACH0);
+    qtest_writew(qts, CH(0) + TCD_SOFF, 0);
+    qtest_writew(qts, CH(0) + TCD_ATTR, ATTR(2));
+    qtest_writel(qts, CH(0) + TCD_NBYTES, 4);
+    qtest_writel(qts, CH(0) + TCD_DADDR, (uint32_t)DST_GPA);
+    qtest_writew(qts, CH(0) + TCD_DOFF, 4);
+    qtest_writel(qts, CH(0) + TCD_DLAST, 0);
+    qtest_writew(qts, CH(0) + TCD_CITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_BITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_CSR, TCD_CSR_ESG | TCD_CSR_INTMAJ);
+    qtest_writel(qts, CH(0) + CH_SBR, CH_SBR_RD);
+}
+
+static int dst_nonzero_bytes(QTestState *qts)
+{
+    uint8_t got[64 * 4];
+    int i, nz = 0;
+
+    qtest_memread(qts, DST_GPA, got, sizeof(got));
+    for (i = 0; i < (int)sizeof(got); i++) {
+        if (got[i]) {
+            nz++;
+        }
+    }
+    return nz;
+}
+
+/* ERQ gates the peripheral path: cleared ERQ -> a DMA request is ignored. */
+static void test_edma_cyclic_erq_gated(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint8_t zero[64 * 4] = {0};
+
+    qtest_memwrite(qts, DST_GPA, zero, sizeof(zero));
+    program_micfil_cyclic_tcd(qts);
+    qtest_writel(qts, CH(0) + CH_CSR, CH_CSR_ERQ);   /* arm: cyclic */
+    qtest_writel(qts, CH(0) + CH_CSR, 0);            /* then CLEAR ERQ */
+
+    /* MICFIL fires DMA requests, but with ERQ clear nothing may move. */
+    qtest_writel(qts, MICFIL_BASE + MICFIL_FIFO_CTRL, 4);
+    qtest_writel(qts, MICFIL_BASE + MICFIL_CTRL1,
+                 CTRL1_PDMIEN | CTRL1_DISEL_DMA);
+    qtest_clock_step(qts, MICFIL_WORD_NS * 100);
+
+    g_assert_cmpint(dst_nonzero_bytes(qts), ==, 0);
+    qtest_quit(qts);
+}
+
+/* A cyclic channel needs the request line: ERQ set, no request = no move. */
+static void test_edma_cyclic_needs_request(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint8_t pat[64], zero[64 * 4] = {0};
+    int i;
+
+    /*
+     * Source from a NON-ZERO RAM pattern, not a disabled peripheral: a disabled
+     * MICFIL supplies zeros, so a model that wrongly ran the TCD on arm would
+     * copy zeros and this test would pass anyway (vacuous). With a pattern,
+     * a no-request transfer lands visible bytes and the assertion catches it.
+     */
+    for (i = 0; i < (int)sizeof(pat); i++) {
+        pat[i] = (uint8_t)(0xA0 + i);
+    }
+    qtest_memwrite(qts, SRC_GPA, pat, sizeof(pat));
+    qtest_memwrite(qts, DST_GPA, zero, sizeof(zero));
+
+    /* Cyclic (ESG) channel, RAM src -> DST, armed with ERQ - but no dma-req. */
+    qtest_writel(qts, CH(0) + TCD_SADDR, (uint32_t)SRC_GPA);
+    qtest_writew(qts, CH(0) + TCD_SOFF, 4);
+    qtest_writew(qts, CH(0) + TCD_ATTR, ATTR(2));
+    qtest_writel(qts, CH(0) + TCD_NBYTES, 4);
+    qtest_writel(qts, CH(0) + TCD_DADDR, (uint32_t)DST_GPA);
+    qtest_writew(qts, CH(0) + TCD_DOFF, 4);
+    qtest_writel(qts, CH(0) + TCD_DLAST, 0);
+    qtest_writew(qts, CH(0) + TCD_CITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_BITER, 0x100);
+    qtest_writew(qts, CH(0) + TCD_CSR, TCD_CSR_ESG | TCD_CSR_INTMAJ);
+    qtest_writel(qts, CH(0) + CH_SBR, CH_SBR_RD);
+    qtest_writel(qts, CH(0) + CH_CSR, CH_CSR_ERQ);   /* armed, ERQ set */
+
+    /* No peripheral is enabled: no dma-req ever pulses. Nothing may move. */
+    qtest_clock_step(qts, MICFIL_WORD_NS * 100);
+
+    g_assert_cmpint(dst_nonzero_bytes(qts), ==, 0);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -270,5 +370,8 @@ int main(int argc, char **argv)
     qtest_add_func("/imx95/edma/mloff", test_edma_mloff);
     qtest_add_func("/imx95/edma/micfil-cyclic", test_edma_micfil_cyclic);
     qtest_add_func("/imx95/edma/tcd64-playback", test_edma_tcd64_playback);
+    qtest_add_func("/imx95/edma/cyclic-erq-gated", test_edma_cyclic_erq_gated);
+    qtest_add_func("/imx95/edma/cyclic-needs-request",
+                   test_edma_cyclic_needs_request);
     return g_test_run();
 }
