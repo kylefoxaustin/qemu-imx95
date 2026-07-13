@@ -162,9 +162,9 @@ static uint64_t imx_lpi2c_read(void *opaque, hwaddr offset, unsigned size)
 
     switch (offset) {
     case LPI2C_VERID:
-        return 0x01000003;     /* plausible LPI2C version */
+        return 0x01030003;     /* RM: VERID reset (major 1, minor 3) */
     case LPI2C_PARAM:
-        return 0x00000303;     /* 8-deep tx/rx FIFOs (not load-bearing) */
+        return 0x00000303;     /* RM: PARAM reset, 8-deep tx/rx FIFOs */
     case LPI2C_MCR:
         return s->mcr;
     case LPI2C_MSR: {
