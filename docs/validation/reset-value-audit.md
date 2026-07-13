@@ -67,6 +67,17 @@ Set the true values; NPAIR is unchanged (8 mics) and FIFO depth comes from
 soc_data, so PDM capture still delivers non-silent samples. The HWVAD path is
 only set up on demand, not at probe — so reporting the truth costs nothing.
 
+### FIX/DECISION — ENETC `ECAPR2` ring count 0 → 1  (commit: enetc ECAPR2)
+`fsl_enetc4` reads ECAPR2 at probe into `caps.num_{rx,tx}_bdr` (ethtool/devlink).
+We memset the PORT window to 0 → Linux saw **0 rings** (false; the model does
+service one). Silicon resets ECAPR2 to `0x0008_0008` (8+8), but the model's BDR
+handlers are all hardcoded to ring index 0. Advertising 8 would be *worse* than
+0 — Linux could spread traffic across rings 1-7 the model silently drops (a ring
+count does not degrade gracefully, unlike an SDHCI tuning mode). Report
+`0x0001_0001`: the truth about the emulation, the safe under-report direction.
+Advertising silicon's 8 belongs with a future multi-ring model. Verified:
+enet-lab3 self-test still passes (real L2 through ring 0).
+
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and
 per-instance. **Every set bit (16, 20, 21) lands in the RM's "Reserved [23:16]"
