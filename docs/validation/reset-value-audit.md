@@ -47,6 +47,26 @@ RM: `VERID` reset `0x0103_0003` on **every** LPI2C instance (AON 1-2, wakeup
 "plausible"). Not read by Linux `i2c-imx-lpi2c` (so latent, not biting), but a
 fabricated value silicon never produces; corrected to the RM value.
 
+### FIX — SAI `VERID`/`PARAM` picked to match the driver, not silicon  (commit: sai per-instance)
+The SAI model returned one hardcoded VERID `0x0303_0000` / PARAM `0x0005_0704`
+for every instance, and the source said it was chosen to "match the soc_data the
+driver assumes." `fsl_sai` **reads PARAM at probe** (`sai->param.dataline = PARAM
+& DLN_MASK`; spf/wpf likewise). RM: VERID `0x0302_0002` (all); PARAM fields
+FRAME[19:16], FIFO[11:8]=2^depth, DATALINE[3:0]. The hardcoded value matched
+SAI5 (4 datalines) and was wrong for the wired instances — SAI1 (2 lanes,
+32-deep = `0x0005_0502`), SAI3/wm8962 (1 lane, 128-deep = `0x0005_0701`), SAI2
+(8 lanes), SAI4 (2). Made VERID/PARAM per-instance properties, set from the RM.
+Verified: all 5 SAIs bind, WM8962/SAI3 playback still drains the full stream.
+
+### FIX — MICFIL `VERID`/`PARAM` fabricated, and it hid a real feature  (commit: micfil)
+RM: VERID `0x020F_0000` (major 2, minor 15), PARAM `0x010B_0154`. We returned
+`0x0100_0000` / `0x0000_0034`. `fsl-micfil` reads both at probe. The old PARAM
+reported **NUM_HWVAD=0** deliberately "to keep the voice-activity path out of
+probe" — i.e. it hid a feature silicon has (1 HWVAD) to dodge modelling it.
+Set the true values; NPAIR is unchanged (8 mics) and FIFO depth comes from
+soc_data, so PDM capture still delivers non-silent samples. The HWVAD path is
+only set up on demand, not at probe — so reporting the truth costs nothing.
+
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and
 per-instance. **Every set bit (16, 20, 21) lands in the RM's "Reserved [23:16]"
