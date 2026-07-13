@@ -363,6 +363,50 @@ static void test_edma_cyclic_needs_request(void)
     qtest_quit(qts);
 }
 
+/*
+ * Reset-value differential (the fleet "memset-to-0 is a claim every bit is 0"
+ * audit). CH_SBR is NOT zero at reset: the RM gives eDMA3/eDMA5 a 0x0000_8007
+ * reset - PAL=1 (bit15, privileged) and MID=7 (bits[3:0], the bus master ID).
+ * It matters because fsl-edma READ-MODIFY-WRITES CH_SBR to set its RD/WR
+ * direction bit, so a zero reset is laundered into the guest's own config as
+ * MID=0 / non-privileged - wrong on silicon (QEMU enforces no MID, so it is
+ * silently wrong here). Mutation-proof: delete the CH_SBR seed in
+ * imx95_edma_reset() and every assert below goes red.
+ */
+#define CH_SBR_MID      0x0000000fu             /* bus master ID, bits[3:0] */
+#define CH_SBR_PAL      (1u << 15)              /* privileged access level  */
+
+static void test_edma_ch_sbr_reset(void)
+{
+    QTestState *qts = qtest_initf("-machine imx95-19x19-evk -accel qtest");
+    uint32_t v;
+
+    /*
+     * edma1 (eDMA3) and edma2 (eDMA5): both reset CH_SBR to 0x8007. Check a
+     * few channels - the seed is per-channel, not just channel 0.
+     */
+    v = qtest_readl(qts, CH(0) + CH_SBR);
+    g_assert_cmphex(v, ==, 0x8007);
+    g_assert_cmphex(v & CH_SBR_MID, ==, 7);     /* NOT laundered to 0 */
+    g_assert_cmphex(v & CH_SBR_PAL, ==, CH_SBR_PAL);
+    g_assert_cmphex(qtest_readl(qts, CH(1) + CH_SBR), ==, 0x8007);
+    g_assert_cmphex(qtest_readl(qts, CH(30) + CH_SBR), ==, 0x8007);
+    g_assert_cmphex(qtest_readl(qts, E2_CH(0) + CH_SBR), ==, 0x8007);
+    g_assert_cmphex(qtest_readl(qts, E2_CH(63) + CH_SBR), ==, 0x8007);
+
+    /*
+     * Reproduce fsl-edma's exact RMW (val = read; val |= RD; write) and prove
+     * the MID+PAL SURVIVE - the whole point of a correct reset value.
+     */
+    v = qtest_readl(qts, CH(0) + CH_SBR);
+    qtest_writel(qts, CH(0) + CH_SBR, v | CH_SBR_RD);
+    v = qtest_readl(qts, CH(0) + CH_SBR);
+    g_assert_cmphex(v & CH_SBR_MID, ==, 7);         /* still master ID 7 */
+    g_assert_cmphex(v & CH_SBR_PAL, ==, CH_SBR_PAL);/* still privileged */
+    g_assert_cmphex(v & CH_SBR_RD, ==, CH_SBR_RD);  /* direction applied */
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -373,5 +417,6 @@ int main(int argc, char **argv)
     qtest_add_func("/imx95/edma/cyclic-erq-gated", test_edma_cyclic_erq_gated);
     qtest_add_func("/imx95/edma/cyclic-needs-request",
                    test_edma_cyclic_needs_request);
+    qtest_add_func("/imx95/edma/ch-sbr-reset", test_edma_ch_sbr_reset);
     return g_test_run();
 }

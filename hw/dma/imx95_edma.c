@@ -608,6 +608,16 @@ static void imx95_edma_reset(DeviceState *dev)
     memset(s->mgmt, 0, sizeof(s->mgmt));
     for (int i = 0; i < IMX95_EDMA_MAX_CHANNELS; i++) {
         memset(s->chan[i].regs, 0, sizeof(s->chan[i].regs));
+        /*
+         * CH_SBR is NOT reset to zero on silicon: it carries the channel's bus
+         * master ID (MID) and privileged-access level (PAL). The RM gives
+         * eDMA3/eDMA5 a 0x0000_8007 reset (PAL=1, MID=7). This matters because
+         * fsl-edma read-modify-writes CH_SBR to set the RD/WR direction bit -
+         * so a zero reset here is laundered into the guest's own config as
+         * MID=0, non-privileged, wrong on real silicon. Nothing enforces MID
+         * in QEMU, so it is silent here - exactly the class this seed fixes.
+         */
+        st32(s->chan[i].regs + CH_SBR, s->ch_sbr_reset);
         s->chan[i].armed = false;
         s->chan[i].cyclic = false;
         if (i < s->num_channels) {
@@ -657,6 +667,12 @@ static const Property imx95_edma_properties[] = {
     DEFINE_PROP_UINT32("chan-stride", IMX95EdmaState, chan_stride,
                        IMX95_EDMA_CHAN_STRIDE),
     DEFINE_PROP_BOOL("tcd64", IMX95EdmaState, tcd64, false),
+    /*
+     * CH_SBR reset value (RM: eDMA3 ch.41 = 0x8007, eDMA5 ch.71 = 0x8007;
+     * a 32-ch eDMA5 variant is 0x8015). Per-instance overridable because the
+     * MID genuinely differs per engine - one reset-per-name would be a lie.
+     */
+    DEFINE_PROP_UINT32("ch-sbr-reset", IMX95EdmaState, ch_sbr_reset, 0x8007),
 };
 
 static const VMStateDescription vmstate_imx95_edma_chan = {

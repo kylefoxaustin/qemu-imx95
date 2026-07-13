@@ -40,6 +40,7 @@ struct IMX95EdmaState {
     uint32_t     num_channels;
     uint32_t     chan_stride;   /* page size: edma3 0x10000, edma4 0x8000 */
     bool         tcd64;         /* 64-bit TCD (edma5) else 32-bit (edma3) */
+    uint32_t     ch_sbr_reset;  /* per-channel CH_SBR reset (MID+PAL); !=0 */
 
     uint32_t     mgmt[IMX95_EDMA_MGMT_REGS];
     IMX95EdmaChan chan[IMX95_EDMA_MAX_CHANNELS];
