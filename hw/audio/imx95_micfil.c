@@ -32,13 +32,18 @@
 
 #define MICFIL_FIFO_CTRL_FIFOWMK 0x1f       /* Watermark (bits 4:0)         */
 
-/* VERID: major 1, minor 0, feature 0. */
-#define MICFIL_VERID_VALUE  0x01000000
 /*
- * PARAM: FIFO_PTRWID = 3 (FIFO depth 8) and NPAIR = 4 (eight mic inputs). No
- * HWVAD reported, which keeps the voice-activity-detect path out of probe.
+ * RM reset values (fsl-micfil reads both at probe: fsl_micfil.c reads VERID
+ * into verid.version/feature and PARAM into param.{hwvad_num,fifo_ptrwid,npair,
+ * ...}). Use the SILICON values, not fabricated ones:
+ *   VERID = 0x020F_0000  (major 2, minor 15)
+ *   PARAM = 0x010B_0154  (NUM_HWVAD=1, HWVAD ZCD+energy present, FIFO_PTRWID=5,
+ *                         NPAIR=4 -> 8 mic inputs)
+ * NPAIR is unchanged from the old value (4), and the driver takes its FIFO
+ * depth from soc_data (8), not PARAM.FIFO_PTRWID, so capture is unaffected.
  */
-#define MICFIL_PARAM_VALUE  0x00000034
+#define MICFIL_VERID_VALUE  0x020F0000
+#define MICFIL_PARAM_VALUE  0x010B0154
 
 /* MICFIL outputs ~48 kHz; one decimated sample per word period. */
 #define MICFIL_WORD_NS  (1000000000LL / 48000)
