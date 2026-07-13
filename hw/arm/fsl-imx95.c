@@ -2242,6 +2242,12 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
          * MICFIL is line 0), SAI3 is served by edma2 (req line 0). The played
          * samples ride out to the audio backend (-audio captures them).
          */
+        /*
+         * SAI1 is 2 datalines / 32-deep FIFO (RM Table 491); SAI3 keeps the
+         * model default (1 dataline / 128-deep). fsl_sai reads PARAM at probe.
+         */
+        object_property_set_uint(OBJECT(&s->sai[0]), "param", 0x00050502,
+                                 &error_abort);
         sbd = SYS_BUS_DEVICE(&s->sai[0]);
         if (!sysbus_realize(sbd, errp)) {
             return;
@@ -2272,14 +2278,17 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                 int idx;
                 hwaddr addr;
                 int irq;
+                uint32_t param;     /* RM Table 491: datalines differ per SAI */
             } extra_sai[] = {
-                { 2, 0x4c880000, FSL_IMX95_SAI2_IRQ },
-                { 3, 0x42660000, FSL_IMX95_SAI4_IRQ },
-                { 4, 0x42670000, FSL_IMX95_SAI5_IRQ },
+                { 2, 0x4c880000, FSL_IMX95_SAI2_IRQ, 0x00050708 }, /* 8 lanes */
+                { 3, 0x42660000, FSL_IMX95_SAI4_IRQ, 0x00050702 }, /* 2 lanes */
+                { 4, 0x42670000, FSL_IMX95_SAI5_IRQ, 0x00050704 }, /* 4 lanes */
             };
             int k;
 
             for (k = 0; k < ARRAY_SIZE(extra_sai); k++) {
+                object_property_set_uint(OBJECT(&s->sai[extra_sai[k].idx]),
+                    "param", extra_sai[k].param, &error_abort);
                 sbd = SYS_BUS_DEVICE(&s->sai[extra_sai[k].idx]);
                 if (!sysbus_realize(sbd, errp)) {
                     return;

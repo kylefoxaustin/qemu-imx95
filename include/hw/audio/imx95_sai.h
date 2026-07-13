@@ -45,6 +45,10 @@ struct IMX95SaiState {
     qemu_irq dma_req;           /* TX FIFO-needs-data request to the eDMA */
     uint32_t regs[IMX95_SAI_REGS];
 
+    /* RM VERID/PARAM reset values - per instance (datalines/FIFO differ). */
+    uint32_t verid;
+    uint32_t param;
+
     /* Transmit FIFO (data line 0). */
     QEMUTimer *tx_timer;
     uint32_t tx_fifo[IMX95_SAI_FIFO_DEPTH];

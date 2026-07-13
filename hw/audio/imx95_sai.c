@@ -28,6 +28,7 @@
 #include "qemu/osdep.h"
 #include "hw/audio/imx95_sai.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
@@ -71,12 +72,20 @@
  * VERID: major 3, minor 3, feature 0. A zero feature word keeps the timestamp
  * (TSTMP_EN) path out of the driver's probe, which is all we need here.
  */
-#define SAI_VERID_VALUE 0x03030000
 /*
- * PARAM: SPF (max slots/frame) = 5 -> 32 slots, WPF (FIFO depth) = 7 -> 128
- * words, DLN (datalines) = 4. Matches the soc_data the driver assumes.
+ * VERID/PARAM come from the RM's reset column, per instance (the verid/param
+ * properties). fsl_sai READS PARAM at probe (fsl_sai.c: sai->param.dataline =
+ * PARAM & DLN_MASK; spf/wpf likewise), so the dataline count and FIFO depth
+ * must be the SILICON value, not one chosen to match the driver's soc_data.
+ * RM: VERID = 0x0302_0002 (all instances). PARAM fields: FRAME[19:16] (2^FRAME
+ * slots), FIFO[11:8] (2^FIFO-deep), DATALINE[3:0]. Per Table 491 + ch.44:
+ *   SAI1 = 2 lanes, 32-deep  -> 0x0005_0502
+ *   SAI3 = 1 lane,  128-deep -> 0x0005_0701   (default: the wm8962 path)
+ *   SAI4 = 2 lanes, 128-deep -> 0x0005_0702
+ *   SAI5 = 4 lanes, 128-deep -> 0x0005_0704
  */
-#define SAI_PARAM_VALUE 0x00050704
+#define SAI_VERID_DEFAULT 0x03020002
+#define SAI_PARAM_DEFAULT 0x00050701
 
 /* One word of a 48 kHz stereo stream: 96000 words/s. */
 #define SAI_TX_WORD_NS  (NANOSECONDS_PER_SECOND / 96000)
@@ -311,9 +320,9 @@ static uint64_t imx95_sai_read(void *opaque, hwaddr offset, unsigned size)
 
     switch (offset) {
     case SAI_VERID:
-        return SAI_VERID_VALUE;
+        return s->verid;
     case SAI_PARAM:
-        return SAI_PARAM_VALUE;
+        return s->param;
     case SAI_TFR0:
         /* Read/write FIFO pointers so the driver can compute the fill. */
         return ((uint32_t)s->tx_wptr << 16) | s->tx_rptr;
@@ -490,6 +499,11 @@ static const VMStateDescription vmstate_imx95_sai = {
     },
 };
 
+static const Property imx95_sai_properties[] = {
+    DEFINE_PROP_UINT32("verid", IMX95SaiState, verid, SAI_VERID_DEFAULT),
+    DEFINE_PROP_UINT32("param", IMX95SaiState, param, SAI_PARAM_DEFAULT),
+};
+
 static void imx95_sai_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -497,6 +511,7 @@ static void imx95_sai_class_init(ObjectClass *klass, const void *data)
     dc->realize = imx95_sai_realize;
     dc->vmsd = &vmstate_imx95_sai;
     device_class_set_legacy_reset(dc, imx95_sai_reset);
+    device_class_set_props(dc, imx95_sai_properties);
     dc->desc = "i.MX 95 Synchronous Audio Interface";
 }
 
