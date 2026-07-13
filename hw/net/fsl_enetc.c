@@ -37,6 +37,7 @@
 #define ENETC_SIPMAR0       0x0080      /* primary MAC low */
 #define ENETC_SIPMAR1       0x0084      /* primary MAC high */
 #define ENETC_SICAPR0       0x0900      /* ring count caps -> 1 RX/1 TX */
+#define ENETC_ECAPR2        0x0008      /* PORT: [25:16]=#RX, [9:0]=#TX BDR */
 #define ENETC_SITXIDR       0x0a18      /* TX ring IRQ status (W1C) */
 #define ENETC_SIRXIDR       0x0a28      /* RX ring IRQ status (W1C) */
 #define ENETC_SIMSITRV(n)   (0x0b00 + (n) * 4)
@@ -681,6 +682,18 @@ static void fsl_enetc_reset_regs(FslEnetcState *s)
     memset(s->regs, 0, FSL_ENETC_BAR0_SIZE);
     enetc_set(s, ENETC_SI_BASE + ENETC_SICAPR0, ENETC_SICAPR0_VAL);
     enetc_set(s, ENETC_GLOBAL_BASE + ENETC_G_EIPBRR0, ENETC_REV_4_1);
+    /*
+     * ECAPR2 advertises the BD-ring count (enetc4_pf reads it into
+     * caps.num_{rx,tx}_bdr, surfaced by ethtool/devlink). Silicon resets it to
+     * 0x0008_0008 (8+8 rings); this model services exactly ONE ring pair
+     * (every BDR handler is hardcoded to index 0). Reporting 0 (the old
+     * memset) is false - the model does have one ring - and reporting silicon's
+     * 8 would be worse: Linux could spread traffic across rings 1-7 that this
+     * model silently drops (a ring count does not degrade gracefully). So we
+     * report 0x0001_0001: the truth about the emulation, and the safe
+     * under-report direction. Advertising 8 belongs with a multi-ring model.
+     */
+    enetc_set(s, ENETC_PORT_BASE + ENETC_ECAPR2, 0x00010001);
 }
 
 static void fsl_enetc_realize(PCIDevice *pci_dev, Error **errp)
