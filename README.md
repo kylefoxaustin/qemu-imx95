@@ -1077,8 +1077,12 @@ fidelity compromise in the modelled hardware.
   `cs->halted` without the PSCI `power_state`/`halt_reason`, so a running M-core
   tripped the new assert (`fsl_imx95_set_cpu_run()` keeps them consistent). With
   the SM built `M=2` (no debug-monitor busy-poll), an idle board drops from
-  ~109 % to ~15 % host-CPU/board; a 25-board A/B flipped the density limiter from
-  CPU-bound (~29 boards) to RAM-bound — a ~7.3× per-board CPU cut.
+  **~109 % to ~15 % host-CPU/board** `[MEASURED — 25-board A/B]`, a **~7.3×**
+  per-board CPU cut `[DERIVED — the ratio of those two]`. The board-count limits
+  that used to be quoted here (~29 CPU-bound → ~51 RAM-bound) are `[DERIVED]`
+  extrapolations from that per-board figure; **no run at that scale has ever been
+  performed**, and the host census was not recorded, so they are predictions and
+  not results. See `docs/reviews/v2.3.0.md` for the full provenance.
 - **v2.4.0 — Path B: the 10G port links through its real PHY chain (on
   `imx95-netc`).** The stock `ethernet@10,0` (`10gbase-r`,
   `managed = "in-band-status"`) now comes up at 10 Gbps through a fully-modelled
