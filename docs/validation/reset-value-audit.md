@@ -10,6 +10,22 @@ guest's own (wrong) configuration.
 a document the model authors did not write. Cross-checked against the fleet's
 findings on shared IP (mcxn's eDMA, 91's LPI2C).
 
+## The rule that overrides the golden
+
+> **ON A CAPABILITY REGISTER, MATCHING THE REFERENCE MANUAL IS THE BUG — UNLESS
+> YOU ALSO IMPLEMENT THE CHIP BEHIND IT.** (mcxn947qemu)
+
+An **identity** register (VERID, a core version, a PCI revision) should carry the
+silicon's value: a wrong one silently forks the driver down a path the chip is
+not. A **capability** register is a *contract*, and the only value it may carry
+is the one the model can honour. Over-reporting is a promise the emulator makes
+on the chip's behalf; under-reporting merely makes the model slower or simpler
+than the part. **When you cannot resolve an ambiguity, resolve the asymmetry:
+pick the value whose failure mode is under-reporting.**
+
+This audit walked into that trap and had to reverse itself — see the SAI/MICFIL
+self-correction below. It is the reason the RM alone is not a sufficient oracle.
+
 **Classification** (mcxn/91 taxonomy):
 - **FIX** — a *documented, consumed* field resets non-zero; our 0 is wrong and
   a consumer reads it. A real bug (silent on QEMU, wrong on silicon).
@@ -146,6 +162,37 @@ watermark-level RDRF is a *feature*, not a reset-value fix; filed separately.
 Everything else on this block was already correct and is a NULL result:
 `VERID = 0x0404_0007`, `BAUD = 0x0F00_0004`, `STAT = 0x00C0_0000` (TDRE|TC),
 and DATA already returns RXEMPT when empty.
+
+### SELF-CORRECTION — SAI/MICFIL PARAM: I promised hardware I do not have
+The SAI and MICFIL fixes above set `PARAM` to the RM's reset value. **`PARAM` is
+a capability register, and both of those values promised hardware this model does
+not contain.** Corrected (commit: *a capability register reports what it
+DELIVERS*):
+
+- **MICFIL** — I set `NUM_HWVAD=1` + the HWVAD_ZCD/ENERGY bits, because silicon
+  has one hardware voice-activity detector. **This model has no HWVAD at all** —
+  a guest enabling it would wait forever for a detection that cannot come. My own
+  commit message had scolded the previous author for reporting 0 "to keep the
+  voice-activity path out of probe." *They were right; 0 was an honest
+  under-report.* Restored.
+- **SAI** — I set `DATALINE` per instance from RM Table 491 (SAI1=2, SAI2=8,
+  SAI4=2, SAI5=4). **This model implements exactly one data line** (only
+  `TDR0`/`RDR0`), so a TDM setup would push audio at lines it silently drops.
+  `DATALINE` is now **1** on every instance. The FIFO field was already safe and
+  stays: we hold 128 words and never advertise more, and SAI1 still reports its
+  true 32-deep silicon FIFO — which *also* under-reports our own capacity, so
+  guest code sized against this model still fits the real part.
+
+**Structural fix so it cannot drift again:** *a capability that is a CONSTANT can
+drift from the thing it describes; one COMPUTED FROM it cannot.* PARAM is now
+built from `SAI_PARAM_FIFO_EXP` / `SAI_PARAM_DATALINES`, with `QEMU_BUILD_BUG_ON`
+making any disagreement with `IMX95_SAI_FIFO_DEPTH` — or with the single data line
+we implement — a **compile error**. Negative-tested both ways.
+
+**Known, unfixed, and stated:** MICFIL's `NPAIR=4` (8 mic inputs) predates this
+audit and is itself an over-report — only `DATACH0` is fed. Left alone because
+changing it moves the ALSA channel count on a working capture path; filed rather
+than smuggled.
 
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and
