@@ -293,10 +293,22 @@ int main(int argc, char **argv)
             continue;                   /* NOT counted, NOT condemned, NOT printed */
         }
 
-        /* Rule 3: presence is not integrity. */
+        /*
+         * Rule 3: presence is not integrity.
+         *
+         * The length is part of the contract: FRAME_LEN is EXACTLY 64, not "at
+         * least 64". This used to accept anything >= 64, and that leniency is a
+         * bug in its own right - rt1180 spent 90 minutes shipping a 1000-byte
+         * frame with a valid 64-byte prefix, which every enforcing node on the
+         * segment threw away and WE WOULD HAVE COUNTED.
+         *
+         *   A RECEIVER THAT IS MORE PERMISSIVE THAN THE SEGMENT COUNTS PEERS
+         *   THAT EVERYONE ELSE IS REJECTING - and then it is OUR green that is
+         *   the lie, because ours is the only one that came back.
+         */
         bad = BAD_OK;
         seq = 0;
-        if (n < FRAME_LEN) {
+        if (n != FRAME_LEN) {
             bad = BAD_SHORT;
         } else if (be32(buf + MAGIC_OFF) != BEACON_MAGIC) {
             bad = BAD_MAGIC;
@@ -321,17 +333,18 @@ int main(int argc, char **argv)
 
         if (bad != BAD_OK) {
             static const char * const why[] = {
-                "", "short frame", "bad magic", "payload ethertype disagrees",
-                "pattern broken", "STALE (replayed sequence)"
+                "", "wrong length", "bad magic",
+                "payload ethertype disagrees", "pattern broken",
+                "STALE (replayed sequence)"
             };
-            printf("ENET-LAB3 CORRUPT: et=0x%04x %s "
+            printf("ENET-LAB3 CORRUPT: et=0x%04x %s len=%zd(want %d) "
                    "magic=0x%08x self-et=0x%04x seq=%u\n",
-                   et, why[bad],
-                   n >= FRAME_LEN ? be32(buf + MAGIC_OFF) : 0,
-                   n >= FRAME_LEN
+                   et, why[bad], n, FRAME_LEN,
+                   n == FRAME_LEN ? be32(buf + MAGIC_OFF) : 0,
+                   n == FRAME_LEN
                        ? ((unsigned)buf[SELF_ET_OFF] << 8 | buf[SELF_ET_OFF + 1])
                        : 0,
-                   n >= FRAME_LEN ? be32(buf + SEQ_OFF) : 0);
+                   n == FRAME_LEN ? be32(buf + SEQ_OFF) : 0);
             fflush(stdout);
             continue;                   /* corrupt is NOT a peer sighting */
         }
