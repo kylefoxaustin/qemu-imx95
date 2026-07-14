@@ -39,6 +39,9 @@
 #define   CHNL_IMG_CFG_W_MASK   0x00001fff
 #define   CHNL_IMG_CFG_H_SHIFT  16
 #define   CHNL_IMG_CFG_H_MASK   0x1fff
+#define   CHNL_IMG_CFG_RESET    0x04380780  /* RM reset: 1920x1080 */
+#define CHNL_SCALE_FACTOR       0x0018
+#define   CHNL_SCALE_FACTOR_RESET 0x10001000  /* RM reset: UNITY (Q12), not 0 */
 #define CHNL_IER                0x0010
 #define CHNL_STS                0x0014
 #define   CHNL_STS_FRM_STRD     0x20000000  /* BIT(29) frame stored */
@@ -306,6 +309,17 @@ static void imx95_isi_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     for (i = 0; i < IMX95_ISI_NUM_CHANNELS; i++) {
+        /*
+         * Two per-channel registers do NOT reset to zero, and one of them is a
+         * dangerous zero: CHNL_SCALE_FACTOR resets to 0x1000_1000, which is
+         * UNITY in the Q12 format the scaler uses - a zero there means "scale
+         * by nothing", a legal and catastrophic value. imx8-isi always writes
+         * the factor before streaming (so it is not laundered), but debugfs
+         * dumps it, and a register file that says "scale = 0" at reset is
+         * lying about the silicon. CHNL_IMG_CFG resets to 1920x1080.
+         */
+        CR(s, i, CHNL_SCALE_FACTOR) = CHNL_SCALE_FACTOR_RESET;
+        CR(s, i, CHNL_IMG_CFG) = CHNL_IMG_CFG_RESET;
         timer_del(s->chan[i].frame_timer);
         s->chan[i].frame = 0;
         qemu_set_irq(s->irq[i], 0);
