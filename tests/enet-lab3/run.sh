@@ -217,14 +217,23 @@ if [ "$JOIN" = 1 ]; then
     #   AN ABSENCE OF REJECTION IS NOT AN ACCEPTANCE. "mcx never rejected imx91"
     #   and "mcx never LOOKED at imx91" are the same cell in the matrix.
     #
-    # So nobody on the segment was validating imx91's body - including us. Ours
-    # is a runtime list rather than a compiled-in one, so it costs one argument.
+    # So nobody on the segment was validating imx91's body - including us.
+    #
+    # The node now validates EVERY ethertype in the fleet's allocated block
+    # (0x88B5..0x88BF), so imx91 is read and reported without being listed here -
+    # and a fifth node joins by picking an ethertype, not by making four teams
+    # rebuild. The list below is what we DEPEND on, which is a different thing:
+    #
+    #   VALIDATING A PEER IS NOT THE SAME AS DEPENDING ON ONE. (rt1180emulator)
+    #
+    # Requiring imx91 here was a bug I introduced myself: it would have failed a
+    # lab that imx91 simply had not joined.
     echo "== JOIN: i.MX 95 node on the fleet segment $FLEET_GROUP (et 0x88B7) =="
     # NOTE: no preflight here - the fleet segment is SUPPOSED to have peers on
     # it. An empty-wire check would be exactly backwards. The ghost risk is ours
     # to avoid by not orphaning our own node (pdeathsig, above).
     boot imx95 "$FLEET_GROUP" 02:49:4d:58:95:01 0x88B7 \
-         0x88B5,0x88B6,0x88B8 "$WORK/imx95.log"
+         0x88B5,0x88B6 "$WORK/imx95.log"
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
     grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 checked and counted all three peers)"; exit 0; }
     echo "RESULT: FAIL/incomplete - were mcx(0x88B5), rt1180(0x88B6) and imx91(0x88B8) all live on $FLEET_GROUP?"; exit 1
@@ -263,7 +272,7 @@ echo "   AND THE TRAFFIC RUNS BOTH WAYS: our checker reads THEIR bodies too, at"
 echo "   0x88B8 - the ethertype nobody on the real segment was checking, because"
 echo "   mcx's peer set is compiled in and does not contain it."
 boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 \
-     0x88B5,0x88B6,0x88B8 "$WORK/imx95.log" &
+     0x88B5,0x88B6 "$WORK/imx95.log" &
 boot imx91 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 \
      0x88B7,0x88B6,0x88B8 "$WORK/peerA.log" &
 boot imx91 "$SELF_GROUP" 54:27:8d:00:00:00 0x88B6 \
@@ -304,9 +313,24 @@ done
 #     the same log. Assert that WE read and ACCEPTED imx91's body - the check
 #     that no node on the real segment was performing, because mcx's peer set is
 #     compiled in and 0x88B8 is not in it.
-if ! clean "$WORK/imx95.log" | grep -aq 'rx: peer 0x88b8 body OK'; then
-    echo "FAIL: we never validated imx91's body (0x88B8) - we are not an oracle"
+# We must VALIDATE imx91 (0x88B8) without DEPENDING on it: it is not in our
+# required set, so it must appear as "observed, not required".
+if ! clean "$WORK/imx95.log" | grep -aq 'rx: peer 0x88b8 body OK.*observed, not required'; then
+    echo "FAIL: we did not validate imx91's body (0x88B8) as an OBSERVED peer"
     fail=1
+fi
+# And the ignore-rule must be able to TESTIFY. A count of zero means the
+# condition was never present, and "we never false-CORRUPTed at IPv6" and "there
+# was no IPv6" are the same log. The Linux guests emit NDP/MLD, so this must be
+# non-zero - if it ever reads 0, the claim has rotted green.
+fgn=$(clean "$WORK/imx95.log" | grep -a 'ENET-LAB3 PASS:' | tail -1 |
+      sed -n 's/.*foreign=\([0-9]*\).*/\1/p')
+if [ -z "$fgn" ] || [ "$fgn" -eq 0 ]; then
+    echo "FAIL: foreign=${fgn:-?} - we cannot testify that non-beacon traffic was"
+    echo "      ever on the wire, so 'we do not condemn it' proves nothing"
+    fail=1
+else
+    echo "  (ignored $fgn foreign frame(s) without condemning them - condition WAS present)"
 fi
 for et in 0x88b5 0x88b6 0x88b8; do
     clean "$WORK/imx95.log" | grep -aq "rx: peer $et body OK" || {

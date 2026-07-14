@@ -41,8 +41,10 @@
  *     broadcast back to us, and counting it would "see a peer" that is us.
  *
  *  2. ASK "IS THIS EVEN MY PROTOCOL?" BEFORE ASKING "IS IT WELL-FORMED?"
- *     Frames whose ethertype is not a beacon ethertype are IGNORED: not
- *     counted, not condemned, not printed. The Linux peers' kernels emit
+ *     Frames outside the fleet's ethertype block are IGNORED: not condemned,
+ *     not printed - but they ARE COUNTED and reported on the PASS line, because
+ *     "we never false-CORRUPTed at IPv6" and "there was no IPv6" are the same
+ *     log, and only one of them is a result. The Linux peers' kernels emit
  *     multicast NDP/MLD (IPv6, ethertype 0x86DD) on this very segment, and
  *     body-checking those against a beacon layout produced a flood of false
  *     CORRUPT reports on the nodes that did it.
@@ -101,6 +103,31 @@
 #define FILL_OFF     24
 #define FILL_BYTE    0x5A
 
+/*
+ * The fleet's ALLOCATED ETHERTYPE BLOCK, and the distinction that goes with it.
+ *
+ *   VALIDATING A PEER IS NOT THE SAME AS DEPENDING ON ONE.   (rt1180emulator)
+ *
+ * We validate the body of ANY node in the block - read its magic, its
+ * self-ethertype, its fill and its sequence, and say so. We only REQUIRE the
+ * peers we were actually given on the command line. Those are different acts and
+ * only one of them is worth anything to the peer being checked.
+ *
+ * This started as a bug of mine: I added imx91's 0x88B8 to the REQUIRED set,
+ * which meant a lab with imx91 absent would fail on my side for no reason - I
+ * conflated "I check your bytes" with "I cannot pass without you". And watching
+ * a fixed list is itself the smaller mistake:
+ *
+ *   IF A PEER SET IS A CONSTANT, EVERY FUTURE NODE IS A FIRMWARE RELEASE.
+ *
+ * So a fifth node joins this segment by picking an ethertype in the block, not
+ * by making four other teams rebuild.
+ */
+#define BEACON_ET_LO   0x88B5u
+#define BEACON_ET_HI   0x88BFu
+#define BEACON_ET_SLOTS (BEACON_ET_HI - BEACON_ET_LO + 1)
+#define IS_BEACON_ET(et) ((et) >= BEACON_ET_LO && (et) <= BEACON_ET_HI)
+
 /* Why a frame was rejected. Never counted as a peer sighting. */
 enum {
     BAD_OK = 0,
@@ -129,14 +156,25 @@ int main(int argc, char **argv)
 {
     const char *ifname;
     unsigned my_et;
+    /* REQUIRED peers: these, and only these, gate PASS. */
     unsigned peers[MAX_PEERS];
     int seen[MAX_PEERS] = {0};          /* seen THIS round (we re-arm) */
-    int ever[MAX_PEERS] = {0};          /* has ever shown a valid body */
-    uint32_t last_seq[MAX_PEERS] = {0};
-    long last_rx[MAX_PEERS] = {0};
-    int lost[MAX_PEERS] = {0};
-    unsigned long long losses = 0;
     int npeers = 0;
+    /* VALIDATED peers: every node in the allocated block, required or not. */
+    int blk_ever[BEACON_ET_SLOTS] = {0};
+    uint32_t blk_last_seq[BEACON_ET_SLOTS] = {0};
+    long blk_last_rx[BEACON_ET_SLOTS] = {0};
+    int blk_lost[BEACON_ET_SLOTS] = {0};
+    unsigned long long losses = 0;
+    /*
+     * Count what we IGNORE. "We never fired a false CORRUPT at IPv6" and "there
+     * was no IPv6" are the same log, and the second one is not a result. A
+     * negative test also ROTS GREEN when the model improves under it, so the
+     * only durable form of this claim is the POSITIVE fact: how many foreign
+     * frames were actually on the wire that we declined to condemn.
+     */
+    unsigned long long foreign_ignored = 0;
+    unsigned long long self_ignored = 0;
     int fd, ifindex;
     unsigned char mymac[6];
     unsigned char frame[FRAME_LEN];
@@ -225,7 +263,7 @@ int main(int argc, char **argv)
         socklen_t fl = sizeof(from);
         ssize_t n;
         unsigned et;
-        int pr, all, idx, bad;
+        int pr, all, idx, bad, slot;
         uint32_t seq;
 
         if (t >= next_send) {
@@ -244,15 +282,17 @@ int main(int argc, char **argv)
         }
 
         /*
-         * A peer that has gone quiet is reported ONCE, at the edge. We do NOT
-         * exit and we do NOT fail: a departed peer and a stalled one are the
-         * same observation from here, and neither is ours to adjudicate.
+         * A node that has gone quiet is reported ONCE, at the edge - for ANY
+         * node in the block, not just the ones we depend on. We do NOT exit and
+         * we do NOT fail: a departed peer and a stalled one are the same
+         * observation from here, and neither is ours to adjudicate.
          */
-        for (int i = 0; i < npeers; i++) {
-            if (ever[i] && !lost[i] && t - last_rx[i] > QUIET_MS) {
-                lost[i] = 1;
+        for (unsigned i = 0; i < BEACON_ET_SLOTS; i++) {
+            if (blk_ever[i] && !blk_lost[i] &&
+                t - blk_last_rx[i] > QUIET_MS) {
+                blk_lost[i] = 1;
                 printf("ENET-LAB3 LOST: 0x%04x (silent %ldms)\n",
-                       peers[i], t - last_rx[i]);
+                       BEACON_ET_LO + i, t - blk_last_rx[i]);
                 fflush(stdout);
             }
         }
@@ -279,18 +319,32 @@ int main(int argc, char **argv)
         }
         et = (buf[12] << 8) | buf[13];
         if (et == my_et) {
-            continue;                   /* rule 1: our own echo is not a peer */
+            self_ignored++;             /* rule 1: our own echo is not a peer */
+            continue;
         }
 
-        /* Rule 2: is this even our protocol? If not, it is none of our business. */
+        /*
+         * Rule 2: is this even our protocol? If not, it is none of our business
+         * - NOT condemned, NOT printed. But it IS counted, because otherwise
+         * "we never false-CORRUPTed at IPv6" and "there was no IPv6" are the
+         * same log, and only one of them is a result.
+         *
+         * We validate ANY node in the fleet's allocated block, not a hardcoded
+         * pair: a fifth node joins by picking an ethertype, not by making four
+         * other teams rebuild.
+         */
+        if (!IS_BEACON_ET(et)) {
+            foreign_ignored++;
+            continue;
+        }
+        slot = et - BEACON_ET_LO;
+
+        /* Is this one of the peers we actually DEPEND on? (-1 = observed only) */
         idx = -1;
         for (int i = 0; i < npeers; i++) {
             if (et == peers[i]) {
                 idx = i;
             }
-        }
-        if (idx < 0) {
-            continue;                   /* NOT counted, NOT condemned, NOT printed */
         }
 
         /*
@@ -326,7 +380,7 @@ int main(int argc, char **argv)
         /* Rule 4: freshness. A replayed beacon is stale, not a sighting. */
         if (bad == BAD_OK) {
             seq = be32(buf + SEQ_OFF);
-            if (ever[idx] && seq <= last_seq[idx]) {
+            if (blk_ever[slot] && seq <= blk_last_seq[slot]) {
                 bad = BAD_STALE;
             }
         }
@@ -350,20 +404,33 @@ int main(int argc, char **argv)
         }
 
         /* A gap is a LOSS: a statistic, never a failure. This is multicast. */
-        if (ever[idx] && seq > last_seq[idx] + 1) {
-            losses += seq - last_seq[idx] - 1;
+        if (blk_ever[slot] && seq > blk_last_seq[slot] + 1) {
+            losses += seq - blk_last_seq[slot] - 1;
         }
-        if (!ever[idx]) {
+        /*
+         * We say so the FIRST time we accept a body - for every node in the
+         * block, whether we depend on it or not. Reading someone's bytes and
+         * refusing to say so are different acts, and only one of them is worth
+         * anything to them: 91emulator asked who was validating their beacon and
+         * the honest answer from three of four nodes was "nobody".
+         */
+        if (!blk_ever[slot]) {
             printf("ENET-LAB3 rx: peer 0x%04x body OK src "
-                   "%02x:%02x:%02x:%02x:%02x:%02x seq=%u\n", et,
-                   buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], seq);
+                   "%02x:%02x:%02x:%02x:%02x:%02x seq=%u%s\n", et,
+                   buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], seq,
+                   idx < 0 ? " (observed, not required)" : "");
             fflush(stdout);
         }
-        ever[idx] = 1;
-        lost[idx] = 0;
-        last_seq[idx] = seq;
-        last_rx[idx] = t;
-        seen[idx] = 1;
+        blk_ever[slot] = 1;
+        blk_lost[slot] = 0;
+        blk_last_seq[slot] = seq;
+        blk_last_rx[slot] = t;
+
+        /* Only the peers we CONTRACTED with gate PASS. Validating is not
+         * depending: a lab without imx91 is not a lab we should fail. */
+        if (idx >= 0) {
+            seen[idx] = 1;
+        }
 
         /* Rule 5: re-arm. Having seen them all, require them all again. */
         all = 1;
@@ -373,11 +440,23 @@ int main(int argc, char **argv)
             }
         }
         if (all) {
+            int validated = 0;
+
+            for (unsigned i = 0; i < BEACON_ET_SLOTS; i++) {
+                validated += blk_ever[i];
+            }
             beat++;
             passed_once = 1;
-            printf("ENET-LAB3 PASS: t=%ld.%03lds peers=%d/%d beat=%llu "
-                   "loss=%llu\n", (t - t0) / 1000, (t - t0) % 1000,
-                   npeers, npeers, beat, losses);
+            /*
+             * foreign= is the POSITIVE fact behind "we do not condemn traffic
+             * that is not our protocol". Without it, that claim cannot testify
+             * that the condition was ever present - and a negative test rots
+             * green when nothing is left to trigger it.
+             */
+            printf("ENET-LAB3 PASS: t=%ld.%03lds peers=%d/%d validated=%d "
+                   "beat=%llu loss=%llu foreign=%llu self=%llu\n",
+                   (t - t0) / 1000, (t - t0) % 1000, npeers, npeers,
+                   validated, beat, losses, foreign_ignored, self_ignored);
             fflush(stdout);
             memset(seen, 0, sizeof(seen));      /* re-arm: an oracle that cannot expire */
         }
