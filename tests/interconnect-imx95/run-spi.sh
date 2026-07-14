@@ -37,7 +37,10 @@ DTB=$KBUILD/arch/arm64/boot/dts/freescale/imx95-19x19-evk.dtb
 DTC=$KBUILD/scripts/dtc/dtc
 DEFAULT_CPIO=${DEFAULT_CPIO:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
 CROSS=${CROSS:-aarch64-linux-gnu-gcc}
-PAYLOAD=${PAYLOAD:-IMX95-SPI-LINK-payload-0123456789}
+# Empty => spilink uses its BUILT-IN binary frame (the one the MCX peer hunts).
+# Do not put a payload through the shell: every layer of escaping is a layer
+# that can eat a byte and then blame the hardware (holobench).
+PAYLOAD=${PAYLOAD:-}
 TMO=${TMO:-220}
 
 skip() { echo "SKIP: $*"; exit 0; }

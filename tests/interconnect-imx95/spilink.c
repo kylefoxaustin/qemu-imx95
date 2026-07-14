@@ -46,15 +46,78 @@ static int setup(int fd)
     return 0;
 }
 
+/*
+ * THE FRAME THE PEER ACTUALLY HUNTS. Read out of the peer's own source
+ * (mcxn947qemu tests/mcxn-spi-link/main.c: MARKER 0xA5, N 32,
+ * expect(i) = (i*3+5) & 0x7F), not out of a description of it.
+ *
+ * This DEFAULT used to be the ASCII string "IMX95-SPI-LINK-payload-0123456789",
+ * and the MCX responder hunts a binary pattern - so the link clocked A PERFECTLY
+ * VALID STREAM OF THE WRONG BYTES. The peer resynced forever, printed nothing,
+ * and the lab looked like a broken SPI model instead of two programs that never
+ * agreed on the bytes. (The same week, and the same bug, as our ENET beacon
+ * emitting ASCII where the fleet had agreed a binary body.)
+ *
+ *   TWO PROGRAMS THAT BOTH "WORK" AND NEVER AGREE ON THE BYTES.  (holobench)
+ *
+ * The pattern is generated here, once, and ASSERTED - never escaped through a
+ * shell, a heredoc, a sed RHS or a printf. Every layer of escaping is a layer
+ * that can eat a byte and then blame the hardware.
+ */
+#define SPI_MARKER  0xA5u
+#define SPI_N       32
+#define SPI_FRAME_LEN (1 + SPI_N)
+
+static int build_frame(unsigned char *f)
+{
+    int i;
+
+    f[0] = SPI_MARKER;
+    for (i = 0; i < SPI_N; i++) {
+        f[1 + i] = (unsigned char)((i * 3 + 5) & 0x7F);
+    }
+    /*
+     * Three real hazards, asserted rather than hoped for: a NUL would end the
+     * frame if anyone ever treats it as a C string, 0xFF is the IDLE MISO byte
+     * the receiver skips, and a second MARKER would make the peer resync in the
+     * middle of a good frame. The 0x7F mask makes all three impossible - but an
+     * assertion that holds today is what stops someone "improving" the pattern
+     * tomorrow.
+     */
+    for (i = 1; i < SPI_FRAME_LEN; i++) {
+        if (f[i] == 0x00 || f[i] == 0xFF || f[i] == SPI_MARKER) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *role = argc > 1 ? argv[1] : "";
     const char *dev = argc > 2 ? argv[2] : "/dev/spidev0.0";
-    const char *payload = argc > 3 ? argv[3] :
-                          "IMX95-SPI-LINK-payload-0123456789";
-    int plen = strlen(payload), fd, got = 0, i;
+    unsigned char frame[SPI_FRAME_LEN];
+    const unsigned char *payload;
+    int plen, fd, got = 0, i;
     unsigned char tx[64], rx[64], collected[512];
     time_t start;
+
+    if (build_frame(frame) < 0) {
+        printf("SPILINK:FAIL:frame contains NUL/0xFF/second-MARKER\n");
+        return 1;
+    }
+    if (argc > 3 && argv[3][0]) {
+        payload = (const unsigned char *)argv[3];    /* explicit override */
+        plen = strlen(argv[3]);
+    } else {
+        /*
+         * The default is the BUILT-IN frame, never a string handed down through
+         * a shell. An empty argv[3] means "use the default" so a harness can
+         * pass the slot through without inventing an escaping problem for it.
+         */
+        payload = frame;
+        plen = SPI_FRAME_LEN;
+    }
 
     fd = open(dev, O_RDWR);
     if (fd < 0) {
@@ -67,11 +130,21 @@ int main(int argc, char **argv)
     }
 
     if (!strcmp(role, "send")) {
-        if (xfer(fd, (const unsigned char *)payload, rx, plen) < 0) {
+        if (xfer(fd, payload, rx, plen) < 0) {
             printf("SPILINK:FAIL:send xfer errno=%d\n", errno);
             return 1;
         }
-        printf("SPILINK:SENT %d bytes [%s]\n", plen, payload);
+        /*
+         * Print the bytes we actually put on the wire, as bytes. A payload
+         * echoed back as text cannot show you that it was mangled - and a
+         * mangled frame does not look like a mangled frame, it looks like a
+         * peer that never PASSes.
+         */
+        printf("SPILINK:SENT %d bytes:", plen);
+        for (i = 0; i < plen; i++) {
+            printf(" %02x", payload[i]);
+        }
+        printf("\n");
         return 0;
     }
 
