@@ -115,6 +115,8 @@ if [ "$IMPL" = imx91 ]; then
 else
     BIN=/enet-lab3
 fi
+# An impostor emits a 1000-byte frame with a PERFECTLY VALID 64-byte prefix.
+grep -q 'lab_evil=1' /proc/cmdline && export LAB_IMPOSTOR=1
 # ENETC PF0 (devfn 00.0) carries the -nic backend; resolve its netdev by PCI
 # address (probe-order makes "eth0" unreliable, per run-eth.sh).
 n=0; while [ $n -lt 60 ]; do
@@ -189,11 +191,12 @@ trap cleanup EXIT INT TERM
 # outlived the run, and my first "PASS" was a test that had launched nothing.
 # `exec` REPLACES the subshell, so the chain is harness -> timeout -> qemu and
 # every link is armed.
+EVIL=${EVIL:-}
 boot() { # $1=impl $2=mcast-group $3=mac $4=my_et $5=peers-csv $6=logfile [$7=deadline_ms]
     exec $PDEATH timeout --signal=KILL "$TMO" $PDEATH "$QEMU" \
         -M imx95-19x19-evk -m 2G -display none \
         -kernel "$IMAGE" -dtb "$WORK/enetc.dtb" -initrd "$WORK/lab.cpio.gz" \
-        -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_impl=$1 lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000}" \
+        -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_impl=$1 lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000} ${EVIL:-}" \
         -device loader,file="$SM_ELF",cpu-num=6 \
         -nic "socket,mcast=$2,model=fsl-enetc,mac=$3" \
         -serial file:"$6" -serial null -monitor none >/dev/null 2>&1
@@ -237,6 +240,63 @@ if [ "$JOIN" = 1 ]; then
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
     grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 checked and counted all three peers)"; exit 0; }
     echo "RESULT: FAIL/incomplete - were mcx(0x88B5), rt1180(0x88B6) and imx91(0x88B8) all live on $FLEET_GROUP?"; exit 1
+fi
+
+if [ "${IMPOSTOR:-0}" = 1 ]; then
+    #
+    # 91emulator shipped exactly our length fix, sent a 1000-byte frame at it,
+    # and their honest node COUNTED THE LIAR 268 TIMES ANYWAY - the over-long
+    # frame carried no valid body, so their self-arming latch filed it as "a peer
+    # that has not upgraded yet". Their leniency was never in the length check.
+    #
+    #   IF YOUR PERMISSIVENESS LIVES IN A LATCH OR A FALLBACK, YOUR LENGTH FIX IS
+    #   A NO-OP AND YOUR SUITE WILL STILL BE GREEN.            (91emulator)
+    #
+    # So: send ourselves the frame and require ZERO.
+    preflight "$SELF_GROUP"
+    echo "== IMPOSTOR: 0x88B5 emits 1000-byte frames with a VALID 64-byte prefix =="
+    echo "   Every fixed-offset field it carries is correct. It is still not the"
+    echo "   contract. We must count it ZERO times and never PASS."
+    EVIL="lab_evil=1" boot imx95 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 \
+         0x88B7,0x88B6 "$WORK/evil.log" 25000 &
+    boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 \
+         0x88B5,0x88B6 "$WORK/imx95.log" 25000 &
+    wait
+    clean() { sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$1"; }
+    echo "--- impostor (must have ARMED, or the verdict is meaningless) ---"
+    clean "$WORK/evil.log" | grep -aE 'ENET-LAB3 (EVIL|up)' | head -2
+    armed=$(clean "$WORK/evil.log" | grep -ac 'ENET-LAB3 EVIL' || true)
+    if [ "$armed" -lt 1 ]; then
+        echo "RESULT: ABORT - the impostor never armed. It sent ordinary 64-byte"
+        echo "        frames, so any verdict about the judge is meaningless."
+        echo "        A NEGATIVE TEST THAT DID NOT PRODUCE THE CONDITION IT NAMES"
+        echo "        IS NOT A NEGATIVE TEST."
+        exit 1
+    fi
+    echo "--- imx95 (the judge) ---"
+    clean "$WORK/imx95.log" | grep -aE 'ENET-LAB3 (rx|CORRUPT|PASS|FAIL)' | head -6
+    counted=$(clean "$WORK/imx95.log" | grep -ac 'rx: peer 0x88b5 body OK' || true)
+    corrupt=$(clean "$WORK/imx95.log" | grep -ac 'CORRUPT.*0x88b5.*wrong length' || true)
+    passed=$(clean "$WORK/imx95.log" | grep -ac 'ENET-LAB3 PASS:' || true)
+    echo "counted-as-peer=$counted  condemned=$corrupt  PASS-beats=$passed"
+    if [ "$counted" -ne 0 ]; then
+        echo "RESULT: FAIL - we COUNTED the impostor $counted time(s). The length"
+        echo "        fix is a no-op; our permissiveness lives somewhere else."
+        exit 1
+    fi
+    if [ "$corrupt" -lt 1 ]; then
+        echo "RESULT: INCONCLUSIVE - we never condemned it, so the frame may never"
+        echo "        have reached us. A negative test that did not produce the"
+        echo "        condition it names is not a negative test."
+        exit 1
+    fi
+    if [ "$passed" -ne 0 ]; then
+        echo "RESULT: FAIL - we PASSED with a broken peer on the wire"
+        exit 1
+    fi
+    echo "RESULT: PASS - condemned the impostor $corrupt time(s), counted it ZERO,"
+    echo "        and never passed. The length check is load-bearing."
+    exit 0
 fi
 
 if [ "${NEG:-0}" = 1 ]; then

@@ -177,7 +177,8 @@ int main(int argc, char **argv)
     unsigned long long self_ignored = 0;
     int fd, ifindex;
     unsigned char mymac[6];
-    unsigned char frame[FRAME_LEN];
+    unsigned char frame[FRAME_LEN + 936];   /* impostor tail lives here */
+    int impostor_len = 0;
     struct ifreq ifr;
     struct sockaddr_ll to;
     const char *dl_env;
@@ -250,6 +251,33 @@ int main(int argc, char **argv)
     to.sll_halen = 6;
     memset(to.sll_addr, 0xff, 6);
 
+    /*
+     * THE IMPOSTOR: a frame with a PERFECTLY VALID 64-byte prefix and 936 bytes
+     * of tail. Every field a receiver reads at a fixed offset is correct - magic,
+     * self-ethertype, sequence, fill - and the frame is still not the contract,
+     * because FRAME_LEN is 64 EXACTLY.
+     *
+     * This exists because tightening the length check is not the same as HAVING
+     * tightened it. 91emulator shipped exactly that fix, sent a 1000-byte frame
+     * at it, and their honest node COUNTED THE LIAR 268 TIMES ANYWAY - the
+     * over-long frame carried no valid body, so their self-arming latch filed it
+     * as "a peer that has not upgraded yet" and counted it. Their leniency was
+     * never in the length check at all.
+     *
+     *   IF YOUR PERMISSIVENESS LIVES IN A LATCH OR A FALLBACK, YOUR LENGTH FIX
+     *   IS A NO-OP AND YOUR SUITE WILL STILL BE GREEN.       (91emulator)
+     *
+     * So we do not reason about our own receiver; we send it the frame and
+     * require it to go to ZERO.
+     */
+    if (getenv("LAB_IMPOSTOR")) {
+        impostor_len = FRAME_LEN + 936;     /* the shape rt1180 actually shipped */
+        printf("ENET-LAB3 EVIL: sending %d-byte frames with a valid 64-byte "
+               "prefix (a beacon that is speaking the protocol WRONG)\n",
+               impostor_len);
+        fflush(stdout);
+    }
+
     dl_env = getenv("LAB_DEADLINE_MS");
     dl_ms = dl_env ? strtol(dl_env, NULL, 0) : 120000;
     t0 = now_ms();
@@ -273,7 +301,7 @@ int main(int argc, char **argv)
             frame[SEQ_OFF + 1] = (tx_seq >> 16) & 0xff;
             frame[SEQ_OFF + 2] = (tx_seq >> 8) & 0xff;
             frame[SEQ_OFF + 3] = tx_seq & 0xff;
-            if (sendto(fd, frame, FRAME_LEN, 0,
+            if (sendto(fd, frame, impostor_len ? impostor_len : FRAME_LEN, 0,
                        (struct sockaddr *)&to, sizeof(to)) < 0 &&
                 errno != EINTR) {
                 perror("sendto");
@@ -391,14 +419,20 @@ int main(int argc, char **argv)
                 "payload ethertype disagrees", "pattern broken",
                 "STALE (replayed sequence)"
             };
+            /*
+             * Report the magic whenever the bytes are THERE to read, not only
+             * when the frame is well-formed. A frame carrying 0xB5B6B7C0 IS
+             * speaking the protocol - it is just speaking it WRONG - and that
+             * is a different peer from one that has never spoken it at all.
+             * "Hasn't shipped the emitter" and "shipped a BROKEN emitter" are
+             * not the same peer, and the magic is what tells them apart.
+             */
+            uint32_t mg = n >= MAGIC_OFF + 4 ? be32(buf + MAGIC_OFF) : 0;
+
             printf("ENET-LAB3 CORRUPT: et=0x%04x %s len=%zd(want %d) "
-                   "magic=0x%08x self-et=0x%04x seq=%u\n",
-                   et, why[bad], n, FRAME_LEN,
-                   n == FRAME_LEN ? be32(buf + MAGIC_OFF) : 0,
-                   n == FRAME_LEN
-                       ? ((unsigned)buf[SELF_ET_OFF] << 8 | buf[SELF_ET_OFF + 1])
-                       : 0,
-                   n == FRAME_LEN ? be32(buf + SEQ_OFF) : 0);
+                   "magic=0x%08x%s\n",
+                   et, why[bad], n, FRAME_LEN, mg,
+                   mg == BEACON_MAGIC ? " [a BROKEN beacon, not a stranger]" : "");
             fflush(stdout);
             continue;                   /* corrupt is NOT a peer sighting */
         }
