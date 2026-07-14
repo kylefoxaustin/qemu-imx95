@@ -110,6 +110,17 @@
 #define FILL_BYTE    0x5A
 
 /*
+ * A v1 (pre-incarnation) node fills [24..27] with 0x5A, so its "incarnation"
+ * reads 0x5A5A5A5A on every node and every boot. That is not a nonce; it is the
+ * ABSENCE of one, and it is legible AS such. rt1180's call, and it is the right
+ * one: DO NOT condemn a legacy peer and DO NOT treat the sentinel as a real
+ * incarnation - count the peer, check everything else, and declare its freshness
+ * UNVERIFIABLE. A red we cannot stand behind is worse than no red, and the seq
+ * rule fired 8,982 times at an honest peer once already.
+ */
+#define INCARN_LEGACY 0x5A5A5A5Au
+
+/*
  * THE INCARNATION, AND WHY A SEQUENCE NUMBER ALONE IS A BUG.
  *
  * Rule 4 said: a beacon's sequence only ever goes UP, so a seq that has not
@@ -215,7 +226,9 @@ int main(int argc, char **argv)
     int blk_ever[BEACON_ET_SLOTS] = {0};
     uint32_t blk_last_seq[BEACON_ET_SLOTS] = {0};
     uint32_t blk_incarn[BEACON_ET_SLOTS] = {0};   /* which BOOT of that peer */
+    int blk_legacy_warned[BEACON_ET_SLOTS] = {0}; /* said "v1, unverifiable" once */
     unsigned long long reboots = 0;               /* a statistic, NEVER a failure */
+    unsigned long long legacy_seen = 0;           /* frames from pre-incarnation peers */
     long blk_last_rx[BEACON_ET_SLOTS] = {0};
     int blk_lost[BEACON_ET_SLOTS] = {0};
     unsigned long long losses = 0;
@@ -298,22 +311,40 @@ int main(int argc, char **argv)
     /*
      * Our incarnation: chosen ONCE, here, and never again. It says "this is a
      * different boot of the same node" - the one fact a sequence number cannot
-     * carry across a restart. Prefer real entropy; fall back to a mix that still
-     * differs per boot, because a CONSTANT here silently re-creates the bug (a
-     * peer that reboots would look like the same incarnation and be condemned).
+     * carry across a restart.
+     *
+     * rt1180 paid for the subtlety and I will not repeat it: /dev/urandom is NOT
+     * automatically per-boot. In a TCG guest with no seeded CRNG - or under
+     * -icount/-seed for reproducibility - it can return the SAME bytes every
+     * boot, and then the "nonce" is a constant wearing a nonce's name, every peer
+     * keeps condemning our restart, and NO SINGLE-BOOT TEST CAN SEE IT. So we do
+     * not TRUST any one source: we MIX urandom with values that vary across boots
+     * by construction (wall clock, pid, and this run's stack address under ASLR),
+     * UNCONDITIONALLY - not only on the failure path. If urandom is real entropy
+     * the mix is still real entropy; if urandom is a constant, the clock still
+     * moves. The only way the result repeats is if EVERY source is pinned, which
+     * is the deterministic-replay case the lab opts into deliberately with -seed.
+     *
+     * Two values are then forbidden: 0 (our "not yet seen" marker on the RX side)
+     * and INCARN_LEGACY (a real node must never accidentally emit the sentinel
+     * that means "I have no incarnation"). Nudge off either.
      */
     {
+        uint32_t ur = 0;
         int rf = open("/dev/urandom", O_RDONLY);
-        int got = 0;
 
         if (rf >= 0) {
-            got = read(rf, &my_incarn, sizeof(my_incarn)) == sizeof(my_incarn);
+            if (read(rf, &ur, sizeof(ur)) != sizeof(ur)) {
+                ur = 0;
+            }
             close(rf);
         }
-        if (!got) {
-            my_incarn = (uint32_t)time(NULL) * 2654435761u
-                      ^ (uint32_t)getpid() * 2246822519u
-                      ^ (uint32_t)(uintptr_t)&frame;
+        my_incarn = ur
+                  ^ ((uint32_t)time(NULL) * 2654435761u)
+                  ^ ((uint32_t)getpid() * 2246822519u)
+                  ^ (uint32_t)(uintptr_t)&frame;
+        if (my_incarn == 0 || my_incarn == INCARN_LEGACY) {
+            my_incarn ^= 0x9e3779b9u;    /* off the two reserved values */
         }
         frame[INCARN_OFF + 0] = (my_incarn >> 24) & 0xff;
         frame[INCARN_OFF + 1] = (my_incarn >> 16) & 0xff;
@@ -504,7 +535,40 @@ int main(int argc, char **argv)
 
             seq = be32(buf + SEQ_OFF);
 
-            if (blk_ever[slot] && incarn != blk_incarn[slot]) {
+            if (incarn == INCARN_LEGACY) {
+                /*
+                 * A v1 peer, which had no incarnation and filled these 4 bytes
+                 * with 0x5A. We can still check its magic, self-ethertype, length
+                 * and fill - and we DO, and it is COUNTED as a sighting. But we
+                 * cannot check its freshness: with no incarnation, a restart and
+                 * a stalled ring are indistinguishable, which is the whole reason
+                 * v2 exists. So we decline to render that one verdict rather than
+                 * render a false one. A red we cannot stand behind is worse than
+                 * no red - the seq rule fired 8,982 times at an honest peer once.
+                 * A legacy node interoperates; it just gets a weaker, honestly
+                 * labelled guarantee until it upgrades. (rt1180's call.)
+                 */
+                if (!blk_legacy_warned[slot]) {
+                    printf("ENET-LAB3 LEGACY: peer 0x%04x has no incarnation "
+                           "(v1 body); freshness UNVERIFIABLE, peer still "
+                           "counted and otherwise checked\n",
+                           BEACON_ET_LO + slot);
+                    fflush(stdout);
+                    blk_legacy_warned[slot] = 1;
+                }
+                /*
+                 * Record that this slot is IN the legacy state, so that when the
+                 * peer later UPGRADES and sends a real nonce, the reboot/replay
+                 * branches (which both exclude INCARN_LEGACY) correctly treat it
+                 * as first-real-contact and not as a restart. Without this,
+                 * blk_incarn stays 0 through the legacy phase and the first real
+                 * frame reads as a reboot - the exact first-frame degenerate case
+                 * rt1180 flagged, one transition over.
+                 */
+                blk_incarn[slot] = INCARN_LEGACY;
+                legacy_seen++;
+            } else if (blk_ever[slot] && blk_incarn[slot] != INCARN_LEGACY &&
+                       incarn != blk_incarn[slot]) {
                 printf("ENET-LAB3 REBOOT: peer 0x%04x incarnation %08x -> %08x "
                        "(seq restarts at %u; NOT a replay)\n",
                        BEACON_ET_LO + slot, blk_incarn[slot], incarn, seq);
@@ -512,9 +576,11 @@ int main(int argc, char **argv)
                 reboots++;
                 blk_incarn[slot] = incarn;
                 blk_last_seq[slot] = 0;     /* re-baseline: a new boot, a new run */
-            } else if (blk_ever[slot] && seq <= blk_last_seq[slot]) {
+            } else if (blk_ever[slot] && blk_incarn[slot] != INCARN_LEGACY &&
+                       seq <= blk_last_seq[slot]) {
                 bad = BAD_STALE;            /* same boot, old seq: a REAL replay */
-            } else if (!blk_ever[slot]) {
+            } else {
+                /* First real incarnation seen (or first after a legacy phase). */
                 blk_incarn[slot] = incarn;
             }
         }
@@ -594,9 +660,11 @@ int main(int argc, char **argv)
              * green when nothing is left to trigger it.
              */
             printf("ENET-LAB3 PASS: t=%ld.%03lds peers=%d/%d validated=%d "
-                   "beat=%llu loss=%llu foreign=%llu self=%llu\n",
+                   "beat=%llu loss=%llu foreign=%llu self=%llu "
+                   "reboots=%llu legacy=%llu\n",
                    (t - t0) / 1000, (t - t0) % 1000, npeers, npeers,
-                   validated, beat, losses, foreign_ignored, self_ignored);
+                   validated, beat, losses, foreign_ignored, self_ignored,
+                   reboots, legacy_seen);
             fflush(stdout);
             memset(seen, 0, sizeof(seen));      /* re-arm: an oracle that cannot expire */
         }

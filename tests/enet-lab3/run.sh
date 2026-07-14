@@ -78,16 +78,27 @@ WORK=$(mktemp -d)
 # refused to).  An INDEPENDENT implementation of the agreed body is the only
 # local oracle that can see that, so the stand-ins run 91's strict checker.
 #
-# ⚠ FLAG DAY IN PROGRESS (v1 body -> v2 body). The body grew a per-BOOT
-# INCARNATION nonce at [24..27] so a peer that REBOOTS is no longer condemned as
-# a stale-buffer replay (holobench's departure/rejoin lab proved the v1 freshness
-# rule condemns a healthy restarted peer ~9,000 times). The nonce lands where v1
-# put 0x5A fill, so THERE IS NO COMPATIBLE HALF-STEP: a v1 peer and a v2 peer read
-# each other's frames as BAD_PATTERN. Until 91's enetbeacon.c carries the same
-# nonce, THIS SELF-TEST IS EXPECTED RED against the v1 cross-impl peer - and that
-# red is the contract being enforced, not a regression. Ratification of the
-# offsets is on the bus; when the peer's md5 below changes to a v2 build, the
-# green means interop again. Do not "fix" the red by reverting the nonce.
+# NOTE (v1 body -> v2 body, and it is NOT a flag day - I first claimed it was and
+# was wrong). The body grew a per-BOOT INCARNATION nonce at [24..27] so a peer
+# that REBOOTS is no longer condemned as a stale-buffer replay (holobench's
+# departure/rejoin lab proved the v1 freshness rule condemns a healthy restarted
+# peer ~9,000 times). The interop is ASYMMETRIC, and rt1180's legacy-sentinel
+# design (adopted) keeps it graceful in one direction:
+#
+#   OUR v2 receiver reading a v1 frame:  the v1 body left 0x5A in [24..27], which
+#     reads as incarnation 0x5A5A5A5A - a recognised SENTINEL meaning "no
+#     incarnation". We COUNT the peer and check magic/self-et/length/fill; we only
+#     decline to check its FRESHNESS (unverifiable without a nonce). No red.
+#   A v1 CHECKER reading OUR v2 frame:   it validates fill across [24..63] and our
+#     random nonce fails that, so it reports BAD_PATTERN. THIS is the only red.
+#
+# So this self-test - whose stand-ins are 91's *v1* strict checkers validating OUR
+# frames - is EXPECTED RED until 91 carries the nonce, because that is exactly the
+# one direction that cannot interoperate. The red is the contract, not a
+# regression; when the peer md5 below is a v2 build, green means interop. Do NOT
+# "fix" it by reverting the nonce. (The failure to fear is the opposite: a green
+# that means a node quietly stayed on the old body - which is how we were green
+# while uninteroperable for weeks.)
 IMX91_SRC=${IMX91_SRC:-$HOME/Documents/GitHub/91emulator/tests/interconnect-imx91/enetbeacon.c}
 [ -f "$IMX91_SRC" ] || skip "no cross-impl peer source ($IMX91_SRC)"
 "$CC" -static -O2 -o "$WORK/imx91-beacon" "$IMX91_SRC" || skip "cross-impl peer failed to build"
