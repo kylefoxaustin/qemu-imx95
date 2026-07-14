@@ -78,6 +78,48 @@ count does not degrade gracefully, unlike an SDHCI tuning mode). Report
 Advertising silicon's 8 belongs with a future multi-ring model. Verified:
 enet-lab3 self-test still passes (real L2 through ring 0).
 
+### FIX — XCVR: six non-zero resets, and an invented VERSION  (commit: xcvr)
+The whole control window was memset to 0 and handed a made-up VERSION.
+`fsl_xcvr` **read-modify-writes** several of these (`regmap_update_bits` on
+EXT_CTRL), so the zero reset is laundered into the guest's own config:
+
+| reg | RM reset | |
+|---|---|---|
+| `EXT_CTRL` | `0xf820_4040` | CORE/CMDC/DPTH held in reset, SLEEP, RX/TX_FWM=64 |
+| `RX_CMDC_CTRL` | `0x0028_1b02` | |
+| `RX_DATAPATH_CTRL` | `0x0000_2c89` | |
+| `DMAC_PRE_MATCH_VAL` | `0x4e1f_f872` | the SPDIF **preamble match pattern** |
+| `DMAC_DTS_PRE_MATCH` | `0x1387_fe1c` | |
+| `HPD_DBNC_CTRL` | `0x0003_0d40` | |
+
+`VERSION` we returned `0x0001_0000`; it resets to **0** — the RM's column *and*
+the driver's own `reg_defaults` table agree, and neither is a document this
+model's author wrote. Addresses re-derived, not assumed: the DT gives fsl_xcvr a
+separate `"regs"` region at base+0x800, so driver offset 0 = RM 0x800
+(91emulator: *the RM is authoritative for VALUES, the driver and DT for
+ADDRESSES*). Verified: tests/spdif still passes.
+
+### FIX — DSI reported the wrong IP revision  (commit: dsi)
+We returned `DSI_VERSION = 0x3133_3100` (dw-mipi-dsi HWVER_131). The RM resets it
+to `0x3031_3531` — ASCII "0151", **v1.51**. Reporting the wrong IP revision is
+the ENETC-PCI-Revision-ID class: it silently forks the driver down a path the
+silicon never takes. Here we got away with it — both revisions land in the same
+timing branch (the driver carries an explicit `hwver_is_151` flag precisely
+because `0x30313531` is numerically *less* than `0x31333100`) — but that is luck,
+not design. Also seeded `MODE_CFG`=1, `PHY_TST_CTRL0`=1, and `CMD_PKT_STATUS` =
+`0x0005_0015` (we returned `0x15`, missing the v1.51 buffered EMPTY bits 16/18).
+Verified: tests/dsi still passes (rm67191 panel, card0-DSI-1 @1080x1920).
+
+### FIX — ISI `CHNL_SCALE_FACTOR` = 0 was a dangerous zero  (commit: isi)
+`CHNL_SCALE_FACTOR` resets to `0x1000_1000` — **unity** in the scaler's Q12
+format. We memset it to 0. A scale factor of zero is not merely wrong, it is
+*legal and catastrophic* — the same family as 91's QDC `POSDPER` (a period
+register whose zero means "infinitely fast" to a speed observer) and mcxn's ADC
+gain-of-zero. **The dangerous zeros are the ones where zero is a meaningful
+value, not the ones where it is obviously junk.** imx8-isi always *writes* the
+factor before streaming (so it is not laundered) but debugfs dumps it. Also
+`CHNL_IMG_CFG` = `0x0438_0780` (1920x1080). Verified: tests/camera still passes.
+
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and
 per-instance. **Every set bit (16, 20, 21) lands in the RM's "Reserved [23:16]"
@@ -93,6 +135,27 @@ RM: `PARAM` reset `0x0000_0303` (2^3 = 8-deep tx/rx FIFOs). We already return
 ### NULL — LPI2C `MSR` TDF-at-reset
 RM: `MSR` reset `0x0000_0001` (TDF, tx-FIFO-empty, bit 0 set). Our model forces
 `MSR_TDF` on every read — already matches.
+
+## Not audited, and why (no silent caps)
+
+Stating these plainly, because a sweep that quietly skips a block reads as
+"covered" when it isn't (mcxn: *coverage is an assertion, not a print*).
+
+- **DPU — CANNOT be audited against this RM.** Chapter 170 ("Display
+  Controller") is 159 lines of prose and contains **zero reset-value tables**;
+  the register file is not in this document. There is no golden here to diff
+  against. Not "clean" — *unmeasured*.
+- **SRC / GPC — real gap, deliberately deferred.** Both have many non-zero
+  resets (`SRC AUTHEN_CTRL = 0xFFFF_0000`, `LPM_SETTING_1/2 = 0x3333_3333`,
+  `SLICE_SW_CTRL = 0x7F00_0003`, `SSAR/PSW_ACK_CTRL`, GPC's `CMC_*`) and our
+  models memset them to 0. Neither model *fabricates* a value — they are pure
+  register files. Their consumer is the **M33 System Manager firmware**, which
+  appears to write these with computed full values (`AUTHENCTRL_SW/HW/CPU`)
+  rather than read-modify-writing them — but that is not proven. Seeding them is
+  a **boot-critical** change to the block the SM drives, so it needs a seed +
+  SM-boot A/B, not a drive-by. (This is the MU TR-count lesson: a change that
+  "matches the spec" broke boot and had to be retracted. Boot-test boot-critical
+  changes.) **Next task.**
 
 ## Method notes / limits
 
