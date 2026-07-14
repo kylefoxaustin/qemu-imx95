@@ -401,7 +401,7 @@ int main(int argc, char **argv)
         socklen_t fl = sizeof(from);
         ssize_t n;
         unsigned et;
-        int pr, all, idx, bad, slot;
+        int pr, all, idx, bad, slot, is_legacy;
         uint32_t seq;
 
         if (t >= next_send) {
@@ -500,6 +500,7 @@ int main(int argc, char **argv)
          */
         bad = BAD_OK;
         seq = 0;
+        is_legacy = 0;
         if (n != FRAME_LEN) {
             bad = BAD_SHORT;
         } else if (be32(buf + MAGIC_OFF) != BEACON_MAGIC) {
@@ -550,12 +551,14 @@ int main(int argc, char **argv)
                  */
                 if (!blk_legacy_warned[slot]) {
                     printf("ENET-LAB3 LEGACY: peer 0x%04x has no incarnation "
-                           "(v1 body); freshness UNVERIFIABLE, peer still "
-                           "counted and otherwise checked\n",
+                           "(v1 body); freshness UNVERIFIABLE, so it does NOT "
+                           "satisfy a required-peer gate - segment stays red "
+                           "until it carries a real incarnation\n",
                            BEACON_ET_LO + slot);
                     fflush(stdout);
                     blk_legacy_warned[slot] = 1;
                 }
+                is_legacy = 1;
                 /*
                  * Record that this slot is IN the legacy state, so that when the
                  * peer later UPGRADES and sends a real nonce, the reboot/replay
@@ -632,9 +635,21 @@ int main(int argc, char **argv)
         blk_last_seq[slot] = seq;
         blk_last_rx[slot] = t;
 
-        /* Only the peers we CONTRACTED with gate PASS. Validating is not
-         * depending: a lab without imx91 is not a lab we should fail. */
-        if (idx >= 0) {
+        /*
+         * Only the peers we CONTRACTED with gate PASS. Validating is not
+         * depending: a lab without imx91 is not a lab we should fail.
+         *
+         * A LEGACY (pre-incarnation) peer does NOT satisfy that gate, even if it
+         * is one we contracted with. It was rt1180 who caught this, in their tree
+         * and by implication in mine: counting a peer whose freshness you cannot
+         * verify produces "a green that means a node quietly stayed on the old
+         * body" - the exact masking-green I had warned the fleet about, and then
+         * shipped one commit later. During a ratified cutover a not-yet-upgraded
+         * required peer MUST hold the segment red; that red is the forcing
+         * function, not a regression. So we track and announce the legacy peer
+         * but refuse to let it close the gate.
+         */
+        if (idx >= 0 && !is_legacy) {
             seen[idx] = 1;
         }
 

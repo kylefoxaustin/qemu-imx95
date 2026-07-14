@@ -86,19 +86,23 @@ WORK=$(mktemp -d)
 # design (adopted) keeps it graceful in one direction:
 #
 #   OUR v2 receiver reading a v1 frame:  the v1 body left 0x5A in [24..27], which
-#     reads as incarnation 0x5A5A5A5A - a recognised SENTINEL meaning "no
-#     incarnation". We COUNT the peer and check magic/self-et/length/fill; we only
-#     decline to check its FRESHNESS (unverifiable without a nonce). No red.
+#     reads as incarnation 0x5A5A5A5A - a recognised SENTINEL for "no
+#     incarnation". We check its magic/self-et/length/fill and announce it, but a
+#     legacy peer does NOT satisfy the required-peer gate: with no nonce its
+#     freshness is unverifiable, and counting it would green over a peer that has
+#     not cut over. So a legacy REQUIRED peer holds the segment RED.
 #   A v1 CHECKER reading OUR v2 frame:   it validates fill across [24..63] and our
-#     random nonce fails that, so it reports BAD_PATTERN. THIS is the only red.
+#     random nonce fails that, so it reports BAD_PATTERN. Also red.
 #
-# So this self-test - whose stand-ins are 91's *v1* strict checkers validating OUR
-# frames - is EXPECTED RED until 91 carries the nonce, because that is exactly the
-# one direction that cannot interoperate. The red is the contract, not a
-# regression; when the peer md5 below is a v2 build, green means interop. Do NOT
-# "fix" it by reverting the nonce. (The failure to fear is the opposite: a green
-# that means a node quietly stayed on the old body - which is how we were green
-# while uninteroperable for weeks.)
+# BOTH directions are red during the cutover, which is correct: this is a flag day
+# (rt1180 and I converged on that after I first mis-called it graceful). This
+# self-test's stand-ins are 91's *v1* beacon, so it is EXPECTED RED until 91
+# carries the nonce - the red is the contract being enforced, not a regression.
+# When the peer md5 below is a v2 build, green means interop. Do NOT "fix" the red
+# by reverting the nonce or by counting the legacy peer. The failure to FEAR is
+# the opposite: a green that means a node quietly stayed on the old body - which
+# is exactly how we were green while uninteroperable for weeks, and exactly the
+# masking-green rt1180 caught in both our trees today.
 IMX91_SRC=${IMX91_SRC:-$HOME/Documents/GitHub/91emulator/tests/interconnect-imx91/enetbeacon.c}
 [ -f "$IMX91_SRC" ] || skip "no cross-impl peer source ($IMX91_SRC)"
 "$CC" -static -O2 -o "$WORK/imx91-beacon" "$IMX91_SRC" || skip "cross-impl peer failed to build"
