@@ -257,20 +257,31 @@ if [ "${IMPOSTOR:-0}" = 1 ]; then
     echo "== IMPOSTOR: 0x88B5 emits 1000-byte frames with a VALID 64-byte prefix =="
     echo "   Every fixed-offset field it carries is correct. It is still not the"
     echo "   contract. We must count it ZERO times and never PASS."
+    #
+    # SNIFF THE WIRE OURSELVES, and gate the whole verdict on what CROSSED it.
+    #
+    # Grepping the impostor's own log only proves it INTENDED to send a bad
+    # frame. rt1180emulator's correction, prompted by exactly the near-miss
+    # below: NOT "we meant to send it" - "IT IS ON THE WIRE."
+    #
+    g=${SELF_GROUP%%:*}; pt=${SELF_GROUP##*:}
+    python3 "$HERE/wire-sniff.py" "$g" "$pt" 40 \
+        --require-len 1000 --require-et 0x88B5 > "$WORK/sniff.log" 2>&1 &
+    sniffer=$!
     EVIL="lab_evil=1" boot imx95 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 \
          0x88B7,0x88B6 "$WORK/evil.log" 25000 &
     boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 \
          0x88B5,0x88B6 "$WORK/imx95.log" 25000 &
+    wait "$sniffer"; sniffed=$?
     wait
     clean() { sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$1"; }
-    echo "--- impostor (must have ARMED, or the verdict is meaningless) ---"
-    clean "$WORK/evil.log" | grep -aE 'ENET-LAB3 (EVIL|up)' | head -2
-    armed=$(clean "$WORK/evil.log" | grep -ac 'ENET-LAB3 EVIL' || true)
-    if [ "$armed" -lt 1 ]; then
-        echo "RESULT: ABORT - the impostor never armed. It sent ordinary 64-byte"
-        echo "        frames, so any verdict about the judge is meaningless."
+    echo "--- what actually crossed the wire (an observer with no stake) ---"
+    cat "$WORK/sniff.log"
+    if [ "$sniffed" -ne 0 ]; then
+        echo "RESULT: ABORT - the impostor's frame never reached the wire, so any"
+        echo "        verdict about the judge would be about a test that never ran."
         echo "        A NEGATIVE TEST THAT DID NOT PRODUCE THE CONDITION IT NAMES"
-        echo "        IS NOT A NEGATIVE TEST."
+        echo "        DOES NOT MERELY MISS A BUG - IT MANUFACTURES ONE."
         exit 1
     fi
     echo "--- imx95 (the judge) ---"
