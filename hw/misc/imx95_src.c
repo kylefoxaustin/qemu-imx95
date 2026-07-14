@@ -160,11 +160,60 @@ static const MemoryRegionOps imx95_src_ops = {
     },
 };
 
+/*
+ * RM reset column, per mix slice (SRC_XSPR). None of these is zero on silicon,
+ * and we memset the whole block, so every one of them was a claim the chip does
+ * not make. The consumer here is the M33 System Manager firmware, not Linux -
+ * which is exactly why this was left until last: seeding the block the SM boots
+ * on is boot-critical, and a change that "matches the spec" has broken this
+ * machine before (bumping an MU channel count to the CMSIS value panicked
+ * Linux, and had to be retracted). So this is seeded and then A/B'd against a
+ * real SM boot, not reasoned about.
+ *
+ * The bits our model INTERPRETS are unchanged by these values, which is why it
+ * is safe: SLICE_SW_CTRL resets to 0x7F00_0003, whose PDN_SOFT (bit 31) and
+ * RST_RSTR[3:0] (bits 23..20) are both ZERO - identical to the memset. What the
+ * seed fixes is everything else in the word, which the SM read-modify-writes.
+ */
+#define SRC_XSPR_AUTHEN_CTRL        0x04
+#define SRC_XSPR_AUTHEN_CTRL_RESET  0xffff0000u
+#define SRC_XSPR_LPM_SETTING_0      0x10
+#define SRC_XSPR_LPM_SETTING_0_RST  0x00000003u
+#define SRC_XSPR_LPM_SETTING_1      0x14
+#define SRC_XSPR_LPM_SETTING_2      0x18
+#define SRC_XSPR_LPM_SETTING_RST    0x33333333u
+#define SRC_SLICE_SW_CTRL_RESET     0x7f000003u
+#define SRC_XSPR_SSAR_ACK_CTRL      0x50
+#define SRC_XSPR_SSAR_ACK_CTRL_RST  0x00002ee0u
+#define SRC_XSPR_PSW_ACK_CTRL_0     0x80
+#define SRC_XSPR_PSW_ACK_CTRL_0_RST 0x10a000a0u
+
 static void imx95_src_reset(DeviceState *dev)
 {
     IMX95SRCState *s = IMX95_SRC(dev);
+    hwaddr slice;
 
     memset(s->regs, 0, sizeof(s->regs));
+
+    /* SRC_GEN's own authentication control (offset 0 block). */
+    s->regs[SRC_XSPR_AUTHEN_CTRL / 4] = SRC_XSPR_AUTHEN_CTRL_RESET;
+
+    for (slice = SRC_SLICE_STRIDE; slice < IMX95_SRC_REG_SIZE;
+         slice += SRC_SLICE_STRIDE) {
+        s->regs[(slice + SRC_XSPR_AUTHEN_CTRL) / 4] =
+            SRC_XSPR_AUTHEN_CTRL_RESET;
+        s->regs[(slice + SRC_XSPR_LPM_SETTING_0) / 4] =
+            SRC_XSPR_LPM_SETTING_0_RST;
+        s->regs[(slice + SRC_XSPR_LPM_SETTING_1) / 4] =
+            SRC_XSPR_LPM_SETTING_RST;
+        s->regs[(slice + SRC_XSPR_LPM_SETTING_2) / 4] =
+            SRC_XSPR_LPM_SETTING_RST;
+        s->regs[(slice + SRC_SLICE_SW_CTRL) / 4] = SRC_SLICE_SW_CTRL_RESET;
+        s->regs[(slice + SRC_XSPR_SSAR_ACK_CTRL) / 4] =
+            SRC_XSPR_SSAR_ACK_CTRL_RST;
+        s->regs[(slice + SRC_XSPR_PSW_ACK_CTRL_0) / 4] =
+            SRC_XSPR_PSW_ACK_CTRL_0_RST;
+    }
 }
 
 static void imx95_src_init(Object *obj)

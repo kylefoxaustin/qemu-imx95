@@ -189,10 +189,22 @@ built from `SAI_PARAM_FIFO_EXP` / `SAI_PARAM_DATALINES`, with `QEMU_BUILD_BUG_ON
 making any disagreement with `IMX95_SAI_FIFO_DEPTH` — or with the single data line
 we implement — a **compile error**. Negative-tested both ways.
 
-**Known, unfixed, and stated:** MICFIL's `NPAIR=4` (8 mic inputs) predates this
-audit and is itself an over-report — only `DATACH0` is fed. Left alone because
-changing it moves the ALSA channel count on a working capture path; filed rather
-than smuggled.
+### NULL — MICFIL `NPAIR` is honest, and my bug report was not
+I filed MICFIL's `NPAIR=4` (8 mic inputs) as an over-report, on the reasoned
+assumption that only `DATACH0` was fed. **Checking disproved it.** The model
+serves all eight `DATACHn` registers, and with the board limit lifted (DT
+`num-channels` 2 → 8) an 8-channel S32 capture succeeds, non-silent. The
+capability is real *and* the model can honour it.
+
+The 2-channel cap on the EVK is a **board** constraint — the dmic node says
+`num-channels = <2>` because the board wires two PDM mics — and the emulator
+refuses an 8-channel open *exactly as the real hardware would*. (`fsl-micfil`
+also only *stores* `param.npair`; the channel count comes from the driver's own
+constant and the DT.)
+
+Recorded because a null is a result: **I raised a bug from reasoning and the
+measurement killed it.** The same instinct that finds real over-promises
+manufactures false ones, and only checking tells them apart.
 
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and

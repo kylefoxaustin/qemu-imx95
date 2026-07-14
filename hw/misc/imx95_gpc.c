@@ -100,11 +100,48 @@ static const MemoryRegionOps imx95_gpc_ops = {
     },
 };
 
+/*
+ * RM reset column, per CPU_CTRL (CMC) block. We memset the whole region, which
+ * is a claim that every reset bit here is zero; silicon says otherwise. The
+ * consumer is the M33 System Manager firmware, so this is BOOT-CRITICAL and is
+ * A/B'd against a real SM boot rather than reasoned about.
+ *
+ * The SLEEP/WAKEUP *_STAT registers MIRROR the *_CTRL four bytes below them in
+ * this model (a "request X, wait for X" handshake completes instantly), so
+ * seeding a CTRL to its reset value moves its STAT with it - which is what
+ * silicon does too, and is why the SM's wait loops still converge.
+ */
+#define CMC_AUTHEN_CTRL             0x004
+#define CMC_AUTHEN_CTRL_RESET       0xffff0000u
+#define CMC_MISC                    0x00c
+#define CMC_MISC_RESET              0x0000000eu
+#define CMC_NON_IRQ_WAKEUP_MASK     0x140
+#define CMC_NON_IRQ_WAKEUP_MASK_RST 0x00000001u
+#define CMC_SLEEP_A55_HDSK_CTRL     0x200
+#define CMC_SLEEP_SSAR_CTRL         0x208
+#define CMC_SLEEP_RESET_CTRL        0x230
+#define CMC_SLEEP_SYSMAN_CTRL       0x248
+#define CMC_WAKEUP_POWER_CTRL       0x290
+#define CMC_HDSK_CTRL_RESET         0x00000004u
+
 static void imx95_gpc_reset(DeviceState *dev)
 {
     IMX95GPCState *s = IMX95_GPC(dev);
+    hwaddr blk;
 
     memset(s->regs, 0, sizeof(s->regs));
+
+    for (blk = 0; blk < GPC_GLOBAL_OFF; blk += CPU_CTRL_BLOCK_SIZE) {
+        s->regs[(blk + CMC_AUTHEN_CTRL) / 4] = CMC_AUTHEN_CTRL_RESET;
+        s->regs[(blk + CMC_MISC) / 4] = CMC_MISC_RESET;
+        s->regs[(blk + CMC_NON_IRQ_WAKEUP_MASK) / 4] =
+            CMC_NON_IRQ_WAKEUP_MASK_RST;
+        s->regs[(blk + CMC_SLEEP_A55_HDSK_CTRL) / 4] = CMC_HDSK_CTRL_RESET;
+        s->regs[(blk + CMC_SLEEP_SSAR_CTRL) / 4] = CMC_HDSK_CTRL_RESET;
+        s->regs[(blk + CMC_SLEEP_RESET_CTRL) / 4] = CMC_HDSK_CTRL_RESET;
+        s->regs[(blk + CMC_SLEEP_SYSMAN_CTRL) / 4] = CMC_HDSK_CTRL_RESET;
+        s->regs[(blk + CMC_WAKEUP_POWER_CTRL) / 4] = CMC_HDSK_CTRL_RESET;
+    }
 }
 
 static void imx95_gpc_init(Object *obj)
