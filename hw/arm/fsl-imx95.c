@@ -2601,7 +2601,22 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
             I2CBus *i2c = I2C_BUS(qdev_get_child_bus(s->lpi2c4,
                                 fsl_imx95_memmap[FSL_IMX95_LPI2C2].name));
 
-            i2c_slave_create_simple(i2c, TYPE_WM8962, FSL_IMX95_WM8962_ADDR);
+            /*
+             * The codec is the bit-clock MASTER on this link: it drives BCLK
+             * and LRCLK, so it - and nothing else in the machine - knows the
+             * sample rate. Wire that fact, because the SAI cannot derive it:
+             * its divider registers are byte-identical at 48 kHz and 16 kHz
+             * (TCR2.BCD_MSTR = 0), so a SAI-side computation would be a
+             * fabrication that agrees with itself at the one rate anyone tests.
+             * Without this wire the SAI clocks every stream at 48 kHz and a
+             * 16 kHz stream plays three times too fast, looking perfectly
+             * healthy the whole way down.
+             */
+            DeviceState *codec = DEVICE(i2c_slave_create_simple(
+                                    i2c, TYPE_WM8962, FSL_IMX95_WM8962_ADDR));
+
+            qdev_connect_gpio_out_named(codec, "rate", 0,
+                qdev_get_gpio_in_named(DEVICE(&s->sai[1]), "codec-rate", 0));
             /*
              * PCAL6408A IO-expander at 0x21 (dtsi gpio@21 on this i2c-3 bus -
              * distinct from the AQR/serdes expander at the same 0x21 on Linux

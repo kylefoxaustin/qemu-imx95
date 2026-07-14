@@ -49,6 +49,29 @@ struct IMX95SaiState {
     uint32_t verid;
     uint32_t param;
 
+    /*
+     * The sample rate the CODEC told us it is clocking at.
+     *
+     * This model used to pace its FIFO - and open its audio voice - at a
+     * hardcoded 48 kHz. Every audio test asks for 48 kHz, which is the one
+     * rate at which a SAI that ignores the requested rate and a SAI that
+     * honours it are indistinguishable. A 16 kHz stream was clocked out three
+     * times too fast and everything looked healthy.
+     *
+     * And it CANNOT be derived from this device. On a wm8962 board the SAI
+     * is a bit-clock SLAVE (TCR2.BCD_MSTR = 0): the codec drives BCLK/LRCLK,
+     * the rate is programmed into the codec over I2C, and the SAI's own
+     * divider registers are never touched - at 48 kHz and 16 kHz they are
+     * byte-identical. A
+     * divider computation here would be correct for a bit-clock MASTER, would
+     * agree with itself at the only rate anyone tests, and would be a
+     * fabrication with an RM citation attached. (93emulator paid for that one.)
+     *
+     * So the rate arrives the way it does on the board: FROM THE CODEC, on the
+     * "codec-rate" input.
+     */
+    uint32_t rate;
+
     /* Transmit FIFO (data line 0). */
     QEMUTimer *tx_timer;
     uint32_t tx_fifo[IMX95_SAI_FIFO_DEPTH];

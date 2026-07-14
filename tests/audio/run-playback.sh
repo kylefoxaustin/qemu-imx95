@@ -17,11 +17,15 @@
 #       -> eDMA2 cyclic channel (ring -> SAI3 TDR0, our hw/dma/imx95_edma.c)
 #       -> SAI3 TX FIFO drain -> audio backend -> out.wav (hw/audio/imx95_sai.c)
 #
-# PASS = pcm_play completes the whole stream (the eDMA paced it at the audio
-# rate). The captured WAV is reported when present but is informational: the
-# -audio wav backend pulls at wall-clock so capturing the full stream before
-# poweroff is timing-sensitive. The rigorous "bytes reached SAI3 TDR0" proof is
-# the kernel-free qtest tests/qtest/imx95-edma-test.c (/tcd64-playback).
+# PASS requires all of: pcm_play delivers every frame; the stream takes AT LEAST
+# its true duration to clock out (the defect makes it too FAST, so the assertion
+# is a floor); and the drain times AGREE ACROSS RATES, which is the load-invariant
+# form of the same claim - every rate plays the same two seconds, so every rate
+# must take the same time, however busy the host is.
+#
+# It is run at TWO rates on purpose. At 48 kHz alone - the only rate this harness
+# ever used - a SAI that ignores the requested rate and one that honours it are
+# indistinguishable, and ours ignored it for months.
 #
 # Required (override via env): QEMU, KBUILD (Image + dtb + the snd .ko tree),
 # SM_ELF, BSP_ROOTFS (libasound + loader + libc), ALSA_INC (asoundlib.h), an
@@ -136,9 +140,15 @@ echo "=== /proc/asound/cards ==="
 cat /proc/asound/cards
 WCARD=\$(awk '/wm8962/{print \$1}' /proc/asound/cards 2>/dev/null | head -1)
 echo "wm8962 card = \${WCARD:-NONE}"
-echo "=== WM8962-PLAYBACK ==="
+RATE=\$(sed -n 's/.*play_rate=\([^ ]*\).*/\1/p' /proc/cmdline)
+[ -n "\$RATE" ] || RATE=48000
+# Quiet the kernel: its printk shares this console with pcm_play's stdout, and
+# an interleaved line breaks the very assertion we are here to make. (A parse
+# that a neighbouring writer can corrupt is not a parse - it is a coin flip.)
+dmesg -n 1 2>/dev/null
+echo "=== WM8962-PLAYBACK rate=\$RATE ==="
 if [ -n "\$WCARD" ]; then
-    /pcm_play hw:\$WCARD,0 2
+    /pcm_play hw:\$WCARD,0 2 \$RATE
     # Let the (wall-clock-paced) audio backend drain the captured PCM before
     # we power off, so the WAV is finalised with the full stream.
     sleep 4
@@ -151,16 +161,46 @@ INIT
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.cpio.gz"
 
-LOG="$WORK/serial.log"
+#
+# TWO OPERATING POINTS, AND THAT IS THE ENTIRE POINT.
+#
+# This harness only ever played 48 kHz, and the SAI's FIFO pacing - and the rate
+# it opened its audio voice at - were hardcoded to 48 kHz. So the one rate we
+# tested was precisely the rate at which a model that IGNORES the requested rate
+# and a model that honours it are INDISTINGUISHABLE. The old PASS check even
+# asserted a literal "96000 frames" (2s x 48 kHz), so the test could not have
+# been run at another rate without failing for the wrong reason.
+#
+#   A MODEL THAT IS CORRECT AT THE POINT YOU TESTED IT IS NOT A MODEL YOU HAVE
+#   TESTED. Only a SECOND operating point exposes it.        (93emulator)
+#
+# THE ORACLE IS TIME. snd_pcm_writei() + drain block until the hardware has
+# actually clocked the samples out, so N seconds of audio must take N seconds
+# AT ANY RATE. A SAI pacing at a fixed 48 kHz drains a 16 kHz stream three times
+# too fast - while writei succeeds, drain succeeds, and every frame is
+# accounted for.
+#
+# It is NOT the captured WAV. I tried that first: QEMU's wav backend writes its
+# OWN sample rate into the header (44100 by default) and the audio layer
+# resamples into it, so the header says nothing whatever about what the SAI did.
+# It reported "0 Hz" and it would have reported the same for a correct model.
+#   AN ORACLE THAT MEASURES THE WRONG DEVICE IS WORSE THAN NO ORACLE: it is a
+#   green light with a citation.
+#
+RATES=${RATES:-"48000 16000"}
+fail=0
+for RATE in $RATES; do
+LOG="$WORK/serial-$RATE.log"
+WAV="$WORK/play-$RATE.wav"
 timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.cpio.gz" \
-  -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
+  -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init play_rate=$RATE" \
   -device loader,file="$SM_ELF",cpu-num=6 \
   -audio driver=wav,path="$WAV" \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
-echo "--- playback report ---"
-sed -n '/WM8962-PLAYBACK ===/,/WM8962-PLAYBACK-DONE/p' "$LOG" | grep -vE 'PLAYBACK ==='
+echo "--- playback report (rate=$RATE) ---"
+sed -n '/WM8962-PLAYBACK/,/WM8962-PLAYBACK-DONE/p' "$LOG" | grep -vE 'PLAYBACK-DONE'
 
 # WAV content (informational). The -audio wav backend pulls at wall-clock, so
 # whether the full stream is captured/finalised before poweroff is timing-
@@ -168,23 +208,65 @@ sed -n '/WM8962-PLAYBACK ===/,/WM8962-PLAYBACK-DONE/p' "$LOG" | grep -vE 'PLAYBA
 # stream (the eDMA paced it at the audio rate) plus the kernel-free qtest
 # (tests/qtest/imx95-edma-test.c /tcd64-playback) that asserts the eDMA fed
 # SAI3 TDR0. So a non-silent WAV is a bonus, not the gate.
-verdict=$(python3 - "$WAV" <<'PY'
-import sys, wave
-try:
-    w = wave.open(sys.argv[1], 'rb')
-    n = w.getnframes(); sw = w.getsampwidth()
-    import struct
-    fmt = {1:'b', 2:'h', 4:'i'}.get(sw)
-    data = w.readframes(n)
-    vals = struct.unpack("<%d%s" % (len(data)//sw, fmt), data[:len(data)//sw*sw])
-    print(f"frames={n} peak={max(abs(v) for v in vals) if vals else 0}")
-except Exception as e:
-    print("no-content", e)
-PY
-)
-echo "wav (informational): $verdict"
-if grep -qaE 'PLAY\[.*\]: PASS \(96000 frames\)' "$LOG"; then
-    echo "PASS: WM8962/SAI3 playback - eDMA drained the full PCM stream at the audio rate"
+elapsed=$(grep -aoE 'elapsed=[0-9.]+' "$LOG" | head -1 | cut -d= -f2)
+want_frames=$((2 * RATE))
+if ! grep -qaE "PLAY\[.*\]: PASS \($want_frames frames\)" "$LOG"; then
+    echo "FAIL(rate=$RATE): pcm_play did not deliver $want_frames frames"
+    fail=1
+fi
+# THE ASSERTION IS A FLOOR, AND THE DIRECTION IS THE WHOLE DESIGN.
+#
+# 2 seconds of audio must take AT LEAST ~2 seconds to clock out, at any rate.
+# The defect makes playback TOO FAST (a 16 kHz stream paced at 48 kHz drains in
+# a third of the time) while host load only ever makes it SLOWER - a busy box
+# stretched a good 48 kHz run to 3.7s and an upper bound rejected it, which was
+# my oracle failing, not the model.
+#
+#   MEASURE IN THE DIRECTION THE BUG MOVES. A two-sided window on a wall clock
+#   fails for load; a floor fails only for the defect.
+#
+# The ceiling is kept only wide enough to catch a total stall.
+ok=$(python3 -c "
+e=float('${elapsed:-0}')
+print(1 if 1.5 <= e <= 20.0 else 0)" 2>/dev/null)
+if [ "$ok" != 1 ]; then
+    echo "FAIL(rate=$RATE): 2s of audio drained in ${elapsed:-?}s (want >= 1.5s)"
+    echo "      -> the SAI is not clocking at ${RATE} Hz; the rate never reached it"
+    fail=1
+else
+    echo "ok(rate=$RATE): 2s of ${RATE} Hz audio took ${elapsed}s to clock out"
+fi
+times="${times:-} $RATE:${elapsed:-0}"
+done
+
+#
+# AND THE LOAD-INVARIANT CHECK, WHICH IS THE ONE THAT REALLY BITES.
+#
+# Every rate plays the SAME two seconds of audio, so every rate must take the
+# SAME time to clock out. That ratio does not care how busy the host is - load
+# stretches both runs together - whereas the absolute floor above has to leave
+# room for a slow box and therefore leaves room for a nearly-slow bug. With the
+# defect present the 16 kHz run finishes in a THIRD of the 48 kHz run, and no
+# amount of host noise makes a third look like a whole.
+#
+#   WHEN A THRESHOLD HAS TO ABSORB NOISE, FIND THE QUANTITY THE NOISE CANCELS
+#   OUT OF.
+#
+spread=$(python3 -c "
+ts=[float(x.split(':')[1]) for x in '''${times:-}'''.split()]
+print(round(max(ts)/min(ts),2) if len(ts)>1 and min(ts)>0 else 1.0)" 2>/dev/null)
+if [ -n "${times:-}" ] && python3 -c "import sys; sys.exit(0 if float('$spread') > 1.6 else 1)"; then
+    echo "FAIL: drain times differ by ${spread}x across rates ($times)"
+    echo "      Every rate plays the same 2 seconds; they must take the same time."
+    echo "      A ratio near 3 means the SAI clocks every stream at one fixed rate."
+    fail=1
+elif [ -n "${times:-}" ]; then
+    echo "ok: drain times agree within ${spread}x across rates ($times)"
+fi
+
+if [ "$fail" = 0 ]; then
+    echo "PASS: WM8962/SAI3 playback honours the requested rate at every"
+    echo "      operating point tested ($RATES)"
     exit 0
 fi
 echo "FAIL: playback did not complete (eDMA did not drain the stream)"; exit 1

@@ -110,8 +110,19 @@
 #define SAI_PARAM_DEFAULT \
     SAI_PARAM_VAL(SAI_PARAM_FIFO_EXP, SAI_PARAM_DATALINES)
 
-/* One word of a 48 kHz stereo stream: 96000 words/s. */
-#define SAI_TX_WORD_NS  (NANOSECONDS_PER_SECOND / 96000)
+/*
+ * One word period at the rate the CODEC is clocking us at (stereo: two words
+ * per frame). This used to be the constant NANOSECONDS_PER_SECOND / 96000 -
+ * 48 kHz stereo, forever, whatever rate the guest actually asked for.
+ */
+#define SAI_DEFAULT_RATE 48000
+
+static inline int64_t sai_word_ns(const IMX95SaiState *s)
+{
+    uint32_t rate = s->rate ? s->rate : SAI_DEFAULT_RATE;
+
+    return NANOSECONDS_PER_SECOND / ((int64_t)rate * 2);
+}
 
 static void imx95_sai_tx_update_flags(IMX95SaiState *s)
 {
@@ -180,7 +191,7 @@ static void imx95_sai_tx_tick(void *opaque)
     imx95_sai_update_irq(s);
 
     timer_mod(s->tx_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SAI_TX_WORD_NS);
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + sai_word_ns(s));
 }
 
 static void imx95_sai_tx_push(IMX95SaiState *s, uint32_t word)
@@ -293,7 +304,7 @@ static void imx95_sai_rx_tick(void *opaque)
     }
 
     timer_mod(s->rx_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SAI_TX_WORD_NS);
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + sai_word_ns(s));
 }
 
 /* Queue the exact bytes the DMA wrote to TDR0 for the audio backend. */
@@ -334,6 +345,45 @@ static void imx95_sai_voice_set(IMX95SaiState *s, bool on)
     if (s->voice && on != s->voice_active) {
         audio_be_set_active_out(s->audio_be, s->voice, on);
         s->voice_active = on;
+    }
+}
+
+/*
+ * THE CODEC TELLS US THE RATE, because on this board the codec IS the clock.
+ *
+ * The SAI is a bit-clock slave here (TCR2.BCD_MSTR = 0): the wm8962 drives
+ * BCLK and LRCLK, and its rate is programmed over I2C. The rate is therefore
+ * NOT PRESENT IN THIS DEVICE - the SAI's own divider registers are identical at
+ * 48 kHz and 16 kHz - so we do not compute it, we RECEIVE it, on the same edge
+ * the hardware would.
+ *
+ * Re-opens the backend voice so the captured stream carries the true rate: a
+ * 16 kHz stream written into a 48 kHz voice plays three times too fast, and
+ * that is precisely the bug this line exists to kill.
+ */
+static void imx95_sai_codec_rate(void *opaque, int n, int level)
+{
+    IMX95SaiState *s = opaque;
+    uint32_t rate = (uint32_t)level;
+
+    if (!rate || rate == s->rate) {
+        return;
+    }
+    s->rate = rate;
+
+    if (s->audio_be) {
+        struct audsettings as = {
+            .freq = rate,
+            .nchannels = 2,
+            .fmt = AUDIO_FORMAT_S16,
+            .big_endian = false,
+        };
+        bool was_active = s->voice_active;
+
+        s->voice = audio_be_open_out(s->audio_be, s->voice, "imx95-sai-tx", s,
+                                     imx95_sai_audio_cb, &as);
+        s->voice_active = false;
+        imx95_sai_voice_set(s, was_active);
     }
 }
 
@@ -398,7 +448,7 @@ static void imx95_sai_write(void *opaque, hwaddr offset, uint64_t value,
             imx95_sai_tx_update_flags(s);
             imx95_sai_voice_set(s, true);
             timer_mod(s->tx_timer,
-                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SAI_TX_WORD_NS);
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + sai_word_ns(s));
         } else if (!(v & TCSR_TE) && (old & TCSR_TE)) {
             timer_del(s->tx_timer);
             imx95_sai_voice_set(s, false);
@@ -426,7 +476,7 @@ static void imx95_sai_write(void *opaque, hwaddr offset, uint64_t value,
             /* Receiver enabled: start filling the FIFO with samples. */
             imx95_sai_rx_update_flags(s);
             timer_mod(s->rx_timer,
-                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SAI_TX_WORD_NS);
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + sai_word_ns(s));
         } else if (!(v & RCSR_RE) && (old & RCSR_RE)) {
             timer_del(s->rx_timer);
         }
@@ -474,7 +524,7 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
 {
     IMX95SaiState *s = IMX95_SAI(dev);
     struct audsettings as = {
-        .freq = 48000,
+        .freq = SAI_DEFAULT_RATE,
         .nchannels = 2,
         .fmt = AUDIO_FORMAT_S16,
         .big_endian = false,
@@ -535,6 +585,13 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
     qdev_init_gpio_out_named(dev, &s->dma_req, "dma-req", 1);
+    /*
+     * The codec drives our clocks, so it also drives our RATE. This carries the
+     * sample rate in Hz, not a level - it is the wire on which the bit-clock
+     * master tells its slave what it is clocking at.
+     */
+    qdev_init_gpio_in_named(dev, imx95_sai_codec_rate, "codec-rate", 1);
+    s->rate = SAI_DEFAULT_RATE;
     s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_sai_tx_tick, s);
     s->rx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_sai_rx_tick, s);
 
