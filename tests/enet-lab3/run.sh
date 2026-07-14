@@ -77,6 +77,17 @@ WORK=$(mktemp -d)
 # weeks; every one of our own nodes accepted it, and both real peers correctly
 # refused to).  An INDEPENDENT implementation of the agreed body is the only
 # local oracle that can see that, so the stand-ins run 91's strict checker.
+#
+# ⚠ FLAG DAY IN PROGRESS (v1 body -> v2 body). The body grew a per-BOOT
+# INCARNATION nonce at [24..27] so a peer that REBOOTS is no longer condemned as
+# a stale-buffer replay (holobench's departure/rejoin lab proved the v1 freshness
+# rule condemns a healthy restarted peer ~9,000 times). The nonce lands where v1
+# put 0x5A fill, so THERE IS NO COMPATIBLE HALF-STEP: a v1 peer and a v2 peer read
+# each other's frames as BAD_PATTERN. Until 91's enetbeacon.c carries the same
+# nonce, THIS SELF-TEST IS EXPECTED RED against the v1 cross-impl peer - and that
+# red is the contract being enforced, not a regression. Ratification of the
+# offsets is on the bus; when the peer's md5 below changes to a v2 build, the
+# green means interop again. Do not "fix" the red by reverting the nonce.
 IMX91_SRC=${IMX91_SRC:-$HOME/Documents/GitHub/91emulator/tests/interconnect-imx91/enetbeacon.c}
 [ -f "$IMX91_SRC" ] || skip "no cross-impl peer source ($IMX91_SRC)"
 "$CC" -static -O2 -o "$WORK/imx91-beacon" "$IMX91_SRC" || skip "cross-impl peer failed to build"

@@ -55,12 +55,16 @@
  *     a frame that is INTACT is. Magic, self-consistent ethertype and pattern
  *     are checked before a peer is counted.
  *
- *  4. FRESHNESS. A beacon's sequence only ever goes UP. A frame whose seq has
- *     not advanced is a REPLAY - which is exactly what a stalled RX ring, or a
- *     buffer that is never rewritten, looks like from the outside. It is
- *     CORRUPT, not a sighting.
+ *  4. FRESHNESS, SCOPED TO AN INCARNATION. Within one boot of a peer, its
+ *     sequence only ever goes UP; a seq that has not advanced is a REPLAY - what
+ *     a stalled RX ring, or a buffer that is never rewritten, looks like from the
+ *     outside. It is CORRUPT, not a sighting.
  *       A PEER THAT ONLY EVER REPEATS ITSELF IS SAYING NOTHING NEW, AND A NODE
  *       SAYING NOTHING NEW IS SAYING NOTHING.  (mcxn947)
+ *     But "within one boot" is load-bearing: a peer that REBOOTS restarts its
+ *     counter at 1, and that is NOT a replay (see INCARN_OFF below). A seq that
+ *     goes backwards under a NEW incarnation is a reboot - re-baselined and
+ *     counted, never condemned.
  *     A GAP in the sequence is a LOSS: logged as a statistic, NEVER a failure.
  *     This is multicast; frames are allowed to go missing.
  *
@@ -79,6 +83,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
@@ -95,13 +100,58 @@
 #define SEND_EVERY_MS 200
 #define QUIET_MS 5000           /* a peer silent this long has gone LOST */
 
-/* The fleet's checkable body. Do not "improve" any of these four numbers. */
+/* The fleet's checkable body. Do not "improve" any of these numbers. */
 #define BEACON_MAGIC 0xB5B6B7C0u
 #define MAGIC_OFF    14
 #define SELF_ET_OFF  18
 #define SEQ_OFF      20
-#define FILL_OFF     24
+#define INCARN_OFF   24         /* per-BOOT nonce - see below. v2 of the body. */
+#define FILL_OFF     28
 #define FILL_BYTE    0x5A
+
+/*
+ * THE INCARNATION, AND WHY A SEQUENCE NUMBER ALONE IS A BUG.
+ *
+ * Rule 4 said: a beacon's sequence only ever goes UP, so a seq that has not
+ * advanced is a REPLAY - a stalled RX ring handing us the same buffer forever.
+ * Every node in the fleet adopted that check, and it caught real replays.
+ *
+ * It is also WRONG, and holobench proved it by doing the one thing no unit test
+ * does: they KILLED a peer mid-run and BROUGHT IT BACK. mcx departed at t+420
+ * and rejoined at t+480 - a fresh QEMU, fresh firmware, and a beacon counter
+ * that starts over at 1. Our node, and rt1180's, independently condemned it
+ * ~9,000 times each:
+ *
+ *   ENET-LAB3 CORRUPT: PAYLOAD-REPLAY peer 0x88b5 seq 1 <= last 13485
+ *
+ *   A PEER THAT RESTARTED IS NOT A PEER THAT REPLAYED. The freshness check
+ *   cannot tell "my RX path handed me an old frame" from "my peer REBOOTED and
+ *   started counting again" - and it condemns an honest, healthy, freshly-booted
+ *   peer, forever, as a stale buffer.
+ *
+ * No stale buffer can produce a monotonically INCREASING run starting at 1. The
+ * information needed to tell the two apart was never on the wire.
+ *
+ * So the body carries an INCARNATION: 4 bytes chosen once at boot, never again.
+ *
+ *   seq went BACKWARDS + SAME incarnation  ->  REPLAY. A stale buffer. CONDEMN.
+ *   seq went BACKWARDS + NEW  incarnation  ->  A REBOOT. Re-baseline. COUNT IT.
+ *
+ * This is TCP's ISN, DTLS's epoch, a Lamport clock's epoch. Every protocol that
+ * survives a peer restart has one, for exactly this reason - and a board farm
+ * restarts boards for a living.
+ *
+ *   WITHOUT AN INCARNATION, "MONOTONIC" IS A CLAIM ABOUT A PROCESS, NOT ABOUT A
+ *   PEER.
+ *
+ * ⚠ THIS IS A FLAG DAY. The nonce lands at [24..27], which the v1 body filled
+ * with 0x5A - so a v1 receiver reads a v2 frame as BAD_PATTERN, and a v2
+ * receiver reads a v1 frame the same way. There is no compatible half-step: the
+ * frame is 64 bytes EXACTLY and every spare byte was already spoken for. All
+ * four nodes move together or the segment is red, and a red segment during the
+ * cutover is CORRECT - it is the contract being enforced, not a regression.
+ */
+#define INCARN_LEN   4
 
 /*
  * The fleet's ALLOCATED ETHERTYPE BLOCK, and the distinction that goes with it.
@@ -156,6 +206,7 @@ int main(int argc, char **argv)
 {
     const char *ifname;
     unsigned my_et;
+    uint32_t my_incarn = 0;    /* THIS boot of THIS node. Chosen once. */
     /* REQUIRED peers: these, and only these, gate PASS. */
     unsigned peers[MAX_PEERS];
     int seen[MAX_PEERS] = {0};          /* seen THIS round (we re-arm) */
@@ -163,6 +214,8 @@ int main(int argc, char **argv)
     /* VALIDATED peers: every node in the allocated block, required or not. */
     int blk_ever[BEACON_ET_SLOTS] = {0};
     uint32_t blk_last_seq[BEACON_ET_SLOTS] = {0};
+    uint32_t blk_incarn[BEACON_ET_SLOTS] = {0};   /* which BOOT of that peer */
+    unsigned long long reboots = 0;               /* a statistic, NEVER a failure */
     long blk_last_rx[BEACON_ET_SLOTS] = {0};
     int blk_lost[BEACON_ET_SLOTS] = {0};
     unsigned long long losses = 0;
@@ -241,6 +294,32 @@ int main(int argc, char **argv)
     frame[MAGIC_OFF + 1] = (BEACON_MAGIC >> 16) & 0xff;
     frame[MAGIC_OFF + 2] = (BEACON_MAGIC >> 8) & 0xff;
     frame[MAGIC_OFF + 3] = BEACON_MAGIC & 0xff;
+
+    /*
+     * Our incarnation: chosen ONCE, here, and never again. It says "this is a
+     * different boot of the same node" - the one fact a sequence number cannot
+     * carry across a restart. Prefer real entropy; fall back to a mix that still
+     * differs per boot, because a CONSTANT here silently re-creates the bug (a
+     * peer that reboots would look like the same incarnation and be condemned).
+     */
+    {
+        int rf = open("/dev/urandom", O_RDONLY);
+        int got = 0;
+
+        if (rf >= 0) {
+            got = read(rf, &my_incarn, sizeof(my_incarn)) == sizeof(my_incarn);
+            close(rf);
+        }
+        if (!got) {
+            my_incarn = (uint32_t)time(NULL) * 2654435761u
+                      ^ (uint32_t)getpid() * 2246822519u
+                      ^ (uint32_t)(uintptr_t)&frame;
+        }
+        frame[INCARN_OFF + 0] = (my_incarn >> 24) & 0xff;
+        frame[INCARN_OFF + 1] = (my_incarn >> 16) & 0xff;
+        frame[INCARN_OFF + 2] = (my_incarn >> 8) & 0xff;
+        frame[INCARN_OFF + 3] = my_incarn & 0xff;
+    }
     frame[SELF_ET_OFF + 0] = (my_et >> 8) & 0xff;   /* must equal bytes 12..13 */
     frame[SELF_ET_OFF + 1] = my_et & 0xff;
     memset(frame + FILL_OFF, FILL_BYTE, FRAME_LEN - FILL_OFF);
@@ -405,11 +484,38 @@ int main(int argc, char **argv)
             }
         }
 
-        /* Rule 4: freshness. A replayed beacon is stale, not a sighting. */
+        /*
+         * Rule 4: freshness - and it is only meaningful WITHIN ONE INCARNATION.
+         *
+         * A sequence that goes backwards means one of two completely different
+         * things, and the seq alone cannot tell you which:
+         *
+         *   SAME incarnation -> the peer never restarted, so a seq we have
+         *                       already seen can only be OUR RX path handing us
+         *                       a stale buffer. That is the bug this rule exists
+         *                       to catch. CONDEMN.
+         *   NEW  incarnation -> the peer REBOOTED. Its counter legitimately
+         *                       starts over. Re-baseline and count it. Condemning
+         *                       this is condemning a healthy node for being
+         *                       restarted, which is what a board farm DOES.
+         */
         if (bad == BAD_OK) {
+            uint32_t incarn = be32(buf + INCARN_OFF);
+
             seq = be32(buf + SEQ_OFF);
-            if (blk_ever[slot] && seq <= blk_last_seq[slot]) {
-                bad = BAD_STALE;
+
+            if (blk_ever[slot] && incarn != blk_incarn[slot]) {
+                printf("ENET-LAB3 REBOOT: peer 0x%04x incarnation %08x -> %08x "
+                       "(seq restarts at %u; NOT a replay)\n",
+                       BEACON_ET_LO + slot, blk_incarn[slot], incarn, seq);
+                fflush(stdout);
+                reboots++;
+                blk_incarn[slot] = incarn;
+                blk_last_seq[slot] = 0;     /* re-baseline: a new boot, a new run */
+            } else if (blk_ever[slot] && seq <= blk_last_seq[slot]) {
+                bad = BAD_STALE;            /* same boot, old seq: a REAL replay */
+            } else if (!blk_ever[slot]) {
+                blk_incarn[slot] = incarn;
             }
         }
 
