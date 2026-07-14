@@ -65,7 +65,7 @@ for f in "$QEMU" "$IMAGE" "$DTC" "$SM_ELF" "$DEFAULT_CPIO" "$DTB"; do
 done
 command -v "$CC" >/dev/null || skip "no aarch64 cross-compiler ($CC)"
 
-WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+WORK=$(mktemp -d)
 
 # --- build the raw-L2 lab tool (static aarch64) ---
 "$CC" -static -O2 -Wall "$HERE/enet-lab3.c" -o "$WORK/enet-lab3" || skip "compile failed"
@@ -136,13 +136,75 @@ INIT
 chmod +x "$root/init"
 ( cd "$root" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/lab.cpio.gz"
 
+# NO NODE MAY OUTLIVE THE RUN THAT CREATED IT.
+#
+# holobench killed a runner, its QEMU children were orphaned, and they kept
+# beaconing the OLD protocol onto a mcast group the next run reuses. Their
+# "4-node lab" became an 8-node segment, half of it ghosts, and their scorer
+# faithfully accused two peers of bugs they had fixed hours earlier.
+#
+#   A KILL THAT REACHES THE WRAPPER AND NOT THE PROCESS IS NOT A KILL. (mcxn)
+#   AN ORPHANED PROCESS ON A SHARED BUS IS A LIAR THAT OUTLIVED ITS RUN, AND
+#   ITS TESTIMONY IS INDISTINGUISHABLE FROM A PEER'S.               (holobench)
+#
+# `timeout` bounds the RUN; it does NOTHING if the HARNESS is killed. So the
+# nodes also carry PR_SET_PDEATHSIG (setpriv --pdeathsig KILL): the kernel kills
+# them when their parent dies, whatever it died of - including SIGKILL, where no
+# trap of ours could ever run.
+#
+# AND THE SIGNAL MUST RIDE ON QEMU, NOT ON THE WRAPPER. The first version of this
+# guard read
+#
+#     setpriv --pdeathsig KILL -- timeout ... qemu        # WRONG
+#
+# which arms `timeout` and leaves QEMU - timeout's CHILD - to be orphaned exactly
+# as before. Killing the harness left FOUR nodes beaconing on the lab group, and
+# the preflight below caught them on the next run. I reproduced the bug inside the
+# fix for it, and it is the bug mcxn already named:
+#
+#   A KILL THAT REACHES THE WRAPPER AND NOT THE PROCESS IS NOT A KILL.
+#
+# So arm BOTH links of the chain: the harness's death kills `timeout`, and
+# timeout's death kills QEMU. setpriv EXECs its target, so each signal lands on
+# the process that actually runs.
+PDEATH=""
+if command -v setpriv >/dev/null && setpriv --help 2>&1 | grep -q pdeathsig; then
+    PDEATH="setpriv --pdeathsig KILL --"
+fi
+# ONE trap. A second `trap ... EXIT` silently REPLACES the first, so declaring
+# cleanup and child-killing separately would have leaked $WORK on every run and
+# said nothing about it. Killing our direct children (the `timeout`s) is enough
+# ONLY because QEMU now dies with its own parent - that is the whole point.
+cleanup() { pkill -KILL -P $$ 2>/dev/null || true; rm -rf "$WORK"; }
+trap cleanup EXIT INT TERM
+
+# NOTE THE `exec`, IT IS LOad-BEARING. `boot ... &` runs the function in a
+# SUBSHELL, so without exec the tree is
+#
+#     harness -> subshell -> timeout -> qemu
+#
+# and the pdeathsig on `timeout` is armed against the SUBSHELL, not the harness.
+# SIGKILL the harness and the subshell is merely orphaned - still alive - so
+# nothing fires and QEMU beacons on. That is exactly what happened: four nodes
+# outlived the run, and my first "PASS" was a test that had launched nothing.
+# `exec` REPLACES the subshell, so the chain is harness -> timeout -> qemu and
+# every link is armed.
 boot() { # $1=impl $2=mcast-group $3=mac $4=my_et $5=peers-csv $6=logfile [$7=deadline_ms]
-    timeout --signal=KILL "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+    exec $PDEATH timeout --signal=KILL "$TMO" $PDEATH "$QEMU" \
+        -M imx95-19x19-evk -m 2G -display none \
         -kernel "$IMAGE" -dtb "$WORK/enetc.dtb" -initrd "$WORK/lab.cpio.gz" \
         -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_impl=$1 lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000}" \
         -device loader,file="$SM_ELF",cpu-num=6 \
         -nic "socket,mcast=$2,model=fsl-enetc,mac=$3" \
-        -serial file:"$6" -serial null -monitor none >/dev/null 2>&1 || true
+        -serial file:"$6" -serial null -monitor none >/dev/null 2>&1
+}
+
+# REFUSE a wire that is not empty. Not a warning - a refusal. A warning printed
+# above a green result is a warning nobody reads. A ghost stand-in from a
+# previous run would be counted as a live peer and OUR GREEN WOULD BE THE LIE.
+preflight() { # $1=group:port
+    local g=${1%%:*} p=${1##*:}
+    python3 "$HERE/wire-empty.py" "$g" "$p" "${WIRE_SETTLE:-2}" || exit 1
 }
 
 if [ "$JOIN" = 1 ]; then
@@ -158,6 +220,9 @@ if [ "$JOIN" = 1 ]; then
     # So nobody on the segment was validating imx91's body - including us. Ours
     # is a runtime list rather than a compiled-in one, so it costs one argument.
     echo "== JOIN: i.MX 95 node on the fleet segment $FLEET_GROUP (et 0x88B7) =="
+    # NOTE: no preflight here - the fleet segment is SUPPOSED to have peers on
+    # it. An empty-wire check would be exactly backwards. The ghost risk is ours
+    # to avoid by not orphaning our own node (pdeathsig, above).
     boot imx95 "$FLEET_GROUP" 02:49:4d:58:95:01 0x88B7 \
          0x88B5,0x88B6,0x88B8 "$WORK/imx95.log"
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
@@ -170,6 +235,7 @@ if [ "${NEG:-0}" = 1 ]; then
     # plainly live (imx95 sees 0x88B5 traffic) yet imx95 must NOT declare PASS,
     # because it never saw 0x88B6. "Seeing traffic" is not "seeing both peers";
     # an assertion that cannot fail is worth nothing. Short deadline so it's fast.
+    preflight "$SELF_GROUP"
     echo "== NEG-TEST: imx95 + only ONE peer (0x88B5) up on $SELF_GROUP (must NOT pass) =="
     boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 0x88B5,0x88B6 "$WORK/imx95.log" 25000 &
     boot imx91 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 0x88B7,0x88B6 "$WORK/peerA.log" 25000 &
@@ -186,6 +252,7 @@ if [ "${NEG:-0}" = 1 ]; then
     echo "RESULT: INCONCLUSIVE (expected imx95 to accept 0x88B5's body and fail on missing 0x88B6)"; exit 1
 fi
 
+preflight "$SELF_GROUP"
 echo "== INTEROP SELF-TEST on private mcast $SELF_GROUP (FOUR nodes) =="
 echo "   imx95 (0x88B7) runs OUR node.  ALL THREE stand-ins run 91emulator's OWN"
 echo "   beacon (BEACON_STRICT=1) - an INDEPENDENT implementation of the agreed"
