@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# The i.MX 95 node for the fleet 3-node raw-L2 segment (mcxn947 + rt1180 + imx95,
-# a Cortex-M33 + Cortex-M7 + Cortex-A55 mix sharing ONE wire, each running its
-# own vendor firmware). QEMU socket-MCAST is what lets 3+ instances share an L2
-# segment (listen/connect is 2-node only). Each node broadcasts a distinct
-# ethertype and must OBSERVE both others before it declares PASS.
+# The i.MX 95 node for the fleet raw-L2 segment (mcxn947 + rt1180 + imx95 +
+# imx91: a Cortex-M33 + Cortex-M7 + Cortex-A55 + Cortex-A55 mix sharing ONE wire,
+# each running its own vendor firmware). QEMU socket-MCAST is what lets 3+
+# instances share an L2 segment (listen/connect is 2-node only). Each node
+# broadcasts a distinct ethertype and must OBSERVE every other before it PASSes.
 #
 #   Fleet segment : mcast 230.0.0.9:31337
-#   ethertypes    : mcx 0x88B5 / rt1180 0x88B6 / imx95 0x88B7
+#   ethertypes    : mcx 0x88B5 / rt1180 0x88B6 / imx95 0x88B7 / imx91 0x88B8
+#
+# FOUR nodes, not three. We watched only 0x88B5+0x88B6 for weeks, so imx91's
+# frames fell out at our "is this even my protocol?" test and WE NEVER READ BYTE
+# 14 OF THEM. Nobody on the segment was validating imx91's body - mcx's peer set
+# is compiled in and 0x88B8 is not in it, so its checker returns BAD_OK on their
+# frames instantly. AN ABSENCE OF REJECTION IS NOT AN ACCEPTANCE: "mcx never
+# rejected imx91" and "mcx never LOOKED at imx91" are the same cell in a matrix.
 #
 # TWO MODES:
-#   (default) INTEROP SELF-TEST - three local i.MX 95 instances on a PRIVATE
-#     mcast group. Ours (0x88B7) runs OUR node; BOTH STAND-INS RUN 91EMULATOR'S
-#     OWN BEACON, built from their source, with BEACON_STRICT=1.
+#   (default) INTEROP SELF-TEST - four local i.MX 95 instances on a PRIVATE
+#     mcast group. Ours (0x88B7) runs OUR node; ALL THREE STAND-INS RUN
+#     91EMULATOR'S OWN BEACON, built from their source, with BEACON_STRICT=1 -
+#     including one at 0x88B8, so we prove BOTH directions.
 #
 #     This used to boot three copies of our own tool, and that is precisely why
 #     it was green for weeks while we were UNINTEROPERABLE: we emitted an ASCII
@@ -138,11 +146,23 @@ boot() { # $1=impl $2=mcast-group $3=mac $4=my_et $5=peers-csv $6=logfile [$7=de
 }
 
 if [ "$JOIN" = 1 ]; then
+    # THE SEGMENT IS FOUR NODES, NOT THREE. We used to watch only 0x88B5 and
+    # 0x88B6, which meant imx91's frames (0x88B8) fell out at our "is this even
+    # my protocol?" test and WE NEVER READ BYTE 14 OF THEM. 91emulator found the
+    # same hole in mcx's firmware, where is_beacon_et() is hardcoded to three
+    # ethertypes and 0x88B8 appears nowhere:
+    #
+    #   AN ABSENCE OF REJECTION IS NOT AN ACCEPTANCE. "mcx never rejected imx91"
+    #   and "mcx never LOOKED at imx91" are the same cell in the matrix.
+    #
+    # So nobody on the segment was validating imx91's body - including us. Ours
+    # is a runtime list rather than a compiled-in one, so it costs one argument.
     echo "== JOIN: i.MX 95 node on the fleet segment $FLEET_GROUP (et 0x88B7) =="
-    boot imx95 "$FLEET_GROUP" 02:49:4d:58:95:01 0x88B7 0x88B5,0x88B6 "$WORK/imx95.log"
+    boot imx95 "$FLEET_GROUP" 02:49:4d:58:95:01 0x88B7 \
+         0x88B5,0x88B6,0x88B8 "$WORK/imx95.log"
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
-    grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 saw both fleet peers)"; exit 0; }
-    echo "RESULT: FAIL/incomplete - were mcx(0x88B5) and rt1180(0x88B6) both live on $FLEET_GROUP?"; exit 1
+    grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 checked and counted all three peers)"; exit 0; }
+    echo "RESULT: FAIL/incomplete - were mcx(0x88B5), rt1180(0x88B6) and imx91(0x88B8) all live on $FLEET_GROUP?"; exit 1
 fi
 
 if [ "${NEG:-0}" = 1 ]; then
@@ -166,15 +186,23 @@ if [ "${NEG:-0}" = 1 ]; then
     echo "RESULT: INCONCLUSIVE (expected imx95 to accept 0x88B5's body and fail on missing 0x88B6)"; exit 1
 fi
 
-echo "== INTEROP SELF-TEST on private mcast $SELF_GROUP =="
-echo "   imx95 (0x88B7) runs OUR node.  Both stand-ins run 91emulator's OWN"
+echo "== INTEROP SELF-TEST on private mcast $SELF_GROUP (FOUR nodes) =="
+echo "   imx95 (0x88B7) runs OUR node.  ALL THREE stand-ins run 91emulator's OWN"
 echo "   beacon (BEACON_STRICT=1) - an INDEPENDENT implementation of the agreed"
 echo "   body.  If their checker counts us, our frames are interop-correct; if we"
 echo "   were still emitting the old ASCII payload they would condemn us, which is"
 echo "   exactly what happened on the real 4-node wire."
-boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 0x88B5,0x88B6 "$WORK/imx95.log" &
-boot imx91 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 0x88B7,0x88B6 "$WORK/peerA.log" &
-boot imx91 "$SELF_GROUP" 54:27:8d:00:00:00 0x88B6 0x88B7,0x88B5 "$WORK/peerB.log" &
+echo "   AND THE TRAFFIC RUNS BOTH WAYS: our checker reads THEIR bodies too, at"
+echo "   0x88B8 - the ethertype nobody on the real segment was checking, because"
+echo "   mcx's peer set is compiled in and does not contain it."
+boot imx95 "$SELF_GROUP" 02:49:4d:58:95:01 0x88B7 \
+     0x88B5,0x88B6,0x88B8 "$WORK/imx95.log" &
+boot imx91 "$SELF_GROUP" 02:4d:43:58:00:01 0x88B5 \
+     0x88B7,0x88B6,0x88B8 "$WORK/peerA.log" &
+boot imx91 "$SELF_GROUP" 54:27:8d:00:00:00 0x88B6 \
+     0x88B7,0x88B5,0x88B8 "$WORK/peerB.log" &
+boot imx91 "$SELF_GROUP" 02:91:91:91:91:91 0x88B8 \
+     0x88B7,0x88B5,0x88B6 "$WORK/peerC.log" &
 wait
 
 clean() { sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$1"; }
@@ -184,23 +212,38 @@ echo "--- peer A (91's checker, et 0x88B5) ---"
 clean "$WORK/peerA.log" | grep -aE 'ENET-LAB3 (PASS|CORRUPT|FAIL)' | head -4
 echo "--- peer B (91's checker, et 0x88B6) ---"
 clean "$WORK/peerB.log" | grep -aE 'ENET-LAB3 (PASS|CORRUPT|FAIL)' | head -4
+echo "--- peer C (91's checker, et 0x88B8 - the one nobody was checking) ---"
+clean "$WORK/peerC.log" | grep -aE 'ENET-LAB3 (PASS|CORRUPT|FAIL)' | head -4
 
 fail=0
 # 1. An INDEPENDENT implementation must never call our frames corrupt. This is
 #    the assertion that would have caught the ASCII body, and nothing we could
 #    have written on our own side would have.
-for p in peerA peerB; do
+for p in peerA peerB peerC; do
     if clean "$WORK/$p.log" | grep -aq "ENET-LAB3 CORRUPT.*0x88b7"; then
         echo "FAIL: 91's checker condemned OUR frames ($p) - the body is wrong:"
         clean "$WORK/$p.log" | grep -a "ENET-LAB3 CORRUPT.*0x88b7" | head -2
         fail=1
     fi
 done
-# 2. Both independent peers must have actually COUNTED us (PASS = they saw all
-#    their peers, and we are one of them).
-for p in peerA peerB; do
+# 2. Every independent peer must have actually COUNTED us (PASS = it saw all
+#    its peers, and we are one of them).
+for p in peerA peerB peerC; do
     clean "$WORK/$p.log" | grep -aq 'ENET-LAB3 PASS' || {
         echo "FAIL: 91's checker ($p) never passed - it did not count us"; fail=1; }
+done
+# 2b. AND THE TRAFFIC MUST RUN THE OTHER WAY. An absence of rejection is not an
+#     acceptance: "we never rejected 0x88B8" and "we never LOOKED at 0x88B8" are
+#     the same log. Assert that WE read and ACCEPTED imx91's body - the check
+#     that no node on the real segment was performing, because mcx's peer set is
+#     compiled in and 0x88B8 is not in it.
+if ! clean "$WORK/imx95.log" | grep -aq 'rx: peer 0x88b8 body OK'; then
+    echo "FAIL: we never validated imx91's body (0x88B8) - we are not an oracle"
+    fail=1
+fi
+for et in 0x88b5 0x88b6 0x88b8; do
+    clean "$WORK/imx95.log" | grep -aq "rx: peer $et body OK" || {
+        echo "FAIL: we never accepted a valid body from $et"; fail=1; }
 done
 # 3. We must RE-ARM, not latch: a second beat proves the oracle did not expire.
 beats=$(clean "$WORK/imx95.log" | grep -ac 'ENET-LAB3 PASS:')
@@ -210,8 +253,11 @@ if [ "${beats:-0}" -lt 2 ]; then
 fi
 
 if [ "$fail" = 0 ]; then
-    echo "RESULT: PASS - our body was accepted by an INDEPENDENT implementation"
-    echo "  (91emulator's strict checker @ $PEER_REPO counted us; we re-armed $beats times)"
+    echo "RESULT: PASS - interop verified BOTH WAYS against an implementation we did not write"
+    echo "  they -> us: 91emulator's strict checker @ $PEER_REPO counted us at 0x88B5/0x88B6/0x88B8"
+    echo "  us -> them: WE read and accepted their bodies, INCLUDING 0x88B8 - the ethertype"
+    echo "              no node on the real segment was checking (mcx's peer set is compiled in)"
+    echo "  we re-armed $beats times (no latch)"
     exit 0
 fi
 echo "RESULT: FAIL - see logs"
