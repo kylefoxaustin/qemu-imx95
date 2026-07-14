@@ -80,7 +80,7 @@ mke2fs -F -q -t ext4 -L igclang -d "$RF" "$DISK" >/dev/null 2>&1 || die "mke2fs 
 
 LOG=$(mktemp); trap 'rm -f "$LOG"' EXIT
 echo "== booting i.MX 95 with the clang rootfs as root (/dev/mmcblk0) =="
-timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m "$MEM" -display none \
+timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m "$MEM" -display none \
   -kernel "$IMAGE" -dtb "$DTB" \
   -append "console=ttyLP0,115200 root=/dev/mmcblk0 rootwait rootfstype=ext4 rw init=/igtest.sh cpuidle.off=1" \
   -drive if=none,format=raw,file="$DISK",id=mmc0 -device emmc,drive=mmc0 \

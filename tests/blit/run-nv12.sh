@@ -128,7 +128,7 @@ chmod +x "$STAGE/init"
 # Set BLIT_TRACE=1 to capture the blit command-stream trace (verbose) to $QERR.
 TRACE_ENV=""
 [ "${BLIT_TRACE:-0}" = 1 ] && TRACE_ENV="IMX95_DPU_TRACE=1 IMX95_DPU_TRACE_PIPE=1"
-env $TRACE_ENV timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+env $TRACE_ENV timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
     -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.cpio.gz" \
     -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
     -device loader,file="$SM_ELF",cpu-num=6 \

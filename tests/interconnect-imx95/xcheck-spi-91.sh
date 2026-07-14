@@ -91,12 +91,12 @@ INIT
 mkird 95 "$CPIO95" recv; mkird 95 "$CPIO95" send
 mkird 91 "$CPIO91" recv; mkird 91 "$CPIO91" send
 
-boot95() { timeout "$TMO" "$QEMU95" -M imx95-19x19-evk -m 2G -display none \
+boot95() { timeout -k 5 "$TMO" "$QEMU95" -M imx95-19x19-evk -m 2G -display none \
     -kernel "$IMG95" -dtb "$WORK/d95.dtb" -initrd "$1" \
     -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
     -device loader,file="$SM95",cpu-num=6 $2 \
     -device spi-link,bus=lpspi7,chardev=spil -serial file:"$3" -serial null -monitor none >/dev/null 2>&1 & }
-boot91() { timeout "$TMO" "$QEMU91" -M imx91-11x11-evk -smp 1 -m 2G -display none \
+boot91() { timeout -k 5 "$TMO" "$QEMU91" -M imx91-11x11-evk -smp 1 -m 2G -display none \
     -kernel "$IMG91" -dtb "$WORK/d91.dtb" -initrd "$1" \
     -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" $2 \
     -device spi-link,bus=lpspi1,chardev=spil -serial file:"$3" -nic none >/dev/null 2>&1 & }

@@ -58,7 +58,7 @@ python3 "$HERE/mkbootimg.py" "$UBOOT_BIN" "$WORK/boot.img" >/dev/null
     printf 'tftpboot 0x91000000 payload.bin\n';        sleep 40
     printf 'crc32 0x91000000 ${filesize}\n';           sleep 6
     printf 'printenv filesize\n';                      sleep 3
-} | timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+} | timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
     -device loader,file="$SPL_BIN",addr=0x20480000,cpu-num=0,force-raw=on \
     -device loader,file="$SM_ELF",cpu-num=6 \
     -drive if=none,format=raw,file="$WORK/boot.img",id=mmc0 -device emmc,drive=mmc0 \

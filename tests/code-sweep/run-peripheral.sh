@@ -185,7 +185,7 @@ soak_fail=""; iter=1
 while [ "$iter" -le "$ITERS" ]; do
     LOG="$WORK/serial-$iter.log"
     echo "=== [iter $iter/$ITERS] booting i.MX 95 (eMMC + USB + ENETC NIC) ==="
-    timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+    timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
       -kernel "$IMAGE" -dtb "$DTB_USE" -initrd "$WORK/initrd.gz" \
       -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
       -device loader,file="$SM_ELF",cpu-num=6 \

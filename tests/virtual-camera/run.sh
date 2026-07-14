@@ -84,7 +84,7 @@ INIT
 chmod +x "$STAGE/init"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.gz"
 
-timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
+timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -kernel "$IMAGE" -dtb "$WORK/patched.dtb" -initrd "$WORK/initrd.gz" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
   -device loader,file="$SM_ELF",cpu-num=6 \

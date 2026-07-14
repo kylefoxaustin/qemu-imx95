@@ -25,7 +25,7 @@ done
 LOG=$(mktemp /tmp/bsp-smoke.XXXX.log)
 echo "== BSP-matrix boot-smoke: $LABEL =="
 echo "   kernel=$(basename "$KERNEL")  sm=$(basename "$SM_FW")"
-timeout "$TIMEOUT" "$QEMU" -M imx95-19x19-evk -m 4G -display none -serial "file:$LOG" -monitor none \
+timeout -k 5 "$TIMEOUT" "$QEMU" -M imx95-19x19-evk -m 4G -display none -serial "file:$LOG" -monitor none \
   -kernel "$KERNEL" -dtb "$DTB" -initrd "$INITRD" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
   -device loader,file="$SM_FW",cpu-num=6 &

@@ -98,7 +98,7 @@ drive() {
     printf 'booti 0x90400000 0x94000000:%s 0x93000000\n' "$RD_SZ"; sleep 90
 }
 
-drive | timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m "$MEM" -display none \
+drive | timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m "$MEM" -display none \
     -device loader,file="$SPL_BIN",addr=0x20480000,cpu-num=0,force-raw=on \
     -device loader,file="$SM_ELF",cpu-num=6 \
     -drive if=none,format=raw,file="$WORK/boot.img",id=mmc0 -device emmc,drive=mmc0 \

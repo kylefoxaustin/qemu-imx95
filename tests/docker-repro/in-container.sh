@@ -52,7 +52,7 @@ cd /root/qemu-imx95
 
 STEP "2a. no-artifact smoke: hello-imx95"
 make -C tests/hello-imx95 >/tmp/hello.log 2>&1 || { FAIL "hello build"; tail -10 /tmp/hello.log; }
-timeout 15 ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
+timeout -k 5 15 ./build/qemu-system-aarch64 -M imx95-19x19-evk -nographic -m 2G \
     -kernel tests/hello-imx95/hello.bin 2>/dev/null | grep -m1 "Hello from i.MX 95" \
     && echo "OK: hello printed" || FAIL "hello did not print"
 

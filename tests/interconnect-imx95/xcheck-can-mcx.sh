@@ -76,7 +76,7 @@ INIT
 chmod +x "$root/init"; ( cd "$root" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/ird.gz"
 
 echo "== booting i.MX95 RESPONDER (Linux FlexCAN can0, TCP server :$PORT) =="
-timeout "$TMO" "$QEMU95" -M imx95-19x19-evk -m 2G -display none \
+timeout -k 5 "$TMO" "$QEMU95" -M imx95-19x19-evk -m 2G -display none \
   -kernel "$IMG95" -dtb "$WORK/can.dtb" -initrd "$WORK/ird.gz" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
   -device loader,file="$SM95",cpu-num=6 \
@@ -94,7 +94,7 @@ echo "== booting MCXN947 (bare-metal FlexCAN0, TCP client -> :$PORT) =="
 # Fleet-standard wiring: the frdm-mcxn947 board is a custom machine type that
 # takes -machine canbus0=cb, the same incantation as imx91/93/95 (mcxn947qemu
 # 2ee08e14d5). No MCX special-casing.
-timeout 90 "$QEMU_MCX" -M frdm-mcxn947 -display none -monitor none \
+timeout -k 5 90 "$QEMU_MCX" -M frdm-mcxn947 -display none -monitor none \
   -object can-bus,id=cb -machine canbus0=cb \
   -chardev socket,id=canl,host=127.0.0.1,port=$PORT,server=off,reconnect-ms=1000 \
   -object can-host-chardev,id=h0,canbus=cb,chardev=canl \

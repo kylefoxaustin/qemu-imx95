@@ -109,7 +109,7 @@ chmod +x "$root/init"
 
 # usb-kbd on usb-bus.0 = the ChipIdea USB2 host; a bare -device usb-kbd lands on
 # usb-bus.1 (DWC3 xHCI), whose roothub does not enumerate cold-plug devices.
-timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -vnc "$VNC" \
+timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -vnc "$VNC" \
     -kernel "$IMAGE" -dtb "$WORK/netc.dtb" -initrd "$WORK/initrd.cpio.gz" \
     -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init" \
     -device loader,file="$SM_ELF",cpu-num=6 \
