@@ -30,6 +30,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
 
@@ -482,12 +483,52 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
     /*
      * A capability register that is a CONSTANT can drift from the thing it
      * describes; one COMPUTED FROM it cannot (mcxn947qemu's structural fix).
-     * Make the drift a BUILD failure: the FIFO depth we advertise must be the
-     * FIFO depth we actually have, and we implement exactly one data line
-     * (TDR0/RDR0 only), so we must never advertise more.
+     *
+     * AND ASSERT AGAINST THE THING THE BYTES LAND IN, NOT AGAINST THE NAME YOU
+     * GAVE ITS SIZE (mcxn/91, sharpening it). An earlier version of this
+     * compared (1 << FIFO_EXP) with IMX95_SAI_FIFO_DEPTH - a MACRO against a
+     * MACRO, which is two spellings of one belief agreeing with itself. The
+     * guest's samples do not land in a macro; they land in tx_fifo[], whose
+     * bound merely HAPPENS to be spelled with that name. Respell it as a
+     * literal
+     * and the old assert would still pass while PARAM advertised a FIFO we do
+     * not have. So: decode the field the way the GUEST decodes it, and compare
+     * it to the array we ACTUALLY HAVE. That is the only pair of numbers whose
+     * disagreement IS the bug.
+     *
+     * ">" not "!=": the model may hold MORE than it advertises (SAI1 truthfully
+     * reports silicon's 32-deep FIFO while we carry 128). Under-reporting is
+     * the
+     * safe direction, and an "!=" would forbid it - forcing us to advertise
+     * everything we hold, which is the exact over-promise this guard exists to
+     * prevent.
      */
-    QEMU_BUILD_BUG_ON((1u << SAI_PARAM_FIFO_EXP) != IMX95_SAI_FIFO_DEPTH);
-    QEMU_BUILD_BUG_ON(SAI_PARAM_DATALINES != 1);
+    QEMU_BUILD_BUG_ON((1u << SAI_PARAM_FIFO_EXP) >
+                      ARRAY_SIZE(((IMX95SaiState *)0)->tx_fifo));
+    QEMU_BUILD_BUG_ON((1u << SAI_PARAM_FIFO_EXP) >
+                      ARRAY_SIZE(((IMX95SaiState *)0)->rx_fifo));
+    /* We implement TDR0/RDR0 only. */
+    QEMU_BUILD_BUG_ON(SAI_PARAM_DATALINES > 1);
+
+    /*
+     * The build assert only guards the DEFAULT. PARAM is a per-instance
+     * PROPERTY, so a board can set any value it likes - including one that
+     * promises a FIFO or a dataline count this model cannot honour. Check the
+     * value we were actually given, decoded exactly as fsl_sai decodes it, and
+     * refuse to realize rather than lie to the guest.
+     */
+    if ((1u << ((s->param >> 8) & 0xf)) > ARRAY_SIZE(s->tx_fifo)) {
+        error_setg(errp, "imx95.sai: param 0x%08x advertises a %u-word FIFO; "
+                   "this model holds %zu", s->param,
+                   1u << ((s->param >> 8) & 0xf), ARRAY_SIZE(s->tx_fifo));
+        return;
+    }
+    if ((s->param & 0xf) > SAI_PARAM_DATALINES) {
+        error_setg(errp, "imx95.sai: param 0x%08x advertises %u data lines; "
+                   "this model implements %u", s->param, s->param & 0xf,
+                   SAI_PARAM_DATALINES);
+        return;
+    }
 
     memory_region_init_io(&s->iomem, OBJECT(dev), &imx95_sai_ops, s,
                           TYPE_IMX95_SAI, IMX95_SAI_SIZE);
