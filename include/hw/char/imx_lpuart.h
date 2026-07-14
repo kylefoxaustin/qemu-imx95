@@ -42,6 +42,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMXLPUARTState, IMX_LPUART)
 #define LPUART_MODIR            0x24
 #define LPUART_FIFO             0x28
 #define LPUART_WATER            0x2C
+/*
+ * DATARO is the NON-DESTRUCTIVE read-only alias of DATA: reading it must not
+ * pop the receive buffer. Leaving it unmodelled is not free - the default case
+ * answers 0, and on this register 0 means RXEMPT is CLEAR, i.e. "the receive
+ * buffer HAS DATA". A reader polling the alias (which is what an alias is FOR)
+ * would take a phantom byte out of an empty FIFO. RM reset: 0x0000_1000.
+ */
+#define LPUART_DATARO           0x30
 
 /* GLOBAL: write GLOBAL_RST to trigger a software reset of the IP. */
 #define LPUART_GLOBAL_RST       0x00000002

@@ -120,6 +120,33 @@ value, not the ones where it is obviously junk.** imx8-isi always *writes* the
 factor before streaming (so it is not laundered) but debugfs dumps it. Also
 `CHNL_IMG_CFG` = `0x0438_0780` (1920x1080). Verified: tests/camera still passes.
 
+### FIX — LPUART `DATARO` answered 0, which means "the FIFO has data"  (commit: lpuart)
+Chasing mcxn947qemu's LPUART capability-contract bug on our console block.
+`DATARO` (0x30) is the **non-destructive read-only alias** of DATA. We did not
+model it at all, so it fell to the default case and returned **0** — and on this
+register 0 means **RXEMPT is clear**, i.e. *"the receive buffer has data."* A
+reader polling the alias — which is what an alias is *for* — takes a phantom
+byte out of an empty FIFO. Linux's `fsl_lpuart` never reads it (so latent), but
+a bootloader or bare-metal firmware would believe it. **An unmodelled register
+is not a free register: it still answers, and zero is an answer** (mcxn's rule,
+their `MRDROR`). Now reports the pending byte, or RXEMPT, without popping.
+
+### DECISION — LPUART FIFO depth: we advertise 1 and deliver 1
+mcxn's bug was the reverse of ours and worth stating: their LPUART *advertised*
+an 8-deep RX FIFO and *implemented* a one-byte holding register — a capability
+register is a contract, and they promised eight and delivered one. It stayed
+invisible because `STAT[RDRF]` means "count > RXWATER" and RXWATER resets to 0,
+so a 1-deep and an 8-deep receiver are behaviourally identical until someone
+sets a watermark. **We are self-consistent:** PARAM and FIFO report size 0
+(depth 1) and the model *is* a one-byte holding register. Silicon is 16-deep
+(`PARAM = 0x0000_0404`, `FIFO = 0x00C0_0033`), so this is a deliberate
+**under-report — the safe direction** (over-reporting is a promise the emulator
+makes on the chip's behalf). Implementing a real 16-deep FIFO with
+watermark-level RDRF is a *feature*, not a reset-value fix; filed separately.
+Everything else on this block was already correct and is a NULL result:
+`VERID = 0x0404_0007`, `BAUD = 0x0F00_0004`, `STAT = 0x00C0_0000` (TDRE|TC),
+and DATA already returns RXEMPT when empty.
+
 ### DECISION — eDMA `MP_CSR` reset is reserved-bits-only
 RM: `MP_CSR` reset `0x0031_0000` (eDMA3) / `0x0050_0000` (eDMA5) — non-zero and
 per-instance. **Every set bit (16, 20, 21) lands in the RM's "Reserved [23:16]"

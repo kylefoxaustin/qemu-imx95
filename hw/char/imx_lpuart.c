@@ -128,6 +128,17 @@ static uint64_t imx_lpuart_read(void *opaque, hwaddr offset, unsigned size)
         }
         break;
 
+    case LPUART_DATARO:
+        /*
+         * Non-destructive alias of DATA: report the pending byte (or RXEMPT)
+         * WITHOUT popping it. Answering 0 here - which is what an unhandled
+         * offset does - would clear RXEMPT and hand a phantom byte to anyone
+         * polling the alias.
+         */
+        value = s->rx_full ? (s->rx_byte & LPUART_DATA_MASK)
+                           : LPUART_DATA_RXEMPT;
+        break;
+
     case LPUART_MATCH:
         value = s->match;
         break;
