@@ -29,15 +29,30 @@
 #include "migration/vmstate.h"
 
 #define DSI_VERSION         0x00
-#define DSI_VERSION_VALUE   0x31333100  /* dw-mipi-dsi HWVER_131 */
+/*
+ * The RM's reset column says this core is dw-mipi-dsi v1.51 (ASCII "0151").
+ * We used to report HWVER_131, which is a different IP revision than the
+ * silicon has. dw_mipi_dsi_dphy_timing_config() reads DSI_VERSION and branches
+ * on it - both 1.31 and 1.51 happen to take the same timing layout (the driver
+ * carries an explicit hwver_is_151 flag because 0x30313531 is numerically LESS
+ * than 0x31333100), so reporting the truth costs nothing and stops the model
+ * from forking the driver down a revision the chip is not.
+ */
+#define DSI_VERSION_VALUE   0x30313531  /* dw-mipi-dsi HWVER_151 (RM reset) */
 #define DSI_CMD_PKT_STATUS  0x74
 /*
- * Command/payload FIFO idle: all EMPTY bits set, all FULL/BUSY bits clear -
- * GEN_CMD_EMPTY (bit0) | GEN_PLD_W_EMPTY (bit2) | GEN_PLD_R_EMPTY (bit4). The
+ * Command/payload FIFO idle - the RM reset value. EMPTY bits set, FULL/BUSY
+ * clear: GEN_CMD_EMPTY (bit0) | GEN_PLD_W_EMPTY (bit2) | GEN_PLD_R_EMPTY
+ * (bit4), plus the v1.51 buffered-command/payload EMPTY bits (16 and 18). The
  * core polls !FULL before a write and EMPTY after, so a command transfer (the
  * panel's DCS init) completes instantly.
  */
-#define CMD_PKT_STATUS_IDLE 0x15
+#define CMD_PKT_STATUS_IDLE 0x00050015
+/* RM reset column: both of these come out of reset SET, not clear. */
+#define DSI_MODE_CFG        0x34
+#define   MODE_CFG_CMD_MODE     (1u << 0)   /* command mode at reset */
+#define DSI_PHY_TST_CTRL0   0xb4
+#define   PHY_TST_CTRL0_TESTCLR (1u << 0)   /* PHY test-clear asserted */
 #define DSI_PHY_STATUS      0xb0
 #define   PHY_LOCK              (1u << 0)
 #define   PHY_STOP_STATE_CLK    (1u << 2)
@@ -80,6 +95,9 @@ static void imx95_dsi_reset(DeviceState *dev)
     IMX95DsiState *s = IMX95_DSI(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+    /* Not every reset bit is zero: the RM resets these two to 1. */
+    s->regs[DSI_MODE_CFG / 4] = MODE_CFG_CMD_MODE;
+    s->regs[DSI_PHY_TST_CTRL0 / 4] = PHY_TST_CTRL0_TESTCLR;
 }
 
 static void imx95_dsi_init(Object *obj)
