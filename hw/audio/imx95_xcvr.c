@@ -34,7 +34,27 @@
 #define AI_TOG_PHY          (1u << 26)
 #define AI_DONE_PHY         (1u << 27)
 
-#define XCVR_VERSION_VALUE  0x00010000
+/*
+ * RM reset values, keyed by offset within the "regs" window (the DT gives
+ * fsl_xcvr a separate reg region at base+0x800, so the driver's offset 0 is the
+ * RM's 0x800). Everything here was memset to 0 before, which is a claim the
+ * silicon does not make - and fsl_xcvr READ-MODIFY-WRITES several of these via
+ * regmap_update_bits(), so a zero reset is laundered into the guest's own
+ * config. VERSION is 0 on silicon (the RM *and* the driver's own reg_defaults
+ * table agree); the 0x00010000 we used to return was invented.
+ */
+/* EXT_CTRL: CORE/CMDC/DPTH held in reset, SLEEP_MODE, RX_FWM=TX_FWM=64. */
+#define XCVR_EXT_CTRL_RESET     0xf8204040
+#define XCVR_RX_CMDC_CTRL       0xc0
+#define XCVR_RX_CMDC_CTRL_RESET 0x00281b02
+#define XCVR_RX_DPATH_CTRL      0x180
+#define XCVR_RX_DPATH_CTRL_RST  0x00002c89
+#define XCVR_DMAC_PRE_MATCH     0x1e0
+#define XCVR_DMAC_PRE_MATCH_RST 0x4e1ff872  /* SPDIF preamble match pattern */
+#define XCVR_DMAC_DTS_PRE_MATCH 0x1f0
+#define XCVR_DMAC_DTS_PRE_RST   0x1387fe1c
+#define XCVR_HPD_DBNC_CTRL      0x2a0
+#define XCVR_HPD_DBNC_CTRL_RST  0x00030d40
 
 #define RFDR_FIFO 0x0c00
 #define TFDR_FIFO 0x0e00
@@ -294,7 +314,13 @@ static void xcvr_reset(DeviceState *dev)
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->ram, 0, sizeof(s->ram));
     memset(s->ai_sub, 0, sizeof(s->ai_sub));
-    s->regs[XCVR_VERSION >> 2] = XCVR_VERSION_VALUE;
+    /* RM reset column - see the XCVR_*_RESET notes above. VERSION reads 0. */
+    s->regs[XCVR_EXT_CTRL_REL >> 2]       = XCVR_EXT_CTRL_RESET;
+    s->regs[XCVR_RX_CMDC_CTRL >> 2]       = XCVR_RX_CMDC_CTRL_RESET;
+    s->regs[XCVR_RX_DPATH_CTRL >> 2]      = XCVR_RX_DPATH_CTRL_RST;
+    s->regs[XCVR_DMAC_PRE_MATCH >> 2]     = XCVR_DMAC_PRE_MATCH_RST;
+    s->regs[XCVR_DMAC_DTS_PRE_MATCH >> 2] = XCVR_DMAC_DTS_PRE_RST;
+    s->regs[XCVR_HPD_DBNC_CTRL >> 2]      = XCVR_HPD_DBNC_CTRL_RST;
     s->tx_rptr = s->tx_wptr = s->tx_count = 0;
     s->tx_words = 0;
     s->cap_head = s->cap_count = 0;
