@@ -73,19 +73,41 @@
  * (TSTMP_EN) path out of the driver's probe, which is all we need here.
  */
 /*
- * VERID/PARAM come from the RM's reset column, per instance (the verid/param
- * properties). fsl_sai READS PARAM at probe (fsl_sai.c: sai->param.dataline =
- * PARAM & DLN_MASK; spf/wpf likewise), so the dataline count and FIFO depth
- * must be the SILICON value, not one chosen to match the driver's soc_data.
- * RM: VERID = 0x0302_0002 (all instances). PARAM fields: FRAME[19:16] (2^FRAME
- * slots), FIFO[11:8] (2^FIFO-deep), DATALINE[3:0]. Per Table 491 + ch.44:
- *   SAI1 = 2 lanes, 32-deep  -> 0x0005_0502
- *   SAI3 = 1 lane,  128-deep -> 0x0005_0701   (default: the wm8962 path)
- *   SAI4 = 2 lanes, 128-deep -> 0x0005_0702
- *   SAI5 = 4 lanes, 128-deep -> 0x0005_0704
+ * VERID/PARAM (the verid/param properties). fsl_sai READS PARAM at probe
+ * (fsl_sai.c: sai->param.dataline = PARAM & DLN_MASK; spf/wpf likewise).
+ * VERID is an identity register, so it gets the RM's value: 0x0302_0002.
+ *
+ * PARAM IS A CAPABILITY REGISTER, AND THOSE DO NOT GET THE RM'S VALUE JUST
+ * BECAUSE THE RM SAYS SO. mcxn947qemu paid for this rule: they set a uSDHC
+ * capability register to its RM value, thereby advertising an SDR104 tuning
+ * engine their model does not contain, and a driver would have switched the
+ * card to it and tuned into nothing. ON A CAPABILITY REGISTER, MATCHING THE
+ * MANUAL IS THE BUG UNLESS YOU ALSO IMPLEMENT THE CHIP BEHIND IT.
+ *
+ * PARAM fields: FRAME[19:16] (2^FRAME slots), FIFO[11:8] (2^FIFO deep),
+ * DATALINE[3:0] (number of data lines).
+ *
+ * DATALINE: silicon has 1/2/4/8 depending on the instance (RM Table 491). THIS
+ * MODEL IMPLEMENTS EXACTLY ONE DATA LINE - only TDR0/RDR0/TFR0 exist, and there
+ * is a single tx_fifo/rx_fifo. Advertising the silicon count would let a TDM
+ * configuration push audio at lines 1..7 that this model silently drops. So we
+ * report what we DELIVER: one. Under-reporting is the safe direction; the
+ * failure mode of over-reporting is a promise made on the chip's behalf.
+ *
+ * FIFO: we implement a 128-deep FIFO, so we may advertise up to 128. SAI1's
+ * silicon FIFO is only 32 deep, and we report 32 for it - both because it is
+ * the truth about the chip AND because it under-reports our own capacity, so
+ * guest code sized against this model still fits the real part.
  */
 #define SAI_VERID_DEFAULT 0x03020002
-#define SAI_PARAM_DEFAULT 0x00050701
+
+#define SAI_PARAM_FRAME     5           /* 2^5 = 32 slots/frame */
+#define SAI_PARAM_DATALINES 1           /* == the data lines we implement */
+#define SAI_PARAM_FIFO_EXP  7           /* 2^7 = 128 == IMX95_SAI_FIFO_DEPTH */
+#define SAI_PARAM_VAL(fifo_exp, lines) \
+    (((uint32_t)SAI_PARAM_FRAME << 16) | ((uint32_t)(fifo_exp) << 8) | (lines))
+#define SAI_PARAM_DEFAULT \
+    SAI_PARAM_VAL(SAI_PARAM_FIFO_EXP, SAI_PARAM_DATALINES)
 
 /* One word of a 48 kHz stereo stream: 96000 words/s. */
 #define SAI_TX_WORD_NS  (NANOSECONDS_PER_SECOND / 96000)
@@ -456,6 +478,16 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
         .fmt = AUDIO_FORMAT_S16,
         .big_endian = false,
     };
+
+    /*
+     * A capability register that is a CONSTANT can drift from the thing it
+     * describes; one COMPUTED FROM it cannot (mcxn947qemu's structural fix).
+     * Make the drift a BUILD failure: the FIFO depth we advertise must be the
+     * FIFO depth we actually have, and we implement exactly one data line
+     * (TDR0/RDR0 only), so we must never advertise more.
+     */
+    QEMU_BUILD_BUG_ON((1u << SAI_PARAM_FIFO_EXP) != IMX95_SAI_FIFO_DEPTH);
+    QEMU_BUILD_BUG_ON(SAI_PARAM_DATALINES != 1);
 
     memory_region_init_io(&s->iomem, OBJECT(dev), &imx95_sai_ops, s,
                           TYPE_IMX95_SAI, IMX95_SAI_SIZE);

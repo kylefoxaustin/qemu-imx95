@@ -33,17 +33,31 @@
 #define MICFIL_FIFO_CTRL_FIFOWMK 0x1f       /* Watermark (bits 4:0)         */
 
 /*
- * RM reset values (fsl-micfil reads both at probe: fsl_micfil.c reads VERID
- * into verid.version/feature and PARAM into param.{hwvad_num,fifo_ptrwid,npair,
- * ...}). Use the SILICON values, not fabricated ones:
- *   VERID = 0x020F_0000  (major 2, minor 15)
- *   PARAM = 0x010B_0154  (NUM_HWVAD=1, HWVAD ZCD+energy present, FIFO_PTRWID=5,
- *                         NPAIR=4 -> 8 mic inputs)
- * NPAIR is unchanged from the old value (4), and the driver takes its FIFO
- * depth from soc_data (8), not PARAM.FIFO_PTRWID, so capture is unaffected.
+ * fsl-micfil reads BOTH of these at probe (fsl_micfil.c: VERID ->
+ * verid.version/feature; PARAM -> param.{hwvad_num,fifo_ptrwid,npair,...}).
+ *
+ * VERID is an IDENTITY register, so it gets the RM's reset value, 0x020F_0000
+ * (major 2, minor 15). We used to invent 0x0100_0000.
+ *
+ * PARAM IS A CAPABILITY REGISTER, AND IT DOES NOT GET THE RM'S VALUE JUST
+ * BECAUSE THE RM SAYS SO. The RM resets it to 0x010B_0154, whose NUM_HWVAD
+ * field is 1 and whose HWVAD_ZCD/HWVAD_ENERGY bits are set - i.e. the silicon
+ * has one hardware voice-activity detector. THIS MODEL HAS NO HWVAD AT ALL: no
+ * detector, no energy mode, no zero-crossing, nothing that would ever raise a
+ * VAD event. Advertising it would let a guest enable HWVAD and then wait
+ * forever for a detection that cannot come.
+ *
+ * mcxn947qemu's rule, which they paid for on a uSDHC capability register: ON A
+ * CAPABILITY REGISTER, MATCHING THE MANUAL IS THE BUG UNLESS YOU ALSO IMPLEMENT
+ * THE CHIP BEHIND IT. So NUM_HWVAD stays 0 and the HWVAD feature bits stay
+ * clear - an honest under-report of a detector we do not have.
+ *
+ * The rest is the RM's: FIFO_PTRWID=5 (we hold 64 words, so this under-reports
+ * our own capacity, which is the safe direction; the driver takes its watermark
+ * from soc_data anyway) and NPAIR=4.
  */
 #define MICFIL_VERID_VALUE  0x020F0000
-#define MICFIL_PARAM_VALUE  0x010B0154
+#define MICFIL_PARAM_VALUE  0x00000154
 
 /* MICFIL outputs ~48 kHz; one decimated sample per word period. */
 #define MICFIL_WORD_NS  (1000000000LL / 48000)
