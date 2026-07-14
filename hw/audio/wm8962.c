@@ -24,6 +24,7 @@
 #include "hw/i2c/i2c.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 #include "qom/object.h"
 
 #define WM8962_SOFTWARE_RESET   0x0f
@@ -66,6 +67,35 @@
 #define WM8962_ADDITIONAL_CONTROL_3 0x1b
 #define WM8962_SAMPLE_RATE_MASK     0x0007
 #define WM8962_SAMPLE_RATE_INT_MODE 0x0010
+
+/*
+ * R27's RESET VALUE, AND IT IS LOAD-BEARING.
+ *
+ * Datasheet default: 0x0010 - SR=0 with INT_MODE set, i.e. 48 kHz. This model
+ * used to memset the register file to zero and leave R27 at 0, and that is a
+ * mute codec, because of how the driver writes it:
+ *
+ *   wm8962_hw_params() -> snd_soc_component_update_bits(...) -> regmap, WHICH
+ *   WRITES NOTHING IF THE VALUE IS UNCHANGED.
+ *
+ * regmap compares against its OWN cache, seeded from the datasheet defaults -
+ * not from us. So at 48 kHz the driver computes exactly 0x0010, sees no change,
+ * AND NEVER PUTS A BYTE ON THE I2C WIRE. The codec is never told, so it never
+ * tells the SAI, so the SAI runs on whatever it guessed.
+ *
+ * Our 48 kHz playback test passed for months on exactly that guess. It is the
+ * one rate at which the invented number equals the true one, so no duration
+ * oracle could ever see it (93emulator found this, on their board and then on
+ * mine, and they were right about both).
+ *
+ *   A DEFAULT THAT HAPPENS TO EQUAL THE ANSWER IS NOT AN ANSWER. IT IS A GREEN
+ *   LIGHT WITH NO WITNESS BEHIND IT.
+ *
+ * So: reset R27 to the silicon value, AND announce the decoded rate out of
+ * reset. We are the bit-clock master; whoever we clock cannot know the rate
+ * unless we say it, and after power-on the driver may never ask again.
+ */
+#define WM8962_ADDITIONAL_CONTROL_3_RESET 0x0010
 
 OBJECT_DECLARE_SIMPLE_TYPE(Wm8962State, WM8962)
 
@@ -157,6 +187,7 @@ static int wm8962_send(I2CSlave *i2c, uint8_t data)
             if (s->ptr == WM8962_ADDITIONAL_CONTROL_3) {
                 uint32_t rate = wm8962_decode_rate(val);
 
+                trace_wm8962_rate(val, rate);
                 if (rate && rate != s->rate) {
                     s->rate = rate;
                     qemu_set_irq(s->rate_out, rate);
@@ -191,16 +222,36 @@ static void wm8962_realize(DeviceState *dev, Error **errp)
     qdev_init_gpio_out_named(dev, &s->rate_out, "rate", 1);
 }
 
-static void wm8962_reset(DeviceState *dev)
+static void wm8962_reset_hold(Object *obj, ResetType type)
 {
-    Wm8962State *s = WM8962(dev);
+    Wm8962State *s = WM8962(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     s->regs[WM8962_SOFTWARE_RESET] = WM8962_DEVICE_ID;
+    s->regs[WM8962_ADDITIONAL_CONTROL_3] = WM8962_ADDITIONAL_CONTROL_3_RESET;
     s->ptr = 0;
     s->wphase = 0;
     s->rphase = 0;
-    s->rate = 0;
+    s->rate = wm8962_decode_rate(WM8962_ADDITIONAL_CONTROL_3_RESET);
+}
+
+/*
+ * Announce out of reset - and in the EXIT phase, not the hold, ON PURPOSE.
+ *
+ * Every device clears its state in hold, and the order in which they do it is
+ * not ours to choose. The SAI clears its rate in ITS hold; if we announced in
+ * ours and the SAI happened to be reset after us, our announcement would be
+ * wiped and we would be back to a codec that never spoke - the same silence,
+ * now with a line of code that looks like it fixed it. The exit phase runs only
+ * once EVERY device has finished holding, so the value we drive here cannot be
+ * clobbered by a reset that has not happened yet.
+ */
+static void wm8962_reset_exit(Object *obj, ResetType type)
+{
+    Wm8962State *s = WM8962(obj);
+
+    trace_wm8962_rate(WM8962_ADDITIONAL_CONTROL_3_RESET, s->rate);
+    qemu_set_irq(s->rate_out, s->rate);
 }
 
 static const VMStateDescription vmstate_wm8962 = {
@@ -224,11 +275,13 @@ static void wm8962_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     I2CSlaveClass *sc = I2C_SLAVE_CLASS(oc);
+    ResettableClass *rc = RESETTABLE_CLASS(oc);
 
     dc->desc = "Wolfson WM8962 audio codec";
     dc->realize = wm8962_realize;
     dc->vmsd = &vmstate_wm8962;
-    device_class_set_legacy_reset(dc, wm8962_reset);
+    rc->phases.hold = wm8962_reset_hold;
+    rc->phases.exit = wm8962_reset_exit;
     sc->event = wm8962_event;
     sc->recv = wm8962_recv;
     sc->send = wm8962_send;

@@ -63,7 +63,8 @@ MODS="snd-soc-fsl-utils imx-pcm-dma snd-soc-fsl-sai snd-soc-fsl-micfil \
       snd-soc-wm8962 snd-soc-dmic snd-soc-imx-audmux snd-soc-fsl-asoc-card \
       snd-soc-imx-card"
 
-WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+WORK=${KEEPWORK:-$(mktemp -d)}
+[ -n "${KEEPWORK:-}" ] || trap 'rm -rf "$WORK"' EXIT
 STAGE="$WORK/root"; mkdir -p "$STAGE"/{proc,sys,dev,mods}
 WAV="$WORK/play.wav"
 zcat "$BUSYBOX/busybox-initramfs.cpio.gz" | (cd "$STAGE" && cpio -idmu 2>/dev/null)
@@ -192,11 +193,13 @@ fail=0
 for RATE in $RATES; do
 LOG="$WORK/serial-$RATE.log"
 WAV="$WORK/play-$RATE.wav"
+TRC="$WORK/trace-$RATE.log"
 timeout "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.cpio.gz" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init play_rate=$RATE" \
   -device loader,file="$SM_ELF",cpu-num=6 \
   -audio driver=wav,path="$WAV" \
+  -trace enable=wm8962_rate -trace enable=imx95_sai_tx_enable -D "$TRC" \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
 echo "--- playback report (rate=$RATE) ---"
@@ -213,6 +216,62 @@ want_frames=$((2 * RATE))
 if ! grep -qaE "PLAY\[.*\]: PASS \($want_frames frames\)" "$LOG"; then
     echo "FAIL(rate=$RATE): pcm_play did not deliver $want_frames frames"
     fail=1
+fi
+
+#
+# THE PROVENANCE GATE - and it is the only reason the 48 kHz case means anything.
+#
+# The SAI is the bit-clock SLAVE here: the rate is a fact only the CODEC holds,
+# and it reaches the SAI over a wire. If that wire never fires, the SAI falls
+# back to a hardcoded default - and that default is 48 kHz, so AT 48 kHz THE
+# INVENTED RATE AND THE TRUE RATE ARE THE SAME NUMBER. Every duration check
+# above passes. The WAV is right. The frames are right. And nothing was proven.
+#
+# That is exactly what was happening: the driver's regmap holds R27's datasheet
+# default (0x0010 == 48 kHz), computes 0x0010 for a 48 kHz stream, sees no
+# change, and NEVER PUTS A BYTE ON THE I2C WIRE. Our codec was never told, so it
+# never told the SAI, and our 48 kHz green rested on a coincidence for months.
+# (93emulator found it on their board, then predicted it on mine, and was right.)
+#
+#   A DEFAULT THAT HAPPENS TO EQUAL THE ANSWER IS NOT AN ANSWER. IT IS A GREEN
+#   LIGHT WITH NO WITNESS BEHIND IT.
+#
+# So we no longer ask only "did it play at the right rate". We ask WHERE THE
+# RATE CAME FROM, and we refuse a pass that rests on a guess - even a correct
+# one. A timing oracle structurally cannot see this; only the provenance can.
+#
+# TWO SEPARATE CLAIMS, REPORTED SEPARATELY. The first version of this gate asked
+# for "rate=$RATE AND announced=1" in one grep, so a codec that announced the
+# WRONG rate got the message "no codec ever announced" - a true failure with a
+# false explanation, which is the kind of thing that sends you debugging the
+# wrong device. A gate is also an instrument, and an instrument that cannot say
+# WHICH of two things broke will one day tell you the wrong one.
+#
+pfail=0
+pat='imx95_sai_tx_enable TX enable: rate=[0-9]+ Hz'
+pat="$pat announced_by_codec=[01]"
+saw=$(grep -aoE "$pat" "$TRC" | tail -1)
+got_rate=$(printf '%s' "$saw" | sed -n 's/.*rate=\([0-9]*\) Hz.*/\1/p')
+announced=$(printf '%s' "$saw" | sed -n 's/.*announced_by_codec=\([01]\).*/\1/p')
+
+if [ "${announced:-0}" != 1 ]; then
+    echo "FAIL(rate=$RATE): the SAI enabled TX on a rate NO CODEC EVER ANNOUNCED."
+    echo "      -> it is running on its hardcoded fallback, and at 48 kHz that"
+    echo "         fallback EQUALS the right answer - so every timing check"
+    echo "         above passes and nothing whatever has been proven."
+    fail=1; pfail=1
+elif [ "${got_rate:-0}" != "$RATE" ]; then
+    echo "FAIL(rate=$RATE): the codec announced ${got_rate:-?} Hz, but the guest"
+    echo "      asked for $RATE Hz. The wire fired - with the wrong number."
+    fail=1; pfail=1
+else
+    echo "witness(rate=$RATE): the codec announced $RATE Hz; the SAI is clocking"
+    echo "      a rate it was TOLD, not one it guessed"
+fi
+if [ "$pfail" = 1 ]; then
+    echo "      what the SAI actually saw:"
+    grep -aE 'wm8962_rate|imx95_sai_tx_enable' "$TRC" | sed 's/^/         /' \
+        || echo "         (the codec never spoke at all)"
 fi
 # THE ASSERTION IS A FLOOR, AND THE DIRECTION IS THE WHOLE DESIGN.
 #

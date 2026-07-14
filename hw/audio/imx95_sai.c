@@ -31,8 +31,10 @@
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
+#include "qemu/log.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
+#include "trace.h"
 
 /* Register map (reg_offset = 8: VERID/PARAM precede the control regs). */
 #define SAI_VERID       0x00    /* Version ID (read-only)            */
@@ -366,7 +368,26 @@ static void imx95_sai_codec_rate(void *opaque, int n, int level)
     IMX95SaiState *s = opaque;
     uint32_t rate = (uint32_t)level;
 
-    if (!rate || rate == s->rate) {
+    if (!rate) {
+        return;
+    }
+    /*
+     * Record that we were TOLD before deciding whether anything CHANGED.
+     *
+     * These are not the same fact, and collapsing them is how this fix would
+     * have failed silently: s->rate starts out as a guess, and an announcement
+     * that merely CONFIRMS the guess would take the "nothing changed" early
+     * return and never mark itself heard. The rate would be right, the model
+     * would be wrong, and the flag that exists to catch exactly that would say
+     * we had never been told.
+     *
+     * Being told 48 kHz when we already believed 48 kHz is not a no-op. It is
+     * the difference between a rate we KNOW and a rate we GUESSED - which is
+     * the whole distinction this wire exists to carry.
+     */
+    s->rate_announced = true;
+
+    if (rate == s->rate) {
         return;
     }
     s->rate = rate;
@@ -444,7 +465,25 @@ static void imx95_sai_write(void *opaque, hwaddr offset, uint64_t value,
         R(s, SAI_TCSR) = v;
 
         if ((v & TCSR_TE) && !(old & TCSR_TE)) {
-            /* Transmitter enabled: start clocking words out. */
+            /*
+             * Transmitter enabled. On this board we are the bit-clock SLAVE:
+             * the rate is a fact only the CODEC holds, and it reaches us over
+             * an I2C write we do not see unless the driver makes one. Say out
+             * loud which of those two we are running on - a rate we were TOLD,
+             * or a rate we INVENTED - because when the invented number happens
+             * to equal the true one, no duration-based test can tell them
+             * apart. A default that happens to equal the answer is not an
+             * answer; it is a green light with no witness behind it.
+             */
+            if (!s->rate_announced) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "imx95.sai: TX enabled but no codec ever "
+                              "announced a rate; falling back to %u Hz. This "
+                              "rate is INVENTED, not observed.\n",
+                              SAI_DEFAULT_RATE);
+            }
+            trace_imx95_sai_tx_enable(sai_word_ns(s) ? s->rate : 0,
+                                      s->rate_announced);
             imx95_sai_tx_update_flags(s);
             imx95_sai_voice_set(s, true);
             timer_mod(s->tx_timer,
@@ -591,7 +630,16 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
      * master tells its slave what it is clocking at.
      */
     qdev_init_gpio_in_named(dev, imx95_sai_codec_rate, "codec-rate", 1);
-    s->rate = SAI_DEFAULT_RATE;
+    /*
+     * WE KNOW NOTHING UNTIL THE CODEC TELLS US. Do not seed the rate here: a
+     * seeded rate is a belief with no source, and it is indistinguishable from
+     * one the codec supplied. sai_word_ns() still has SAI_DEFAULT_RATE as a
+     * last-resort guard so a mis-wired board makes noise rather than dividing
+     * by zero - but it now LOGS that the number is invented, and rate_announced
+     * lets the tests refuse a green that rests on it.
+     */
+    s->rate = 0;
+    s->rate_announced = false;
     s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_sai_tx_tick, s);
     s->rx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, imx95_sai_rx_tick, s);
 
@@ -610,8 +658,8 @@ static void imx95_sai_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_imx95_sai = {
     .name = TYPE_IMX95_SAI,
-    .version_id = 3,
-    .minimum_version_id = 3,
+    .version_id = 4,
+    .minimum_version_id = 4,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, IMX95SaiState, IMX95_SAI_REGS),
         VMSTATE_UINT32_ARRAY(tx_fifo, IMX95SaiState, IMX95_SAI_FIFO_DEPTH),
@@ -625,6 +673,8 @@ static const VMStateDescription vmstate_imx95_sai = {
         VMSTATE_UINT32(rx_count, IMX95SaiState),
         VMSTATE_UINT64(rx_words, IMX95SaiState),
         VMSTATE_UINT16(rx_phase, IMX95SaiState),
+        VMSTATE_UINT32(rate, IMX95SaiState),
+        VMSTATE_BOOL(rate_announced, IMX95SaiState),
         VMSTATE_END_OF_LIST()
     },
 };

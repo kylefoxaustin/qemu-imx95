@@ -71,6 +71,7 @@ struct IMX95SaiState {
      * "codec-rate" input.
      */
     uint32_t rate;
+    bool     rate_announced;    /* the CODEC told us; not a guess */
 
     /* Transmit FIFO (data line 0). */
     QEMUTimer *tx_timer;

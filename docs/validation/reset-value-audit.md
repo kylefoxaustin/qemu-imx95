@@ -214,6 +214,61 @@ bits (GCLC/ERCA/GMRC/HALT) reset to 0. `fsl-edma` masks the control bits it
 writes and never depends on [23:16]. **Not seeded** — per the consumer-touched-
 fields rule, nothing reads those reserved bits.
 
+### FIX — WM8962 `R27` reset 0, and it made the codec mute forever
+**The most consequential reset value in this audit, and it is not even on the
+SoC — it is on the far side of an I2C bus, in a codec I had swept right past.**
+
+Datasheet: `R27 (ADDITIONAL_CONTROL_3)` resets to `0x0010` — `SR=0` with
+`INT_MODE` set, i.e. **48 kHz**. Our model `memset` the register file to zero
+and left `R27` at 0. That is not a cosmetic difference, because of how the
+driver writes it:
+
+```
+  wm8962_hw_params() -> snd_soc_component_update_bits() -> regmap
+                                    ^ WRITES NOTHING IF THE VALUE IS UNCHANGED
+```
+
+regmap compares against **its own cache, seeded from the datasheet defaults —
+not from us**. At 48 kHz the driver computes exactly `0x0010`, sees no change,
+and **never puts a byte on the I2C wire**. The codec is never told; it never
+tells the SAI; the SAI runs on whatever it guessed.
+
+And what it guessed was `SAI_DEFAULT_RATE` = 48000. **The invented number and
+the true number were the same**, so the playback test passed — for months — on a
+rate that no device in the machine had ever asserted. A duration oracle
+*structurally cannot* see this: both models play 2 seconds in 2 seconds.
+
+> **A DEFAULT THAT HAPPENS TO EQUAL THE ANSWER IS NOT AN ANSWER. IT IS A GREEN
+> LIGHT WITH NO WITNESS BEHIND IT.**
+
+Found by **93emulator**, who hit it on their own board, then predicted it on
+mine sight-unseen and was right. The trace, before the fix:
+
+```
+48 kHz: TX enable: rate=48000 Hz announced_by_codec=0   <- INVENTED
+16 kHz: TX enable: rate=16000 Hz announced_by_codec=1   <- told
+```
+
+**Fix**: reset `R27` to `0x0010`, and **announce the decoded rate out of reset**
+— in the reset *exit* phase, so it cannot be clobbered by a device that resets
+after us. We are the bit-clock master; whoever we clock cannot know the rate
+unless we say it, and after power-on the driver may never ask again.
+
+Two latent traps found while fixing it, both of which would have made the fix
+*look* applied while changing nothing:
+- the SAI's rate handler returned early when the announced rate **equalled the
+  rate it already believed** — so an announcement that merely confirmed the
+  guess would never mark itself heard. *Being told 48 kHz when you already
+  believed 48 kHz is not a no-op: it is the difference between knowing and
+  guessing.* Record that you were TOLD before deciding whether anything CHANGED.
+- the SAI seeded `s->rate = 48000` at realize. A seeded rate is **a belief with
+  no source**, indistinguishable from one the codec supplied. It now starts at 0.
+
+The test now gates on **provenance**, not just duration: it reads the SAI's own
+trace and refuses a pass whose rate no codec ever announced — even a correct one.
+Mutating the fallback to a wrong value (8000) no longer perturbs the 48 kHz pass,
+which is the proof that the fallback is now a guard rather than a source.
+
 ### NULL — LPI2C `PARAM` FIFO depth
 RM: `PARAM` reset `0x0000_0303` (2^3 = 8-deep tx/rx FIFOs). We already return
 `0x0303`. Immune to 91's watermark bug (they had `0x0404`=16-deep, since fixed).
