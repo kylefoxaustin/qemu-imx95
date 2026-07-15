@@ -33,6 +33,8 @@
 #include "system/address-spaces.h"
 #include "system/cpus.h"
 #include "system/system.h"
+#include "system/rtc.h"
+#include "qemu/cutils.h"
 #include "hw/arm/bsa.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/armv7m.h"
@@ -1040,6 +1042,76 @@ static void fsl_imx95_m7_run_handler(void *opaque, int n, int level)
                                   : fsl_imx95_m7_power_off_bh, s);
 }
 
+/*
+ * BBNSM: mostly a RAM-backed scratch region (GPRs, CTRL, tamper) that the SM
+ * write-then-read-backs, with ONE live element - the RTC counter - seeded from
+ * the host wall-clock.
+ *
+ * On silicon the BBNSM RTC is a 32768 Hz free-running counter; bit 15 = one
+ * second, so both the SM (BBNSM_RTC_GetSeconds) and Linux (rtc-nxp-bbnsm)
+ * reconstruct seconds = (RTC_MS << 17) | (RTC_LS >> 15). Modelled as plain RAM
+ * the counter never advanced, so both read a frozen value and Linux's
+ * CLOCK_REALTIME sat at 1970 (elapsed-since-boot, no wall-clock). Returning
+ * host time gives the guest a real wall-clock: `date` reads 2026, TLS/cert and
+ * log timestamps are sane, and the enet-lab3 beacon's guest epoch cross-aligns
+ * with the semihosting nodes in holobench's lab.
+ */
+#define BBNSM_CTRL      0x08
+#define BBNSM_RTC_LS    0x40
+#define BBNSM_RTC_MS    0x44
+#define BBNSM_RTC_EN    0x02        /* CTRL.RTC_EN - "counter running" */
+
+static uint64_t fsl_imx95_bbnsm_host_secs(void)
+{
+    struct tm tm;
+
+    qemu_get_timedate(&tm, 0);
+    return (uint64_t)mktimegm(&tm);
+}
+
+static uint64_t fsl_imx95_bbnsm_read(void *opaque, hwaddr off, unsigned size)
+{
+    FslImx95State *s = opaque;
+    uint64_t val = 0;
+
+    switch (off) {
+    case BBNSM_RTC_LS:
+        return (fsl_imx95_bbnsm_host_secs() << 15) & 0xffffffffULL;
+    case BBNSM_RTC_MS:
+        return fsl_imx95_bbnsm_host_secs() >> 17;
+    case BBNSM_CTRL:
+        /* Force RTC_EN so the SM and Linux see the counter running. */
+        return ldl_le_p(&s->bbnsm_regs[BBNSM_CTRL]) | BBNSM_RTC_EN;
+    default:
+        break;
+    }
+    /* Everything else behaves as RAM (SM GPR/scratch write-then-read-back). */
+    memcpy(&val, &s->bbnsm_regs[off], size);
+    return val;
+}
+
+static void fsl_imx95_bbnsm_write(void *opaque, hwaddr off, uint64_t val,
+                                  unsigned size)
+{
+    FslImx95State *s = opaque;
+
+    /*
+     * RTC-time writes (LS/MS) are accepted into the backing but do NOT override
+     * the host clock - host time is authoritative for the emulated wall-clock,
+     * so a guest `hwclock -w` is a no-op, not a re-freeze of the counter.
+     * CTRL and the GPRs behave as RAM so the SM's read-back still works.
+     */
+    memcpy(&s->bbnsm_regs[off], &val, size);
+}
+
+static const MemoryRegionOps fsl_imx95_bbnsm_ops = {
+    .read = fsl_imx95_bbnsm_read,
+    .write = fsl_imx95_bbnsm_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
+
 static void fsl_imx95_realize(DeviceState *dev, Error **errp)
 {
     MachineState *ms = MACHINE(qdev_get_machine());
@@ -1445,12 +1517,13 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in(gicdev, FSL_IMX95_SYSCNT_IRQ));
 
     /*
-     * BBNSM region as RAM (see comment on s->bbnsm in fsl-imx95.h). The
-     * M33 SM firmware reaches it via the m33_view alias of system memory.
+     * BBNSM: RAM-backed for the SM's GPR/CTRL scratch, with a LIVE host-seeded
+     * RTC counter (see the io ops above and the comment on s->bbnsm in the
+     * header). The M33 SM firmware reaches it via the m33_view alias.
      */
-    memory_region_init_ram(&s->bbnsm, OBJECT(dev), "imx95-bbnsm",
-                           fsl_imx95_memmap[FSL_IMX95_BBNSM].size,
-                           &error_fatal);
+    memory_region_init_io(&s->bbnsm, OBJECT(dev), &fsl_imx95_bbnsm_ops, s,
+                          "imx95-bbnsm",
+                          fsl_imx95_memmap[FSL_IMX95_BBNSM].size);
     memory_region_add_subregion(get_system_memory(),
                                 fsl_imx95_memmap[FSL_IMX95_BBNSM].addr,
                                 &s->bbnsm);

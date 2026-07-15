@@ -209,14 +209,18 @@ struct FslImx95State {
     DeviceState            *sysctr;
     /*
      * BBNSM (Battery-Backed Non-Secure Module: RTC, tamper, 8 general-
-     * purpose registers) backed by RAM so writes stick. The NXP SM
-     * firmware touches it during early init (brd_sm reset-record GPRs via
-     * BBNSM_GprSetValue, and RTC setup that polls CTRL.RTC_EN back). The
-     * driver only does write-then-read-back on these registers and never
-     * reads VID/FEATURES, so a plain RAM region is sufficient. The A55
-     * Linux side does not currently touch it.
+     * purpose registers). RAM-backed so the SM's write-then-read-back on the
+     * GPRs / CTRL sticks (brd_sm reset-record GPRs via BBNSM_GprSetValue, RTC
+     * setup that polls CTRL.RTC_EN) - EXCEPT the RTC counter, which is a live
+     * host-seeded wall-clock. It used to be plain RAM, so the counter never
+     * ticked: both the SM (BBNSM_RTC_GetSeconds) and the A55 Linux
+     * rtc-nxp-bbnsm driver (which DOES read it - the old comment here claimed
+     * otherwise) got a frozen value, and Linux's CLOCK_REALTIME stayed at 1970.
+     * bbnsm_regs is the RAM backing; the RTC-counter reads are computed from
+     * host time. See fsl_imx95_bbnsm_ops.
      */
     MemoryRegion            bbnsm;
+    uint8_t                 bbnsm_regs[0x1000];
     /*
      * HSIO BLK_CTRL (HSIOMIX) backed by RAM. The SM's SystemInit does a
      * read-modify-write of the LFAST IO register at 0x4c0100c0; RAM gives
