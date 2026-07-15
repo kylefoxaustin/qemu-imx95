@@ -207,6 +207,28 @@ static long now_ms(void)
     return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
+/*
+ * Wall-clock Unix epoch in ms, for the PASS line's t= field ONLY. Internal
+ * pacing and quiet-detection use now_ms() (CLOCK_MONOTONIC) so a stepped clock
+ * cannot disturb them; but holobench cross-aligns the four nodes' departure
+ * windows by their guest-emitted t=, which must be a COMMON absolute base, not
+ * each node's elapsed-since-start. 91 and rt1180 emit gettimeofday/SYS_TIME
+ * epochs; this matches them.
+ *
+ * The caveat travels with the number (91's, taken verbatim): without -icount
+ * this tracks HOST wall-clock, so absolute stamps drift under load. Trust a GAP
+ * in t= to bracket a departure to ~beat/100 ms resolution; do NOT build a
+ * sub-100 ms absolute-timing claim on it. A timestamp trusted blindly is the
+ * next bug.
+ */
+static long now_epoch_ms(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
 static uint32_t be32(const unsigned char *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -390,6 +412,21 @@ int main(int argc, char **argv)
 
     dl_env = getenv("LAB_DEADLINE_MS");
     dl_ms = dl_env ? strtol(dl_env, NULL, 0) : 120000;
+
+    /*
+     * DECLARE OUR CONTRACT ON THE WIRE, ONCE. holobench cannot score a node's
+     * CORRUPT verdicts until it knows what that node PROMISED - "mcx + imx95
+     * print no ENET-LAB3 UP: line, so their contract is UNDECLARED and their
+     * CORRUPT is unscoreable". So a red we emit is un-auditable until we say, up
+     * front and in the format the scorer greps, exactly what we are: which
+     * ethertype, how many required peers gate our PASS, that we EMIT the body
+     * (not just check it), and that we self-arm (re-arm every round, never
+     * latch). rt1180 and imx91 already declare; this closes the gap on our side.
+     */
+    printf("ENET-LAB3 UP: ethertype=0x%04x peers=%d body=emit "
+           "enforce=self-arming\n", my_et, npeers);
+    fflush(stdout);
+
     t0 = now_ms();
     deadline = t0 + dl_ms;
 
@@ -666,9 +703,18 @@ int main(int argc, char **argv)
             for (unsigned i = 0; i < BEACON_ET_SLOTS; i++) {
                 validated += blk_ever[i];
             }
+            long ep = now_epoch_ms();
+
             beat++;
             passed_once = 1;
             /*
+             * t= is an ABSOLUTE Unix epoch (now_epoch_ms), not elapsed-since-
+             * start, so holobench can cross-align this node's beat timeline with
+             * the other three and bracket a survivor's departure directly off the
+             * wire - the one measurement its arrival-stamping cannot make. Format
+             * matches 91/rt1180 (seconds.milliseconds). See now_epoch_ms() for
+             * the ~beat-resolution caveat that ships with it.
+             *
              * foreign= is the POSITIVE fact behind "we do not condemn traffic
              * that is not our protocol". Without it, that claim cannot testify
              * that the condition was ever present - and a negative test rots
@@ -677,7 +723,7 @@ int main(int argc, char **argv)
             printf("ENET-LAB3 PASS: t=%ld.%03lds peers=%d/%d validated=%d "
                    "beat=%llu loss=%llu foreign=%llu self=%llu "
                    "reboots=%llu legacy=%llu\n",
-                   (t - t0) / 1000, (t - t0) % 1000, npeers, npeers,
+                   ep / 1000, ep % 1000, npeers, npeers,
                    validated, beat, losses, foreign_ignored, self_ignored,
                    reboots, legacy_seen);
             fflush(stdout);
