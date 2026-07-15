@@ -106,6 +106,38 @@ static uint8_t pf09_recv(I2CSlave *i2c)
     return val;
 }
 
+/*
+ * OFF-SoC RESET-VALUE NOTE (audited 2026-07-14; do NOT relabel this "clean").
+ *
+ * This memset-to-0 is SCAFFOLD, not the chip's power-on state. A real PF09
+ * comes up with per-rail OTP defaults in its SW*_VRUN / LDO*_RUN registers; we
+ * zero them and seed only REV_ID so PF09_Init proceeds. That is the class
+ * 93/91emulator found in their PCA9451A - and the honest move their RM-golden
+ * audits skipped is to write the analysis here, not let "the RM doesn't
+ * describe it" masquerade as "checked clean".
+ *
+ * Severity measured from the consumer, NOT inherited from the sibling boards:
+ *   - On i.MX95 the PMIC is owned by the M33 System Manager, not read directly
+ *     by Linux (contrast 91/93, whose pca9450 driver reads OTP straight).
+ *   - The only voltage domain the SM exposes to the AP is DEV_SM_VOLT_ARM = SW1
+ *     (configs/mx95evk/config_lmm.h). The SM SETS SW1 to BOARD_VOLT_ARM before
+ *     the AP runs (the A55 cannot execute without its rail set), so the
+ *     AP-facing BRD_SM_VoltageLevelGet -> PF09_VoltageGet(SW1) reads back the
+ *     WRITTEN value, never our 0. No fabricated voltage reaches Linux.
+ *   - Rails the SM manages are written before read; rails neither written nor
+ *     AP-read are not consumer-touched (our rule), so their 0 is invisible.
+ *     The machine boots to userspace on the real SM - the reachable paths
+ *     tolerate this.
+ *
+ * So this is NOT a silent-wrong-to-Linux bug, and it is left as labelled
+ * scaffold rather than "fixed" with a GUESS: no PF09 datasheet is in 95_docs/
+ * (RM only), and an unsourced OTP byte would read as measured - the exact
+ * laundering audited against all week. The sourceable path, if a future
+ * consumer makes a rail reachable, is 93's method: target voltages from the
+ * board DT + vsel encoding from mainline pf0900-regulator.c - a DERIVED value,
+ * labelled. A belt-and-suspenders SCMI VOLTAGE_LEVEL_GET check on the ARM
+ * domain is deferred to board time, stated rather than claimed.
+ */
 static void pf09_reset(DeviceState *dev)
 {
     PF09State *s = PF09_PMIC(dev);
@@ -343,6 +375,14 @@ static uint8_t pf53_recv(I2CSlave *i2c)
     return s->regs[s->cur_reg++];
 }
 
+/*
+ * Same off-SoC scaffold class and same measured-down severity as pf09_reset()
+ * above - see that comment. The PF53 (SW1) is the SM's own DVFS buck for the
+ * ARM/SoC rail; the SM programs it via PF53_VoltageSet before use and tracks
+ * the level in software (brd_sm_voltage.c s_levelArm), so our zeroed VOUT is
+ * written before any consumer reads it. Left as labelled scaffold, not seeded
+ * with a guessed OTP byte (no PF53 datasheet in 95_docs/).
+ */
 static void pf53_reset(DeviceState *dev)
 {
     PF53State *s = PF53_PMIC(dev);

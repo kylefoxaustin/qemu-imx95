@@ -277,6 +277,51 @@ RM: `PARAM` reset `0x0000_0303` (2^3 = 8-deep tx/rx FIFOs). We already return
 RM: `MSR` reset `0x0000_0001` (TDF, tx-FIFO-empty, bit 0 set). Our model forces
 `MSR_TDF` on every read — already matches.
 
+## Off-SoC parts — the golden's blind spot (added 2026-07-14)
+
+This audit's golden was the i.MX 95 **RM's reset column**, which describes on-SoC
+blocks only. 93emulator's law: *an audit's blind spot is its golden's blind spot,
+and an RM-golden reset-value audit writes "checked clean" over every off-SoC part,
+because "the RM doesn't mention it" and "it's correct" produce the same empty
+grep.* So the parts on the I²C/I3C buses — PMICs, codec, IO-expanders — were never
+in scope above. Swept here, each against **its own** datasheet/consumer, not the
+RM.
+
+### DECISION (scaffold, labelled) — PF09 / PF53 PMIC `memset(0)` reset
+`hw/misc/imx95_pmic.c` zeroes the PF09 and PF53 register files at reset and seeds
+only `REV_ID`. A real PMIC powers up with per-rail **OTP defaults** in its
+`SW*_VRUN`/`LDO*_RUN` VOUT registers — the same fabrication class 93/91 found in
+their PCA9451A (BUCK4 off by 2× on the SD rail).
+
+**Severity measured from the consumer, not inherited from 91/93 — and it is the
+"95 behaves as 95" difference:** on i.MX 95 the PMIC is owned by the **M33 System
+Manager**, not read directly by Linux. The only voltage domain the SM exposes to
+the AP is `DEV_SM_VOLT_ARM = PF09 SW1` (`configs/mx95evk/config_lmm.h`), and the
+SM *writes* SW1 to `BOARD_VOLT_ARM` before the AP runs (the A55 can't execute
+without its rail set), so the AP-facing `BRD_SM_VoltageLevelGet → PF09_VoltageGet`
+read-back returns the **written** value, never our 0. Rails the SM manages are
+written before read; rails neither written nor AP-read are not consumer-touched.
+**No fabricated voltage reaches Linux** — verified from `brd_sm_voltage.c` +
+`config_lmm.h`, and the machine boots to userspace on the real SM.
+
+**Not "fixed" with a guess:** no PF09/PF53 datasheet is in `95_docs/` (RM only), so
+a seeded OTP byte would read as measured while being unsourced — the exact
+laundering audited against all week. Left as **labelled scaffold** (comment in
+`imx95_pmic.c`, not "checked clean"). The sourceable path if a future consumer
+makes a rail reachable: 93's method — target voltages from the board DT + vsel
+encoding from mainline `drivers/regulator/pf0900-regulator.c` — a **DERIVED**
+value, labelled. Belt-and-suspenders empirical check (SCMI `VOLTAGE_LEVEL_GET` on
+the ARM domain never returns a 0-derived level) deferred to board time, stated not
+claimed.
+
+### NULL — PCAL6408A / PCAL6524 / PCA9554 / ADP5585 IO-expanders
+Reset `memset(0)` + the ID/manufacturer register where the driver gates on it
+(ADP5585 `0x00 = 0x20`). For a pca953x/adp5585-class expander the POR **is**
+all-zero for output/polarity and all-**input** for the direction register — and
+the direction default (`0xFF`) is produced by the driver's own regcache, not read
+from our reset (91's point #4: one file can hold both a real POR and a fabrication;
+each judged separately). No consumer reads a fabricated non-zero here. Left as-is.
+
 ## Not audited, and why (no silent caps)
 
 Stating these plainly, because a sweep that quietly skips a block reads as
