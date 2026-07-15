@@ -617,12 +617,20 @@ load-soak (`tests/netc/load-soak.sh`) drives the datapath bidirectionally: a
 **24-hour run moved 4.76 billion frames / 7.19 TB at ~661 Mbps average
 (740 Mbps peak), with zero rx/tx errors or drops, zero kernel anomalies, and
 flat guest memory**, ending in a clean self-poweroff (a functional datapath
-rate under TCG, not a silicon estimate). **All three ENETC ports are wired** —
+rate under TCG, not a silicon estimate — and since host load during the run was
+not recorded, the rate is a **floor, not a ceiling**: contention can only depress
+it. The error/drop/anomaly counts, being counts, are load-insensitive).
+**All three ENETC ports are wired** —
 the two 1G ports (ENETC0 + ENETC1), validated **back-to-back** with a dual-board
 EVK ⇄ FRDM traffic test (`eth0` ⇄ `eth1` in separate netns,
-`tests/netc/run-2port.sh`), plus the **10G port** (ENETC2, `ethernet@10,0`):
-the same ENETC v4 PF brought up via a fixed-link `10gbase-r` node, so
-`enetc4_pf` reports `eth2: Link is Up - 10Gbps/Full` (`tests/netc/run-10g.sh`).
+`tests/netc/run-2port.sh`), plus the **10G port** (ENETC2, `ethernet@10,0`),
+brought up **two ways**: a fixed-link `10gbase-r` node (`tests/netc/run-10g.sh`),
+and — since **v2.4.0** — through the **real PHY chain** (NETC EMDIO → Aquantia
+AQR113C → DesignWare xPCS, no fixed-link shortcut), where `enetc4_pf` reports
+`eth2: Link is Up - 10Gbps/Full` after a genuine in-band negotiation
+(`tests/netc/run-real-10g.sh`). Note that `10Gbps/Full` is the **negotiated link
+state**, not a measured throughput — no 10G of traffic has been pushed through
+the port.
 See [`tests/netc/`](tests/netc/) for the bring-up, two-port, 10G, and soak
 recipes.
 
