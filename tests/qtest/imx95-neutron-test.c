@@ -30,7 +30,11 @@
 #define APPSTATUS_INFDONE  (1u << 0)
 #define APPSTATUS_MBOX     (1u << 4)
 #define CMD_RUN            0x269
+#define RET_RUN_ACK        0xA3
 #define RET_DONE           0xAD0
+
+/* Past the model's RUN_ACK -> DONE servicing delay (NEUTRON_RUN_NS = 1000). */
+#define NEUTRON_STEP_NS    2000
 
 static void test_neutron_bringup(void)
 {
@@ -47,7 +51,17 @@ static void test_neutron_bringup(void)
     qtest_writel(qts, DEV + N_MBOX3, CMD_RUN);
     qtest_writel(qts, DEV + N_APPCTRL, APPCTRL_DOORBELL);
 
-    /* The model answers DONE and flags completion. */
+    /*
+     * Two-phase mailbox: the doorbell is acked SYNCHRONOUSLY with RUN_ACK (so
+     * the driver's MBOX0 != 0 poll unblocks), and completion has NOT landed yet
+     * - MBOX0 is RUN_ACK, not DONE, and the event flags are still clear.
+     */
+    g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_RUN_ACK);
+    appstatus = qtest_readl(qts, DEV + N_APPSTATUS);
+    g_assert_cmphex(appstatus & (APPSTATUS_INFDONE | APPSTATUS_MBOX), ==, 0);
+
+    /* Advance past the servicing delay: now DONE lands with the event flags. */
+    qtest_clock_step(qts, NEUTRON_STEP_NS);
     g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
     appstatus = qtest_readl(qts, DEV + N_APPSTATUS);
     g_assert_cmphex(appstatus & (APPSTATUS_INFDONE | APPSTATUS_MBOX), ==,
@@ -59,12 +73,17 @@ static void test_neutron_bringup(void)
     qtest_quit(qts);
 }
 
-/* Clock the NPU on and ring a RUN-inference doorbell. */
+/*
+ * Clock the NPU on, ring a RUN-inference doorbell, and advance past the
+ * two-phase servicing delay so the DONE completion (and MBOX1 error_code) have
+ * landed by the time the caller reads them.
+ */
 static void run_inference(QTestState *qts)
 {
     qtest_writel(qts, RCTL, RCTL_ZENV_CLK_ON);
     qtest_writel(qts, DEV + N_MBOX3, CMD_RUN);
     qtest_writel(qts, DEV + N_APPCTRL, APPCTRL_DOORBELL);
+    qtest_clock_step(qts, NEUTRON_STEP_NS);
 }
 
 /*

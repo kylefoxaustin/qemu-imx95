@@ -41,6 +41,7 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qemu/timer.h"
 #include "qapi/error.h"
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
@@ -89,8 +90,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95NeutronState, IMX95_NEUTRON)
 #define N_APPSTATUS_MBOX      (1u << 4)
 
 /* mailbox return codes (uapi: the driver keys completion on DONE) */
+#define N_RET_RUN_ACK         0xA3     /* "doorbell received, running" */
 #define N_RET_DONE            0xAD0
 #define N_RET_RESET           0x0
+
+/*
+ * Nominal servicing latency between the RUN_ACK and DONE phases (see
+ * neutron_doorbell). This is NOT modelled inference time - the compute is
+ * proprietary and unmodelled - just a small non-zero gap so the driver observes
+ * the two-phase RUN_ACK -> DONE transition it sees on silicon, rather than a
+ * single synchronous DONE. Well within the driver's patient result wait (a
+ * 100 us poll hrtimer, or the completion IRQ).
+ */
+#define NEUTRON_RUN_NS        1000
 
 /* mailbox commands in MBOX3 (driver: RUN = run inference, RESET = re-arm). */
 #define N_CMD_RUN             0x269
@@ -119,6 +131,14 @@ struct IMX95NeutronState {
     uint32_t regs[NEUTRON_DEV_SIZE / 4];
     bool started;                   /* NPU clocked + firmware "up" */
     bool irq_pending;
+
+    /*
+     * Two-phase mailbox: the doorbell posts RUN_ACK synchronously and arms this
+     * timer, which posts DONE (the completion) once the nominal servicing delay
+     * elapses. pending_cmd carries the command word across the two phases.
+     */
+    QEMUTimer *done_timer;
+    uint32_t pending_cmd;
 
     /*
      * Honesty/telemetry: the NPU acks inferences without computing them (the
@@ -166,15 +186,17 @@ static void neutron_update_irq(IMX95NeutronState *s)
 }
 
 /*
- * Service a mailbox command: the proprietary NPU would run the inference here.
- * For bring-up we acknowledge completion (DONE) and signal the driver — the
- * output buffer at BASEINOUT is left untouched (no compute).
+ * DONE phase (deferred): the "inference" has finished. Post the completion
+ * retcode, raise the event flags + IRQ, and (for RUN) the honest-fault
+ * error_code. The proprietary compute is not modelled, so the output buffer at
+ * BASEINOUT is left untouched.
  */
-static void neutron_doorbell(IMX95NeutronState *s)
+static void neutron_done(void *opaque)
 {
-    uint32_t cmd = ndev_r(s, N_MBOX3);
+    IMX95NeutronState *s = opaque;
+    uint32_t cmd = s->pending_cmd;
 
-    ndev_w(s, N_MBOX0, N_RET_DONE);    /* retcode the driver expects */
+    ndev_w(s, N_MBOX0, N_RET_DONE);    /* the retcode the driver waits on */
     ndev_w(s, N_APPSTATUS,
            ndev_r(s, N_APPSTATUS) | N_APPSTATUS_INFDONE | N_APPSTATUS_MBOX);
     s->irq_pending = true;
@@ -203,6 +225,24 @@ static void neutron_doorbell(IMX95NeutronState *s)
         qemu_log_mask(LOG_UNIMP,
                       "imx95-neutron: cmd 0x%x acked (DONE)\n", cmd);
     }
+}
+
+/*
+ * Service a mailbox command. On silicon the NPU is a two-phase mailbox: the
+ * doorbell is acknowledged IMMEDIATELY with RUN_ACK (the driver's
+ * mbox_send_data polls MBOX0 != 0 within ~20 us and returns -ETIME otherwise),
+ * and the completion DONE lands later, once the engine finishes. We split it
+ * the same way - RUN_ACK synchronously, DONE from neutron_done after a nominal
+ * delay - so the driver observes the RUN_ACK -> DONE transition it does on
+ * hardware instead of a single synchronous DONE. (The RESET command, handled in
+ * neutron_dev_write, is not a doorbell and stays synchronous.)
+ */
+static void neutron_doorbell(IMX95NeutronState *s)
+{
+    s->pending_cmd = ndev_r(s, N_MBOX3);
+    ndev_w(s, N_MBOX0, N_RET_RUN_ACK);
+    timer_mod(s->done_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NEUTRON_RUN_NS);
 }
 
 static uint64_t neutron_rctl_read(void *opaque, hwaddr off, unsigned size)
@@ -285,6 +325,11 @@ static void neutron_dev_write(void *opaque, hwaddr off, uint64_t val,
          * hw-resets + reloads firmware before every subsequent inference.
          */
         if (val == N_CMD_RESET) {
+            /*
+             * Re-arm: abandon any inference whose DONE has not fired yet, or
+             * its timer would clobber MBOX0 to DONE after we set RESET here.
+             */
+            timer_del(s->done_timer);
             ndev_w(s, N_MBOX0, N_RET_RESET);
         }
         return;
@@ -319,6 +364,10 @@ static void neutron_reset(DeviceState *dev)
     s->started = false;
     s->irq_pending = false;
     s->acked_uncomputed = 0;
+    s->pending_cmd = 0;
+    if (s->done_timer) {
+        timer_del(s->done_timer);
+    }
     /*
      * uncomputed_errcode is operator config (property), not device state - do
      * not clear it on reset, so a -global / qom-set value survives a guest
@@ -355,6 +404,8 @@ static void neutron_realize(DeviceState *dev, Error **errp)
     object_property_add_uint32_ptr(OBJECT(dev), "neutron-uncomputed-errcode",
                                    &s->uncomputed_errcode,
                                    OBJ_PROP_FLAG_READWRITE);
+
+    s->done_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, neutron_done, s);
 
     memory_region_init_io(&s->rctl_iomem, OBJECT(dev), &neutron_rctl_ops, s,
                           "imx95.neutron.resetctrl", RESETCTRL_SIZE);
