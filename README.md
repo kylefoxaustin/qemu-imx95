@@ -7,8 +7,10 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 > `imx95-netc` branch (the repository default and the upstream candidate),
 > from its tip back to the upstream branch point `edcc429e9e`; the vast
 > majority of the ~129k-commit history is inherited from upstream QEMU.
-> `imx95-netc` is the full series — v1 (the A55/M33/M7 complement) plus the
-> v2.0.0 NETC networking work — in one linear history. The older
+> `imx95-netc` is the full series — from v1 (the A55/M33/M7 complement) through
+> the NETC networking, multimedia, storage/Weston, 10G real-PHY, silicon-validated
+> fidelity and U-Boot boot-chain work that followed (see the
+> [Roadmap](#roadmap--milestone-history)) — in one linear history. The older
 > `imx95-scaffold` branch is the pure-v1 line, kept for reference and without
 > NETC. The upstream QEMU README is preserved at [`README.rst`](README.rst) —
 > this file describes the i.MX 95-specific work.
