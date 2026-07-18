@@ -198,12 +198,40 @@ timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -kernel "$IMAGE" -dtb "$DTB" -initrd "$WORK/initrd.cpio.gz" \
   -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init play_rate=$RATE" \
   -device loader,file="$SM_ELF",cpu-num=6 \
-  -audio driver=wav,path="$WAV" \
+  -audio driver=wav,path="$WAV",out.frequency=$RATE \
   -trace enable=wm8962_rate -trace enable=imx95_sai_tx_enable -D "$TRC" \
   -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
 
 echo "--- playback report (rate=$RATE) ---"
 sed -n '/WM8962-PLAYBACK/,/WM8962-PLAYBACK-DONE/p' "$LOG" | grep -vE 'PLAYBACK-DONE'
+
+#
+# RUN-STRUCTURE oracle (the four-tree bug-#2 method, 2026-07-18) - a GATE, not a
+# summary statistic. With the wav rate pinned above (out.frequency=$RATE, no
+# resample), pcm_play's square wave lands in the capture as runs of EXACTLY 55
+# frames. An in-stream sample loss - any dropped/mis-paced frame - cuts a run
+# short, which the tone/peak/duration checks structurally CANNOT see (a scattered
+# 0.4% loss moves none of those statistics). The off-55 rate catches it.
+#
+# Calibrated on this tree (95), both rates, so the gate rests on measurement not
+# on the analyzer's synthetic number:
+#   - clean baseline           = 0.00% off-55 (91's caveat: the full ALSA stack
+#     adds NO period-boundary discontinuity here once the rate is pinned)
+#   - a synthetic 0.4% drop     = 21.97% off-55 (mutation-proven: the drop reaches
+#     the pinned capture at ~full strength - no mixer dilution, unlike 93's tree)
+# So 2.0% sits with a huge margin above 0 and far below any real loss. (95's own
+# bug #2 is a mutation-proven NO-OP - eDMA writes TDR0 frame-aligned, so offers
+# never go non-aligned - so this gate earns its keep on the CLASS of loss, not on
+# #2 specifically, exactly as on 91.)
+STRUCT_MAX_OFF=${STRUCT_MAX_OFF:-2.0}
+if [ -s "$WAV" ]; then
+    struct_out=$(python3 "$HERE/check_wav.py" "$WAV" "$STRUCT_MAX_OFF" 2>&1)
+    echo "$struct_out" | sed 's/^/  /'
+    if echo "$struct_out" | grep -q 'FAIL'; then
+        echo "FAIL(rate=$RATE): run-structure check caught an in-stream loss"
+        fail=1
+    fi
+fi
 
 # WAV content (informational). The -audio wav backend pulls at wall-clock, so
 # whether the full stream is captured/finalised before poweroff is timing-
