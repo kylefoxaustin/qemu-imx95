@@ -399,12 +399,26 @@ recorded here so the scope is explicit rather than surprising.
   This is confirmed, not assumed: an anti-fabrication boot (91emulator's guard —
   dump the guest's own `clk_summary` during an active capture) measured the SM
   really does feed a genuine `pdm_mclk = 49152000` (= 48000 × 1024) at capture
-  time. So the rate is REAL and derivable *in principle* — the scaffold is not a
-  silent-wrong (nothing consumes a wrong rate: the capture/spdif tests exercise
-  only the one rate the hardcode matches). It is deferred because deriving it
-  means modelling a clock tree that i.MX95 deliberately does *not* model (the
-  whole "SM owns clocks" architecture), which is out of proportion to a latent
-  bug. Recorded with the measured `49152000` for whoever models the PLL tree.
+  time. So the rate is REAL and the scaffold is not a silent-wrong (nothing
+  consumes a wrong rate: the capture/spdif tests exercise only the one rate the
+  hardcode matches).
+
+  But it is **not derivable in the model** — proven by measurement, not assumed.
+  Instrumenting the ANATOP model to dump AUDIO_PLL1 (0x44481100) as the SM
+  actually programs it during a live capture yields `CTRL=0x03 NUM=0 DENOM=0
+  DIV=0x00013b00, all four DFS_DIV=0`. Decoded with the SM's own field masks
+  (`MIMX95_PLL.h`: MFI[24:16], RDIV[15:13], ODIV[7:0]) that is `MFI=1, RDIV=1,
+  ODIV=0` → a 24 MHz VCO, which **cannot encode the 393216000 the SM reports over
+  SCMI** (pdm = that ÷8). In other words: because QEMU has no analog PLL, the SM
+  firmware does NOT write coherent ANATOP registers — it acks POWERUP/LOCK and
+  serves the rate from its own internal clock-tree state (`DEV_SM_ClockRateGet`).
+  So there is no register content in the model to derive from; "model the PLL
+  tree" would have nothing to compute against. The only in-model source of the Hz
+  is the SM firmware itself, which QEMU could reach only by acting as an SCMI
+  client to its own SM — architecturally absurd. Left as honest scaffold: the
+  rate is real, latent, and genuinely un-derivable from the modelled registers.
+  Recorded here (with the measured AUDIO_PLL1 dump) so this is not re-investigated
+  from scratch.
 
 - **DPU 2D blit — ROP9 raster ops (deferred by consumer-touched-fields).** The
   blit engine models fill, copy, Porter-Duff alpha-blend, nearest-neighbour

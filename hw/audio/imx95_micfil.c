@@ -67,15 +67,15 @@
  * rate * clkdiv * osr * 8; clk_set_rate). On i.MX95 clk_set_rate goes over SCMI
  * to the SM, which programs the AUDIO_PLL + PDM root - and the resulting Hz is
  * computed by the SM firmware's clock tree (DEV_SM_ClockRateGet), NOT stored in
- * any register this model can read: hw/misc/imx95_ccm.c holds the root CONTROL
- * words but not the Hz, and hw/misc/imx95_anatop.c is a PLL lock-stub with no
- * analog rate. Boot-measured during a real capture, the SM DOES feed a genuine
- * pdm_mclk = 49152000 (49152000/1024 = 48000), so the rate is REAL and
- * derivable
- * in principle - but deriving it in the model requires replicating the SM's
- * AUDIO_PLL fractional-N + PDM-root MUX/DIV tree (see known-limitations sec.7).
- * Latent today: the capture test exercises only 48 kHz, which the hardcode
- * happens to match - the SAI-48k masking, one block over.
+ * any register this model can read. Boot-measured: during a real capture the SM
+ * DOES feed a genuine pdm_mclk = 49152000 (= 48000 x 1024), so the rate is REAL -
+ * but it is NOT DERIVABLE from the model. Instrumenting ANATOP shows the SM
+ * leaves AUDIO_PLL1 at DIV=0x13b00 (MFI=1 -> 24 MHz VCO), DFS_DIV=0 - registers
+ * that cannot encode 393216000. Because QEMU has no analog PLL, the SM acks
+ * POWERUP/LOCK and serves the Hz from its own firmware clock-tree state, not from
+ * coherent registers. So there is nothing in the model to derive from (full
+ * evidence in known-limitations sec.7). Latent: the capture test exercises only
+ * 48 kHz, which the hardcode matches - the SAI-48k masking, one block over.
  */
 #define MICFIL_WORD_NS  (1000000000LL / 48000)
 
