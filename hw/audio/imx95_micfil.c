@@ -59,7 +59,24 @@
 #define MICFIL_VERID_VALUE  0x020F0000
 #define MICFIL_PARAM_VALUE  0x00000154
 
-/* MICFIL outputs ~48 kHz; one decimated sample per word period. */
+/*
+ * MICFIL capture word period. HARDCODED 48 kHz - SCAFFOLD, not the real rate.
+ *
+ * On silicon fs = pdm_mclk / (CLKDIV * OSR * 8), where the driver keeps
+ * CLKDIV/OSR constant and puts the rate in pdm_mclk (fsl_micfil.c: mclk =
+ * rate * clkdiv * osr * 8; clk_set_rate). On i.MX95 clk_set_rate goes over SCMI
+ * to the SM, which programs the AUDIO_PLL + PDM root - and the resulting Hz is
+ * computed by the SM firmware's clock tree (DEV_SM_ClockRateGet), NOT stored in
+ * any register this model can read: hw/misc/imx95_ccm.c holds the root CONTROL
+ * words but not the Hz, and hw/misc/imx95_anatop.c is a PLL lock-stub with no
+ * analog rate. Boot-measured during a real capture, the SM DOES feed a genuine
+ * pdm_mclk = 49152000 (49152000/1024 = 48000), so the rate is REAL and
+ * derivable
+ * in principle - but deriving it in the model requires replicating the SM's
+ * AUDIO_PLL fractional-N + PDM-root MUX/DIV tree (see known-limitations sec.7).
+ * Latent today: the capture test exercises only 48 kHz, which the hardcode
+ * happens to match - the SAI-48k masking, one block over.
+ */
 #define MICFIL_WORD_NS  (1000000000LL / 48000)
 
 #define R(s, off)   ((s)->regs[(off) >> 2])

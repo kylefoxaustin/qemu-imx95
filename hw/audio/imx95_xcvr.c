@@ -75,7 +75,15 @@
 #define EXT_CTRL_SPDIF_MODE     (1u << 23)  /* SPDIF mode selected         */
 #define EXT_CTRL_TX_FWM_MASK    0x7f        /* TX FIFO watermark [6:0]     */
 
-/* SPDIF stereo: 2 ch x 48 kHz = 96000 words/s. */
+/*
+ * SPDIF TX word period. HARDCODED 96000 words/s (48 kHz stereo) - SCAFFOLD.
+ * Same class and same root cause as the MICFIL rate (see imx95_micfil.c): the
+ * spdif_only driver sets phy_clk = 64 * rate * ch over SCMI, and on i.MX95 the
+ * resulting Hz is computed by the SM firmware's clock tree, not held in any
+ * model register (ANATOP is a lock-stub, CCM stores CONTROL words). Latent -
+ * the spdif test exercises only 48 kHz. Deriving it needs the AUDIO_PLL/root
+ * tree modelled (known-limitations sec.7).
+ */
 #define XCVR_TX_WORD_NS (NANOSECONDS_PER_SECOND / 96000)
 
 /* TX clocks once SPDIF mode is on, the datapath released and DMA enabled. */

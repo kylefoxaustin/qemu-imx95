@@ -380,6 +380,32 @@ class, where a model returns a plausible-but-incorrect result; each is either an
 honest "not exercised", an honest "no data", or a clean workaround. They are
 recorded here so the scope is explicit rather than surprising.
 
+- **MICFIL capture rate + SPDIF/XCVR TX rate — hardcoded, not derived (the
+  clock Hz lives in the SM, not the model).** `MICFIL_WORD_NS` (48 kHz) and
+  `XCVR_TX_WORD_NS` (96 kHz) are hardcoded scaffold, the same class as the SAI
+  fixed-48-kHz bug that *was* fixed (SAI's rate authority is the wm8962 codec,
+  which announces it over a wired GPIO — MICFIL/XCVR have no such authority). On
+  silicon the rate is `pdm_mclk / (CLKDIV·OSR·8)` (MICFIL) / `phy_clk / 64`
+  (XCVR), where the driver keeps the divisors constant and puts the rate in the
+  clock via `clk_set_rate`. On i.MX95 that goes over SCMI to the SM, which
+  programs the AUDIO_PLL + root — **and the resulting Hz is computed by the SM
+  firmware's clock-tree walk (`DEV_SM_ClockRateGet`), not stored in any register
+  the model can read**: `hw/misc/imx95_ccm.c` holds the root CONTROL words but
+  not the Hz, and `hw/misc/imx95_anatop.c` is a PLL lock-stub with no analog
+  rate. So the rate is genuinely *not observable in the model* without
+  replicating the SM's AUDIO_PLL fractional-N + PDM/SPDIF-root MUX/DIV tree in
+  QEMU.
+
+  This is confirmed, not assumed: an anti-fabrication boot (91emulator's guard —
+  dump the guest's own `clk_summary` during an active capture) measured the SM
+  really does feed a genuine `pdm_mclk = 49152000` (= 48000 × 1024) at capture
+  time. So the rate is REAL and derivable *in principle* — the scaffold is not a
+  silent-wrong (nothing consumes a wrong rate: the capture/spdif tests exercise
+  only the one rate the hardcode matches). It is deferred because deriving it
+  means modelling a clock tree that i.MX95 deliberately does *not* model (the
+  whole "SM owns clocks" architecture), which is out of proportion to a latent
+  bug. Recorded with the measured `49152000` for whoever models the PLL tree.
+
 - **DPU 2D blit — ROP9 raster ops (deferred by consumer-touched-fields).** The
   blit engine models fill, copy, Porter-Duff alpha-blend, nearest-neighbour
   scale, rotate and CSC (qtested). It does **not** model ROP9 raster ops
