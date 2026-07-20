@@ -1122,7 +1122,13 @@ fidelity compromise in the modelled hardware.
   kernel over Ethernet to userspace** (`tests/uboot/run.sh`,
   `tests/uboot/run-linux.sh`). Also added the **NETC 1588 PHC** (`ptp_netc`) and
   proved TCP is byte-exact board-to-board (a missing ENETC TX-checksum-offload
-  fix — TCP had never actually worked, only ping had).
+  fix — TCP had never actually worked, only ping had). Two further silicon-diffed
+  corrections followed: a **host-seeded BBNSM RTC** (the guest wall-clock was
+  stuck at 1970 — the SM RTC → SCMI BBM → Linux `hctosys` chain now yields real
+  host time, so guest `date` is correct), and a **two-phase Neutron mailbox**
+  (the driver's synchronous `RUN_ACK` (0xA3) is posted before the later `DONE`,
+  matching how silicon acknowledges a submitted job — the on-NPU compute stays
+  out of scope as before).
 
 ## License & credits
 
