@@ -175,7 +175,7 @@ For 952, assume each block **inherits its 95 tier only after you re-verify it on
   don't fault via the completion retcode (hangs the driver) — fault via a
   side-band error_code IF the driver plumbs one to userspace.**
 - **Mali GPU** `imx95_mali.c` — HONEST-FAULT (TIER-2). Linux identifies
-  "arch 10.12.0" then fails `-EIO` cleanly (proprietary libmali userspace).
+  "arch 10.12.7" then fails `-EIO` cleanly (proprietary libmali userspace).
   **GPU_ID arch_minor MUST be 12 not 8** or you get a NULL-deref oops in
   gpuprops, not a clean fault.
 - **VPU (Wave6/cnm633c)** — BRINGS-UP (binds on stub).

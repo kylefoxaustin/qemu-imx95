@@ -275,7 +275,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | MIPI-DSI display output + NeoISP | B | dw-mipi-dsi -> rm67191 panel (card0-DSI-1) and the NeoISP driver bind at the registration bar |
 | DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM) | B | PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI |
 | Audio capture bring-up — BT-SCO + SAI RX | B | cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7) |
-| Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary | C | kbase identifies the Mali-G310 (arch 10.12.0) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result |
+| Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary | C | kbase identifies the Mali-G310 (arch 10.12.7) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result |
 
 **Absent on i.MX 95 silicon — N/A (never a failure):**
 
@@ -940,7 +940,7 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
 no VPU video codec; the HW JPEG codecs, a separate block, are functional). Linux
 still *sees* both: the Wave6 VPU drivers bind (`/dev/video*` present), and the
 Mali GPU model reports the real Mali-G310 GPU_ID so kbase **identifies** it
-(`GPU identified as 0x4 arch 10.12.0`) and then fails the un-modelled CSF
+(`GPU identified as 0x4 arch 10.12.7`) and then fails the un-modelled CSF
 bring-up **cleanly** (-EIO) — no hang, no fake `/dev/mali0`. (A fully-bound GPU
 couldn't render anyway: kbase's userspace is Arm's proprietary libmali, not
 Mesa.) The **Neutron NPU brings up end to end**: the remoteproc

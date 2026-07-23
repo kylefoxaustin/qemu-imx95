@@ -16,10 +16,12 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | Cortex-M33 System Manager (real SM fw) | A | PASS (boot) | Runs real NXP SM firmware; Linux's sole SCMI provider over MU |
 | Cortex-M7 (real-time domain) | A | HARNESS | SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip |
 | GICv3 + ITS | A | PASS (boot) | Underpins boot + MSI-X for NETC/PCIe |
+| U-Boot boot chain + network boot | A | HARNESS | ROM tables -> SM -> SPL -> U-Boot off eMMC; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace |
 | MU mailbox cross-connect | A | PASS (boot) | SCMI + rpmsg + ELE transports |
 | eDMA v3/v5 | A | PASS (qtest) | Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave |
 | ENETC x3 (2x1G + 10G) | A | PASS (qtest) | BD-ring DMA + MSI-X via ITS; links + traffic; board-to-board |
 | NETC EMDIO + AQR113C + xPCS (10G real chain) | A | HARNESS | Stock 10G node links @10Gbps through the real PHY chain (v2.4.0) |
+| NETC Timer (IEEE 1588 PHC) | A | HARNESS | ⚑ PPS/periodic-output/external-timestamp capture not modelled; ptp_netc binds at 0002:00:18.0; PHC registers and TMR_CUR_TIME advances |
 | uSDHC (SD + eMMC) | A | HARNESS | SDHCI/ADMA block r/w; ext4 mmcblk r/w/sync; Weston off eMMC rootfs |
 | FlexSPI + serial NOR | A | PASS (boot) | JEDEC + read; boots from real flash contents |
 | LPUART x8 | A | PASS (boot) | Console on ttyLP0; LPUART3 RX-DMA drives the UART interconnect |
@@ -50,9 +52,9 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | OCOTP eFuse + EdgeLock ELE | B | PASS (boot) | ELE responder (GET_INFO/RANDOM real entropy); fuse shadow seeded |
 | Clocks/power/reset (CCM/ANATOP/SRC via SM) | B | PASS (boot) | programmed by the SM; Linux reads real rates over SCMI |
 | Audio capture bring-up (BT-SCO + SAI RX) | B | PASS (boot) | cards register; no codec ADC-DAPM route (documented, known-limitations sec.7) |
-| Mali-G310 GPU (Valhall CSF) | C | PASS (qtest) | ⚑ compute needs proprietary libmali; kbase identifies GPU arch 10.12.0, then fails CSF bring-up cleanly (-EIO) |
+| Mali-G310 GPU (Valhall CSF) | C | PASS (qtest) | ⚑ compute needs proprietary libmali; kbase identifies GPU arch 10.12.7, then fails CSF bring-up cleanly (-EIO) |
 | VPU (Wave6 / cnm633c) | C | PASS (boot) | ⚑ decode/encode is proprietary firmware; wave6-vpu binds, /dev/video* present; no codec firmware -> no frames |
-| Neutron NPU | C | PASS (qtest) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; opt-in guest honest-fault via MBOX1 error_code |
+| Neutron NPU | C | PASS (qtest) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; default-on guest honest-fault via MBOX1 error_code (qom-set 0 to opt out) |
 
 ## Absent IP — N/A (NOT a negative result)
 
@@ -64,5 +66,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 41 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 43 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
 
