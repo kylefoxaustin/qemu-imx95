@@ -13,7 +13,7 @@ engine — so that once you drop the engine in, a user can:
 > run the model fully on the emulated Neutron NPU and read back correct outputs.
 
 Everything in this document outside the single "execution engine" box is already
-built, tested, and merged on branch `imx95-netc`. Your job is one well-bounded
+built, tested, and merged on branch `main`. Your job is one well-bounded
 C module behind a clean function-call seam.
 
 ---
@@ -37,7 +37,7 @@ call (§4). Nothing else in the stack changes.
 > `imx95_neutron.c`; the plumbing has since moved toward you — your job is
 > smaller than some passages below imply).** Three things this doc describes as
 > "you will add" or "the current stub does not do" are **already implemented** on
-> `imx95-netc` today. Read the doc with these corrections in mind:
+> `main` today. Read the doc with these corrections in mind:
 >
 > 1. **The two-phase mailbox is already in place.** `neutron_doorbell()` posts
 >    `RUN_ACK` (`0xA3`) **synchronously**, then a timer (`done_timer` →

@@ -152,7 +152,7 @@ The NETC/enetc blocks are logging stubs; `ping` reports `Network is
 unreachable`. The integrated-PCIe ECAM probes but enumerates no devices (empty
 slots by design). This is the v1.0-era baseline this report was captured on.
 NETC networking — a working `eth0` over a modelled ENETC PF — landed as the
-**v2.0.0** work that is now folded into this branch (`imx95-netc`, the
+**v2.0.0** work that is now folded into this branch (`main`, the
 repository default and upstream candidate), so a current build of this branch
 *does* bring up `eth0` (see [known-limitations](known-limitations.md) §6); this
 Tier-3 result predates it.
@@ -396,7 +396,7 @@ header-only, Pangolin is a CMake project.)
 populated. **But this validation run had no functional networking** (it was
 captured on the v1.0-era line, where NETC is still a logging stub — see
 [known-limitations](known-limitations.md) §6; NETC landed in v2.0.0, now part
-of this `imx95-netc` branch), so `apt update` / `apt install` can't reach any
+of this `main` branch), so `apt update` / `apt install` can't reach any
 mirror inline from inside the guest in that configuration. Three workarounds,
 all without machine-model changes:
 

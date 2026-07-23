@@ -4,10 +4,10 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 (LPDDR5) variant.
 
 > **This is a fork of QEMU mainline.** The i.MX 95 work lives on the
-> `imx95-netc` branch (the repository default and the upstream candidate),
-> from its tip back to the upstream branch point `edcc429e9e`; the vast
-> majority of the ~129k-commit history is inherited from upstream QEMU.
-> `imx95-netc` is the full series — from v1 (the A55/M33/M7 complement) through
+> `main` branch (the repository default and the upstream candidate; formerly
+> named `imx95-netc`), from its tip back to the upstream branch point
+> `edcc429e9e`; the vast majority of the ~129k-commit history is inherited from
+> upstream QEMU. `main` is the full series — from v1 (the A55/M33/M7 complement) through
 > the NETC networking, multimedia, storage/Weston, 10G real-PHY, silicon-validated
 > fidelity and U-Boot boot-chain work that followed (see the
 > [Roadmap](#roadmap--milestone-history)) — in one linear history. The older
@@ -67,7 +67,7 @@ Cortex-A55 cores.*
 ## Quickstart
 
 This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
-machine is on the default `imx95-netc` branch (a plain clone lands there).
+machine is on the default `main` branch (a plain clone lands there).
 Nothing needs patching. (The `docs/reviews/` patch artifacts are for
 *contributing back* to upstream QEMU; you never apply them to use this fork.)
 
@@ -1029,8 +1029,8 @@ fidelity compromise in the modelled hardware.
   graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
   test. Tagged `imx95-v1.1` at commit `442cbcf3a0`.
 - **v2.0.0** — NETC networking, the current upstream candidate. NETC was
-  developed on the `imx95-netc` branch on top of the v1 line, so the series is
-  one linear history; `imx95-netc` is the repository default. (The
+  developed on this branch (`main`) on top of the v1 line, so the series is
+  one linear history; `main` is the repository default. (The
   `imx95-scaffold` branch remains the pure-v1 line, without NETC.) A functional
   GICv3 ITS + an integrated-ECAM
   PCIe host + a from-scratch ENETC v4 Ethernet PF (`hw/net/fsl_enetc.c`, PCI
@@ -1039,7 +1039,7 @@ fidelity compromise in the modelled hardware.
   backend; RX BD-ring scatter + ring wraparound have deterministic qtests
   (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
   errors, flat memory).
-- **v2.x (on `imx95-netc`)** — the EVK's display / HMI / media peripherals on
+- **v2.x (on `main`)** — the EVK's display / HMI / media peripherals on
   top of v2.0.0: the **second + third ENETC ports** (1G back-to-back EVK ⇄ FRDM
   traffic, plus the 10G `eth2`); the **DPU display** path (FetchLayer
   scanout + a from-scratch `fsl,imx-irqsteer` driving the FrameGen vblank, so
@@ -1059,7 +1059,7 @@ fidelity compromise in the modelled hardware.
   LiteRT Neutron delegate runs `benchmark_model` — `tests/neutron/`; the
   proprietary on-NPU compute stays out of scope). Along the way: backed the PCIe
   `app`/`atu` windows so an unbacked-register external abort can't wedge the boot.
-- **v2.x storage + Wayland desktop (on `imx95-netc`)** — made Linux block
+- **v2.x storage + Wayland desktop (on `main`)** — made Linux block
   storage functional and stood up a Weston desktop on it. A generic `hw/sd`
   fix (open-ended multi-block read+write returned the card to the transfer
   state via the controller's implicit STOP — the "Card stuck being busy" hang)
@@ -1068,7 +1068,7 @@ fidelity compromise in the modelled hardware.
   `tests/sd-emmc/` proving write+readback+persist on both card types. On top of
   that, the NXP `imx-image-full` rootfs mounts read-write from eMMC and systemd
   brings up **Weston** (software-rendered/pixman) on the DPU — `tests/weston/`.
-- **v2.3.0 — robustness hardening + the M33 idle/density fix (on `imx95-netc`).**
+- **v2.3.0 — robustness hardening + the M33 idle/density fix (on `main`).**
   Two QA fuzzers (`tests/imx95-mmio-fuzz/`): an MMIO register-robustness sweep
   over the full device surface and an eDMA descriptor fuzzer that builds
   coherent-but-hostile TCDs. Together they found and fixed two real model bugs —
@@ -1094,7 +1094,7 @@ fidelity compromise in the modelled hardware.
   performed**, and the host census was not recorded, so they are predictions and
   not results. See `docs/reviews/v2.3.0.md` for the full provenance.
 - **v2.4.0 — Path B: the 10G port links through its real PHY chain (on
-  `imx95-netc`).** The stock `ethernet@10,0` (`10gbase-r`,
+  `main`).** The stock `ethernet@10,0` (`10gbase-r`,
   `managed = "in-band-status"`) now comes up at 10 Gbps through a fully-modelled
   **NETC EMDIO → Aquantia AQR113C → DesignWare xPCS** path — no fixed-link
   shortcut. A new EMDIO controller (`hw/net/imx95_netc_emdio.c`, a PCI endpoint on
@@ -1108,7 +1108,7 @@ fidelity compromise in the modelled hardware.
   timeout. Also lands the **board-to-board SPI + CAN interconnect** (joining
   eth/UART): `net/can/can_host_chardev.c` and a real eDMA-driven `fsl-lpspi`
   over `spi_link`, cross-validated 95↔91 (SPI) and 95↔MCX (CAN).
-- **Silicon-validated fidelity + the full U-Boot boot chain (on `imx95-netc`).**
+- **Silicon-validated fidelity + the full U-Boot boot chain (on `main`).**
   Diffed the model against a **real i.MX 95 board** and corrected what silicon
   disagreed with: the Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO
   identity registers, and a Neutron mailbox RESET that was quietly reloading NPU

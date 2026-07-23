@@ -34,7 +34,7 @@ This file is the map; that file is the spec.
 - **Your job:** replace the one place the model *acks without computing* with a
   real engine. Everything around that seam — MMIO, mailbox protocol, doorbell,
   IRQ, TCM, remoteproc, the two-phase ACK/DONE timing, the DMA carveout the
-  driver hands you — is already built, tested, and merged on `imx95-netc`.
+  driver hands you — is already built, tested, and merged on `main`.
 
 ---
 

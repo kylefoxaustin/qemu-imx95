@@ -23,7 +23,7 @@ board:        imx95-19x19-evk
 qemu_machine: imx95-19x19-evk
 
 environment:
-  model:          imx95-netc @ 9b3e62e359e        # harness branch/commit
+  model:          main @ 9b3e62e359e        # harness branch/commit
   qemu_binary:    build/qemu-system-aarch64        # built 2026-06-14
   kernel:         "6.12.49 (imx95 BSP)"
   sm:             "cfg=mx95evk M=2"

@@ -341,7 +341,7 @@ PF advertised PCI Revision ID 1, and the driver routes a rev1 in-band PCS
 through a Lynx PCS but a rev4 one through the DW xPCS — so a stray revision byte
 silently forked the driver down the wrong subsystem. On the older
 **`imx95-scaffold`** reference branch (pure v1) networking is not present — NETC
-is the additive v2.0.0 work, now part of the default `imx95-netc` branch.
+is the additive v2.0.0 work, now part of the default `main` branch.
 
 **Downstream note — the BSP rootfs `apt` setup.** Even with outbound
 networking via `-nic user` (slirp), NXP's BSP rootfs
