@@ -55,3 +55,9 @@ tests/busybox-initramfs/*.cpio.gz
 # operator-supplied Neutron runner: local paths only, never NXP content
 build/neutron-runner.local.env
 *.local.env
+
+# NXP eIQ SDK wheels/artifacts + internal handoff drops (never commit)
+/eiq_neutron_sdk-*.whl
+*.whl
+/PARALLEL-SESSION-HANDOFF.md
+/neutron-code-snapshot-*.zip

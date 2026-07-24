@@ -153,23 +153,33 @@ static void test_neutron_errcode_faithful_optout(void)
  */
 #define BR_CARVEOUT_BASE      0x80000000ULL     /* FSL_IMX95_RAM_START */
 #define BR_INPUT_OFFSET       0x00100000ULL     /* 1 MiB in - clear of boot */
-#define BR_INPUT_SIZE         150528u
-#define BR_OUTPUT_OFFSET      0x00200000ULL     /* well past input */
-#define BR_OUTPUT_SIZE        1001u
 #define BR_MICROCODE_OFFSET   0x1u
 #define BR_TENSOR_COUNT       1u
-#define BR_NUM_VECTORS        10
 /* Runner spawn + inference wall-clock; timer fires inside clock_step. */
 #define BR_STEP_NS            (1ULL * 1000 * 1000 * 1000)  /* 1 s virtual */
 
-static char *br_write_fixtures_json(const char *tmpdir, const char *tflite)
+/* Defaults = MobileNet-v1 1.0 224 int8; a corpus harness overrides via env. */
+#define BR_DEF_TFLITE   "mobilenet_v1_1.0_224_int8_imx95_converted.tflite"
+#define BR_DEF_IN_SIZE  150528u
+#define BR_DEF_OUT_SIZE 1001u
+#define BR_DEF_VECTORS  10u
+
+static unsigned br_env_u(const char *name, unsigned dflt)
+{
+    const char *v = g_getenv(name);
+    return (v && *v) ? (unsigned)g_ascii_strtoull(v, NULL, 0) : dflt;
+}
+
+static char *br_write_fixtures_json(const char *tmpdir, const char *tflite,
+                                    unsigned in_off, unsigned in_size,
+                                    unsigned out_off, unsigned out_size)
 {
     char *path = g_build_filename(tmpdir, "fixtures.json", NULL);
     g_autofree char *body = g_strdup_printf(
         "{\n"
         "  \"fixtures\": [\n"
         "    {\n"
-        "      \"name\": \"mobilenet_v1_qtest\",\n"
+        "      \"name\": \"corpus_qtest\",\n"
         "      \"tflite_path\": \"%s\",\n"
         "      \"microcode_offset\": %u,\n"
         "      \"tensor_count\": %u,\n"
@@ -182,8 +192,7 @@ static char *br_write_fixtures_json(const char *tmpdir, const char *tflite)
         "}\n",
         tflite,
         BR_MICROCODE_OFFSET, BR_TENSOR_COUNT,
-        (unsigned)BR_INPUT_OFFSET, BR_INPUT_SIZE,
-        (unsigned)BR_OUTPUT_OFFSET, BR_OUTPUT_SIZE);
+        in_off, in_size, out_off, out_size);
     GError *err = NULL;
     if (!g_file_set_contents(path, body, -1, &err)) {
         g_test_message("cannot write fixtures json %s: %s",
@@ -209,11 +218,26 @@ static void test_neutron_runner_bitexact(void)
         return;
     }
 
-    g_autofree char *tflite = g_build_filename(
-        drop, "mobilenet_v1_1.0_224_int8_imx95_converted.tflite", NULL);
+    const char *model = g_getenv("NEUTRON_BR_TFLITE");
+    if (!model || !*model) {
+        model = BR_DEF_TFLITE;
+    }
+    unsigned in_size  = br_env_u("NEUTRON_BR_INPUT_SIZE",  BR_DEF_IN_SIZE);
+    unsigned out_size = br_env_u("NEUTRON_BR_OUTPUT_SIZE", BR_DEF_OUT_SIZE);
+    unsigned nvec     = br_env_u("NEUTRON_BR_NUM_VECTORS", BR_DEF_VECTORS);
+    /* Output span placed 1 MiB-aligned past the input to avoid overlap. */
+    unsigned out_off  = (unsigned)BR_INPUT_OFFSET +
+                        ((in_size + 0xfffffu) & ~0xfffffu);
+
+    g_autofree char *tflite = g_build_filename(drop, model, NULL);
     if (!g_file_test(tflite, G_FILE_TEST_EXISTS)) {
         g_test_skip("tflite model missing from drop directory");
         return;
+    }
+    /* Golden basename = model filename with the ".tflite" suffix removed. */
+    g_autofree char *stem = g_strdup(model);
+    if (g_str_has_suffix(stem, ".tflite")) {
+        stem[strlen(stem) - strlen(".tflite")] = '\0';
     }
 
     GError *err = NULL;
@@ -223,7 +247,8 @@ static void test_neutron_runner_bitexact(void)
         g_clear_error(&err);
         return;
     }
-    g_autofree char *fixtures = br_write_fixtures_json(tmpdir, tflite);
+    g_autofree char *fixtures = br_write_fixtures_json(
+        tmpdir, tflite, (unsigned)BR_INPUT_OFFSET, in_size, out_off, out_size);
     if (!fixtures) {
         g_test_skip("cannot stage fixtures manifest");
         return;
@@ -231,14 +256,23 @@ static void test_neutron_runner_bitexact(void)
     g_autofree char *scratch = g_build_filename(tmpdir, "scratch", NULL);
     g_mkdir_with_parents(scratch, 0700);
 
+    /*
+     * Give the runner subprocess a generous deadline: large models (e.g.
+     * densenet/inception) take >10 s per inference, and the default backend
+     * timeout (10 s) would abort them with NEUTRON_RUNNER_ERR_TIMEOUT.
+     * Overridable via NEUTRON_BR_TIMEOUT_MS for very large models.
+     */
+    unsigned timeout_ms = br_env_u("NEUTRON_BR_TIMEOUT_MS", 60000u);
+
     QTestState *qts = qtest_initf(
         "-machine imx95-19x19-evk -accel qtest -m 512M "
         "-global driver=imx95.neutron,property=compute-backend,value=runner "
         "-global driver=imx95.neutron,property=neutron-runner-path,value=%s "
         "-global driver=imx95.neutron,property=neutron-runner-fixtures,value=%s "
+        "-global driver=imx95.neutron,property=neutron-runner-timeout-ms,value=%u "
         "-global driver=imx95.neutron,property=neutron-runner-scratch-dir,"
         "value=%s",
-        runner, fixtures, scratch);
+        runner, fixtures, timeout_ms, scratch);
 
     /* Bring rproc up once; subsequent RUNs reuse the same qts. */
     qtest_writel(qts, RCTL, RCTL_ZENV_CLK_ON);
@@ -252,28 +286,28 @@ static void test_neutron_runner_bitexact(void)
     qtest_writel(qts, DEV + N_MBOX5, BR_MICROCODE_OFFSET);
     qtest_writel(qts, DEV + N_MBOX6, BR_TENSOR_COUNT);
 
-    for (int i = 0; i < BR_NUM_VECTORS; i++) {
-        g_autofree char *in_name  = g_strdup_printf("%04d.bin", i);
+    for (unsigned i = 0; i < nvec; i++) {
+        g_autofree char *in_name  = g_strdup_printf("%04u.bin", i);
         g_autofree char *in_path  = g_build_filename(drop, "inputs",
                                                      in_name, NULL);
-        g_autofree char *out_name = g_strdup_printf(
-            "mobilenet_v1_1.0_224_int8_imx95_converted_results_%d_0.bin", i);
+        g_autofree char *out_name = g_strdup_printf("%s_results_%u_0.bin",
+                                                    stem, i);
         g_autofree char *out_path = g_build_filename(
             drop, "neutron-runner-outputs", out_name, NULL);
 
         g_autofree char *in_buf  = NULL;
         gsize in_len = 0;
         if (!g_file_get_contents(in_path, &in_buf, &in_len, NULL) ||
-            in_len != BR_INPUT_SIZE) {
-            g_test_message("skip vector %d: cannot read %s (len=%zu)",
+            in_len != in_size) {
+            g_test_message("skip vector %u: cannot read %s (len=%zu)",
                            i, in_path, in_len);
             continue;
         }
         g_autofree char *golden = NULL;
         gsize golden_len = 0;
         if (!g_file_get_contents(out_path, &golden, &golden_len, NULL) ||
-            golden_len != BR_OUTPUT_SIZE) {
-            g_test_message("skip vector %d: cannot read golden %s (len=%zu)",
+            golden_len != out_size) {
+            g_test_message("skip vector %u: cannot read golden %s (len=%zu)",
                            i, out_path, golden_len);
             continue;
         }
@@ -297,11 +331,10 @@ static void test_neutron_runner_bitexact(void)
         g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX0), ==, RET_DONE);
         g_assert_cmphex(qtest_readl(qts, DEV + N_MBOX1), ==, 0);
 
-        g_autofree uint8_t *got = g_malloc(BR_OUTPUT_SIZE);
-        qtest_bufread(qts, BR_CARVEOUT_BASE + BR_OUTPUT_OFFSET,
-                      got, BR_OUTPUT_SIZE);
-        if (memcmp(got, golden, BR_OUTPUT_SIZE) != 0) {
-            g_error("vector %d: runner output does not match golden", i);
+        g_autofree uint8_t *got = g_malloc(out_size);
+        qtest_bufread(qts, BR_CARVEOUT_BASE + out_off, got, out_size);
+        if (memcmp(got, golden, out_size) != 0) {
+            g_error("vector %u: runner output does not match golden", i);
         }
 
         /*

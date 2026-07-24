@@ -28,6 +28,8 @@ BLOB_GLOBS=(
     '*.dvm'                   # ARA240/compiled model
     '*_neutron.tflite'        # converted models (operator-supplied)
     '*_results.bin'           # runner golden outputs
+    'eiq_neutron_sdk-*.whl'   # eIQ SDK python wheel (NXP-licensed)
+    'neutron_converter_SDK_*.whl'  # eIQ converter pip wheel (NXP-licensed)
 )
 
 # Consider tracked + staged files (what could actually land in a commit).
