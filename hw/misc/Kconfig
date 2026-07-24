@@ -140,6 +140,21 @@ config IMX95_DPU
 config IMX95_NEUTRON
     bool
 
+# Runner compute backend (Track A): spawns the operator-supplied, NXP-licensed
+# neutron-runner ELF as a subprocess. Default y so normal builds carry it (it is
+# only *activated* by compute-backend=runner); a null-only build sets
+# CONFIG_IMX95_NEUTRON_RUNNER=n (configs/devices/.../imx95-neutron-stub.mak),
+# which flips in the stub instead. Never linked together with the stub.
+config IMX95_NEUTRON_RUNNER
+    bool
+    default y if IMX95_NEUTRON
+    depends on IMX95_NEUTRON
+
+config IMX95_NEUTRON_RUNNER_STUB
+    bool
+    default y if IMX95_NEUTRON && !IMX95_NEUTRON_RUNNER
+    depends on IMX95_NEUTRON && !IMX95_NEUTRON_RUNNER
+
 config IMX95_MALI
     bool
 

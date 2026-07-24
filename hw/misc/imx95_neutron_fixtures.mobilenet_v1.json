@@ -1,0 +1,15 @@
+{
+  "_comment": "Placeholder fixture manifest for a mobilenet-v1 224x224 int8 model converted with the operator-supplied eIQ neutron-converter. microcode_offset and tensor_count are the guest-posted RUN lookup keys; input_offset/size and output_offset/size are the driver-observable carveout spans. The offset/key values here are placeholders - real numbers must be captured from a Tier-2 boot (see docs/neutron-runner-fixtures.md 'Adding a new model' and the integration plan). tflite_path is operator-local; edit it to point at YOUR converted model (this repo ships no model or NXP content).",
+  "fixtures": [
+    {
+      "name": "mobilenet_v1_1.0_224_int8_imx95",
+      "tflite_path": "/path/to/mobilenet_v1_1.0_224_int8_imx95_converted.tflite",
+      "microcode_offset": 0,
+      "tensor_count": 0,
+      "input_offset": 0,
+      "input_size": 150528,
+      "output_offset": 0,
+      "output_size": 1001
+    }
+  ]
+}

@@ -83,7 +83,16 @@ system_ss.add(when: 'CONFIG_IMX95_SRC', if_true: files('imx95_src.c'))
 system_ss.add(when: 'CONFIG_IMX95_AONMIX', if_true: files('imx95_aonmix.c'))
 system_ss.add(when: 'CONFIG_IMX95_ANATOP', if_true: files('imx95_anatop.c'))
 system_ss.add(when: 'CONFIG_IMX95_DPU', if_true: files('imx95_dpu.c'))
-system_ss.add(when: 'CONFIG_IMX95_NEUTRON', if_true: files('imx95_neutron.c'))
+system_ss.add(when: 'CONFIG_IMX95_NEUTRON', if_true: files(
+  'imx95_neutron.c',
+  'imx95_neutron_backend_null.c'))
+# Runner backend (Track A, downstream-only) xor its stub — the Kconfig invariant
+# (STUB = y iff NEUTRON && !RUNNER) guarantees exactly one is linked, so the
+# front end can reference the neutron_backend_runner symbols unconditionally.
+system_ss.add(when: 'CONFIG_IMX95_NEUTRON_RUNNER',
+  if_true: files('imx95_neutron_backend_runner.c'))
+system_ss.add(when: 'CONFIG_IMX95_NEUTRON_RUNNER_STUB',
+  if_true: files('imx95_neutron_backend_runner_stub.c'))
 system_ss.add(when: 'CONFIG_IMX95_MALI', if_true: files('imx95_mali.c'))
 system_ss.add(when: 'CONFIG_IMX_TPM_PWM', if_true: files('imx_tpm_pwm.c'))
 system_ss.add(when: 'CONFIG_IMX93_ADC', if_true: files('imx93_adc.c'))

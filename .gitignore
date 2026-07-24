@@ -51,3 +51,7 @@ tests/busybox-initramfs/*.cpio.gz
 # Claude Code local tool state
 /.claude/
 /tests/flexcan/cantest
+
+# operator-supplied Neutron runner: local paths only, never NXP content
+build/neutron-runner.local.env
+*.local.env

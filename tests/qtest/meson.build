@@ -265,7 +265,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_FSL_ENETC') ? ['fsl-enetc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_JPEG') ? ['imx95-jpeg-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_DPU') ? ['imx95-blit-test'] : []) + \
-  (config_all_devices.has_key('CONFIG_IMX95_NEUTRON') ? ['imx95-neutron-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_IMX95_NEUTRON') ? ['imx95-neutron-test', 'imx95-neutron-realize-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_MALI') ? ['imx95-mali-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_EDMA') ? ['imx95-edma-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_LPSPI') ? ['imx95-lpspi-test'] : []) + \
