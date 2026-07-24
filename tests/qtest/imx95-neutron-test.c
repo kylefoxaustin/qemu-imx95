@@ -35,6 +35,7 @@
 #define APPSTATUS_INFDONE  (1u << 0)
 #define APPSTATUS_MBOX     (1u << 4)
 #define CMD_RUN            0x269
+#define CMD_RESET          0x23637
 #define RET_RUN_ACK        0xA3
 #define RET_DONE           0xAD0
 
@@ -302,6 +303,13 @@ static void test_neutron_runner_bitexact(void)
         if (memcmp(got, golden, BR_OUTPUT_SIZE) != 0) {
             g_error("vector %d: runner output does not match golden", i);
         }
+
+        /*
+         * Re-arm the mailbox for the next inference. On silicon the driver
+         * sends RESET (mbox_send_reset) after each DONE, returning the FSM
+         * COMPLETE -> IDLE; without it the next RUN is BUSY-rejected (7.3).
+         */
+        qtest_writel(qts, DEV + N_MBOX3, CMD_RESET);
     }
 
     qtest_quit(qts);

@@ -203,6 +203,60 @@ static const RunnerFixture *runner_match(const RunnerCtx *ctx,
     return NULL;
 }
 
+/* ---- bounded subprocess wait ---- */
+
+/*
+ * GSubprocess has no synchronous wait-with-timeout, and get_if_exited() may
+ * only be called after the child has been reaped (it asserts pid == 0). So we
+ * wait asynchronously on a private thread-default GMainContext and race the
+ * completion against a timeout source; the nested loop only iterates our own
+ * context, never QEMU's, so there is no reentrancy. w.exited is true iff the
+ * child exited on its own before the deadline.
+ */
+typedef struct RunnerWait {
+    GMainLoop *loop;
+    gboolean   exited;
+} RunnerWait;
+
+static void runner_on_waited(GObject *src, GAsyncResult *res, gpointer ud)
+{
+    RunnerWait *w = ud;
+    g_subprocess_wait_finish(G_SUBPROCESS(src), res, NULL);
+    w->exited = TRUE;
+    g_main_loop_quit(w->loop);
+}
+
+static gboolean runner_on_timeout(gpointer ud)
+{
+    RunnerWait *w = ud;
+    g_main_loop_quit(w->loop);   /* w->exited stays FALSE */
+    return G_SOURCE_REMOVE;
+}
+
+/* Returns true if the child exited before the deadline (then reaped). */
+static bool runner_wait_bounded(GSubprocess *proc, uint32_t timeout_ms)
+{
+    GMainContext *mctx = g_main_context_new();
+    RunnerWait w = { NULL, FALSE };
+    GSource *tsrc;
+
+    g_main_context_push_thread_default(mctx);
+    w.loop = g_main_loop_new(mctx, FALSE);
+    g_subprocess_wait_async(proc, NULL, runner_on_waited, &w);
+    tsrc = g_timeout_source_new(timeout_ms);
+    g_source_set_callback(tsrc, runner_on_timeout, &w, NULL);
+    g_source_attach(tsrc, mctx);
+
+    g_main_loop_run(w.loop);
+
+    g_source_destroy(tsrc);
+    g_source_unref(tsrc);
+    g_main_loop_unref(w.loop);
+    g_main_context_pop_thread_default(mctx);
+    g_main_context_unref(mctx);
+    return w.exited;
+}
+
 /* ---- one job ---- */
 
 /*
@@ -217,6 +271,7 @@ static uint32_t runner_run_one(RunnerCtx *ctx, const RunnerFixture *fx,
     g_autofree gchar *input_path = NULL;
     g_autofree gchar *model_path = NULL;
     g_autofree gchar *output_path = NULL;
+    g_autofree gchar *output_read = NULL;
     g_autofree gchar *stderr_buf = NULL;
     g_autofree void  *input_buf = NULL;
     g_autofree gchar *output_buf = NULL;
@@ -234,6 +289,12 @@ static uint32_t runner_run_one(RunnerCtx *ctx, const RunnerFixture *fx,
     input_path = g_strdup_printf("%s/0000.bin", inputs_dir);
     model_path = g_strdup_printf("%s/model.tflite", job_dir);
     output_path = g_strdup_printf("%s/outputs.bin", job_dir);
+    /*
+     * neutron-runner appends an inference index to --output-results: with
+     * --merge-outputs and our single-input dataset it writes "outputs_0.bin",
+     * not "outputs.bin". Read (and clean up) the file it actually produces.
+     */
+    output_read = g_strdup_printf("%s/outputs_0.bin", job_dir);
 
     if (g_mkdir_with_parents(inputs_dir, 0700) != 0) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -301,31 +362,15 @@ static uint32_t runner_run_one(RunnerCtx *ctx, const RunnerFixture *fx,
         goto out;
     }
 
-    /*
-     * Bound the wait. GSubprocess has no builtin timeout, so we poll wait()
-     * against a wall-clock deadline; when we blow it we force_exit and set
-     * the timeout errcode. Poll interval 20 ms keeps overhead negligible.
-     */
-    {
-        gint64 deadline_us = g_get_monotonic_time() +
-            (gint64)ctx->timeout_ms * 1000;
-        bool exited = false;
-        while (g_get_monotonic_time() < deadline_us) {
-            if (g_subprocess_get_if_exited(proc)) {
-                exited = true;
-                break;
-            }
-            g_usleep(20 * 1000);
-        }
-        if (!exited) {
-            g_subprocess_force_exit(proc);
-            g_subprocess_wait(proc, NULL, NULL);
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "neutron-runner: subprocess timed out after %u ms\n",
-                          ctx->timeout_ms);
-            err = NEUTRON_RUNNER_ERR_TIMEOUT;
-            goto out;
-        }
+    /* Bound the wait; force_exit + reap on timeout. */
+    if (!runner_wait_bounded(proc, ctx->timeout_ms)) {
+        g_subprocess_force_exit(proc);
+        g_subprocess_wait(proc, NULL, NULL);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "neutron-runner: subprocess timed out after %u ms\n",
+                      ctx->timeout_ms);
+        err = NEUTRON_RUNNER_ERR_TIMEOUT;
+        goto out;
     }
 
     if (!g_subprocess_get_successful(proc)) {
@@ -350,7 +395,7 @@ static uint32_t runner_run_one(RunnerCtx *ctx, const RunnerFixture *fx,
     }
 
     /* Slurp output, size-check, DMA back into guest. */
-    if (!g_file_get_contents(output_path, &output_buf, &output_len, &gerr)) {
+    if (!g_file_get_contents(output_read, &output_buf, &output_len, &gerr)) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "neutron-runner: read '%s' failed: %s\n",
                       output_path, gerr ? gerr->message : "unknown");
@@ -391,7 +436,7 @@ out:
          */
         unlink(input_path);
         unlink(model_path);
-        unlink(output_path);
+        unlink(output_read);
         rmdir(inputs_dir);
         rmdir(job_dir);
     } else {
