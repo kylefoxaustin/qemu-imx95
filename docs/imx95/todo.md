@@ -45,24 +45,8 @@ will flag. None break current functionality.
 
 ## Known gaps (future work, not pre-upstream blockers)
 
-- **GIC ITS is a freestanding region, not a functional ITS.** Modelled as a
-  top-level MR at `0x48040000`; it looks right in `info mtree` but will not
-  deliver MSIs. When PCIe (or any MSI-capable IP) lands, instantiate
-  `TYPE_ARM_GICV3_ITS` *inside* the GICv3 device rather than as a separate
-  region. (`hw/arm/fsl-imx95.c` GIC realize; `FSL_IMX95_GIC_ITS` enum.) No MSI
-  consumer exists today (PCIe enumerates no devices — see known-limitations.md).
-
-- **VMState round-trip is unexercised.** Every device declares VMState, but no
-  test exercises a savevm/loadvm round-trip. A mid-boot save/restore would catch
-  silent migration bugs before they become "every snapshot is corrupted."
-  Nice-to-have, not a boot-path gap.
-
-- **U-Boot interactive-prompt regression test** (`tests/uboot-prompt/`) was never
-  created. The U-Boot SD-boot path still works but isn't CI-guarded; lower
-  priority than the Linux/M7 path the project now centres on.
-
 Behaviour/boot-arg caveats — `cpuidle.off=1`, the earlycon address offset
-(`0x44380010`), DDR-is-RAM, no networking, no Linux-visible block storage — are
+(`0x44380010`), DDR-is-RAM — are
 documented in [`known-limitations.md`](known-limitations.md) and
 [`../system/arm/imx95-evk.rst`](../system/arm/imx95-evk.rst), not here.
 
