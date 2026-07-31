@@ -109,6 +109,14 @@ tests/m33-m7-only/run.sh
 
 echo
 echo "============================================="
+echo "=== U-Boot prompt: tests/uboot-prompt       ==="
+echo "===   (SD/eMMC chain -> interactive prompt; ==="
+echo "===   skips if U-Boot/SM artifacts absent) ==="
+echo "============================================="
+tests/uboot-prompt/run.sh
+
+echo
+echo "============================================="
 echo "=== interconnect legs (two i.MX95 guests,   ==="
 echo "===   byte-exact over a socket bridge):     ==="
 echo "===   ENETC / LPUART / LPSPI / FlexCAN      ==="
@@ -121,12 +129,22 @@ tests/interconnect-imx95/run-can.sh
 
 echo
 echo "============================================="
+echo "=== migration: tests/vmstate               ==="
+echo "===   (whole-machine savevm/loadvm          ==="
+echo "===   round-trip; no artifacts needed)     ==="
+echo "============================================="
+tests/vmstate/run.sh
+
+echo
+echo "============================================="
 echo "All tests passed:"
 echo "  - v1.0 regression (A55 + M33 + Linux to userspace)"
 echo "  - v1.x Step 2 unit (M7 hello firmware)"
 echo "  - v1.x Step 2 integration (A55 + M33 + M7 parallel)"
 echo "  - v1.x Step 3 integration (SM-driven M7 release path)"
 echo "  - v1.x boot-matrix (SM + M7, no A55)"
+echo "  - U-Boot interactive prompt (SD/eMMC boot chain)"
 echo "  - interconnect legs: ENETC / LPUART / LPSPI / FlexCAN"
 echo "    (two guests, byte-exact over a socket bridge)"
+echo "  - migration: whole-machine VMState round-trip (tests/vmstate)"
 echo "============================================="

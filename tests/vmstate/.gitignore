@@ -1,0 +1,4 @@
+# build artifacts (run.sh / Makefile rebuild from counter.S)
+counter.bin
+counter.o
+counter.elf
