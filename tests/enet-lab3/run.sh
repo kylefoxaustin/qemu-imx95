@@ -224,7 +224,7 @@ boot() { # $1=impl $2=mcast-group $3=mac $4=my_et $5=peers-csv $6=logfile [$7=de
         -kernel "$IMAGE" -dtb "$WORK/enetc.dtb" -initrd "$WORK/lab.cpio.gz" \
         -append "console=ttyLP0,115200 cpuidle.off=1 rdinit=/init lab_impl=$1 lab_et=$4 lab_peers=$5 lab_deadline=${7:-120000} ${EVIL:-}" \
         -device loader,file="$SM_ELF",cpu-num=6 \
-        -nic "socket,mcast=$2,model=fsl-enetc,mac=$3" \
+        -nic "${LAB_NIC_BACKEND:-socket,mcast=$2},model=fsl-enetc,mac=$3" \
         -serial file:"$6" -serial null -monitor none >/dev/null 2>&1
 }
 
@@ -266,6 +266,27 @@ if [ "$JOIN" = 1 ]; then
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
     grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 checked and counted all three peers)"; exit 0; }
     echo "RESULT: FAIL/incomplete - were mcx(0x88B5), rt1180(0x88B6) and imx91(0x88B8) all live on $FLEET_GROUP?"; exit 1
+fi
+
+if [ "${FABRIC:-0}" = 1 ]; then
+    # SWITCHED-FABRIC attach: RT1180 (0x88B6) is the L2 SWITCH, not a peer. We
+    # attach to its wire port 2 over a point-to-point QEMU udp socket (not a mcast
+    # hub) and reach the OTHER endpoints THROUGH the switch (learn -> flood ->
+    # unicast). Same lab3 v2 beacon firmware; only the netdev backend + peer list
+    # change. Peers we DEPEND on default to mcx(0x88B5) + imx91(0x88B8); override
+    # FABRIC_PEERS=0x88B5 if 91 sits out. Backend mirrors RT1180's port-2 spec.
+    : "${FABRIC_NIC:=socket,udp=127.0.0.1:45022,localaddr=127.0.0.1:45021}"
+    : "${FABRIC_PEERS:=0x88B5,0x88B8}"
+    echo "== FABRIC: imx95 0x88B7 -> RT1180 switch port 2 ($FABRIC_NIC), peers=$FABRIC_PEERS =="
+    # boot() exec's, so background it (exec replaces the subshell, not this script)
+    # and wait, exactly like the self-test path. Bounded deadline so the node
+    # concludes on its own (the fabric is persistent -> peers show fast if present).
+    LAB_NIC_BACKEND="$FABRIC_NIC" \
+        boot imx95 "fabric" 02:49:4d:58:95:01 0x88B7 "$FABRIC_PEERS" "$WORK/imx95.log" "${FABRIC_DEADLINE:-30000}" &
+    wait
+    echo "--- imx95 (fabric) ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
+    grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 reached its peers through the RT1180 fabric)"; exit 0; }
+    echo "RESULT: FAIL/incomplete - is the RT1180 fabric up (tools/netc-switch-fabric.sh --host) and are $FABRIC_PEERS attached?"; exit 1
 fi
 
 if [ "${IMPOSTOR:-0}" = 1 ]; then
