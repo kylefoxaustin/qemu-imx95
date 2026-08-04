@@ -7,14 +7,17 @@ in `known-limitations.md`. See *How items leave this list* at the bottom.
 
 ## Before any qemu-devel upstream submission
 
-Mostly fabricated-but-plausible register values, plus one refactor a maintainer
-will flag. None break current functionality.
+A few register values to cross-check against the RM / real silicon before
+submission. None break current functionality.
 
-- **SDHCI class-flag refactor.** `sdhci_sdma_transfer_multi_blocks()` detects
-  the i.MX/FSL uSDHC variant with `s->io_ops != &usdhc_mmio_ops` — a static
-  `MemoryRegionOps`-pointer compare. Convert to an explicit
-  `SDHCIClass::no_sdma_boundary` flag: the idiomatic QEMU way, and what a
-  maintainer will ask for. (`hw/sd/sdhci.c`.)
+> RESOLVED 2026-08-02 (shakeout): the SDHCI SDMA-boundary detection is *already*
+> the idiomatic `SDHCI_QUIRK_NO_SDMA_BOUNDARY` quirk flag (`hw/sd/sdhci.c` +
+> `include/hw/sd/sdhci.h`), not an `io_ops` pointer-compare — no refactor needed.
+> LPUART `VERID` `0x04040007` and LPSPI `VERID` `0x02000004` are CONFIRMED
+> silicon-true against the real-board register capture (`regs-verid.txt`,
+> 2026-07-09), so they are no longer "fabricated." The items below are the
+> genuinely RM/board-only values still to verify — the i.MX95 EVK devmem covers
+> them (see the wattson calibration board note; EVK inbound).
 
 - **SRC `RSTR_STAT` mirror — confirm uniform slice semantics.** The v1.x M7
   fault-recovery model mirrors all four `SLICE_SW_CTRL.RST_RSTR[3:0]` →
@@ -28,11 +31,6 @@ will flag. None break current functionality.
   (384 KiB), sized to fit U-Boot SPL's TEXT base through BSS+stack. The Linux
   DTS exposes only a 96 KiB sram1 slice within this range, so real OCRAM-A is
   ≥384 KiB, likely larger. Right-size against the RM "Memory Map" chapter.
-
-- **`VERID = 0x04040007`** (`include/hw/char/imx_lpuart.h`). Plausible but not
-  from the RM. The Linux driver doesn't branch on VERID for `imx*ulp`, so it
-  functions fine — but set the silicon-true value before upstream. Cross-check
-  the RM "LPUART register descriptions."
 
 - **BAUD POR value `0x0F000004`** (`hw/char/imx_lpuart.c`). OSR=4 plus a
   plausible SBR field; matches common LPUART POR convention but not RM-verified.
