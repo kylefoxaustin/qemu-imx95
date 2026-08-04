@@ -375,10 +375,23 @@ section).
 ## 7. Intentionally-deferred model fidelity (with reasons)
 
 A handful of features are modelled to the point Linux needs and then stop
-short, by deliberate choice. None of these is a *silent-wrong* — the worst
-class, where a model returns a plausible-but-incorrect result; each is either an
-honest "not exercised", an honest "no data", or a clean workaround. They are
+short, by deliberate choice. Almost none is a *silent-wrong* — the worst class,
+where a model returns a plausible-but-incorrect result — each is an honest "not
+exercised", an honest "no data", or a clean workaround. The one borderline case
+(the ELE read-fuse stub, below) is flagged honestly rather than trusted. They are
 recorded here so the scope is explicit rather than surprising.
+
+- **ELE `READ_FUSE` (0x97) returns fuse value 0 with a SUCCESS status for the
+  S400-served fuse banks that are not modelled** (`hw/misc/imx95_ele_server.c`).
+  This is the one item in this list that leans *silent-wrong*: a consumer cannot
+  distinguish "the fuse is genuinely 0" from "not modelled." Exposure is narrow —
+  the MAC and most fuses come from the readable FSB shadow region (which *is*
+  modelled); only the S400-API banks hit this path, and three stock kernels boot
+  clean today. It is deliberately not "fixed" to a failure status, because the
+  OCOTP/efuse driver (`read_words_via_s400_api`) validates a 3-word response and
+  takes the word from `data[1]` — returning failure risks regressing probe. The
+  honest upgrade is an opt-in honest-fault (the pattern the Neutron NPU uses via
+  its MBOX error_code) or modelling the real S400 banks; flagged here until then.
 
 - **MICFIL capture rate + SPDIF/XCVR TX rate — hardcoded, not derived (the
   clock Hz lives in the SM, not the model).** `MICFIL_WORD_NS` (48 kHz) and
