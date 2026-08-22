@@ -95,7 +95,17 @@ echo "ENET-LAB3 both legs exited"
 sleep 1; poweroff -f
 INIT
 chmod +x "$root/init"
-( cd "$root" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$OUT/lab3-2port.cpio.gz"
+# BIT-REPRODUCIBLE cpio.gz so `built_from_commit` is re-derivable, not decorative
+# (holobench: "an assertion you cannot re-run is not an assertion"). The three
+# non-determinism sources are pinned: per-file mtime (touch to epoch 0), archive
+# member order (sort), owner (root:root via -R), and the gzip header's own mtime
+# +name (gzip -n). Same commit + same toolchain -> identical md5, every build.
+find "$root" -exec touch -h -d @0 {} +
+# --reproducible zeroes the newc header's inode/dev numbers, which otherwise leak
+# the (per-build, mktemp-random) inodes into the archive bytes - the last source
+# of non-determinism after mtime/order/owner/gzip-header.
+( cd "$root" && find . -print0 | LC_ALL=C sort -z |
+  cpio -o -H newc -R 0:0 --reproducible --null --quiet 2>/dev/null | gzip -n -9 ) > "$OUT/lab3-2port.cpio.gz"
 
 # --- manifest: md5 + commit, the strings holobench pins ---
 COMMIT=$(cd "$ROOT" && git rev-parse HEAD)
