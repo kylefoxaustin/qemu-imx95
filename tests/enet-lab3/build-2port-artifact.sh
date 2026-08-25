@@ -121,6 +121,16 @@ DIRTY=$(cd "$ROOT" && git status --porcelain -- tests/enet-lab3 tests/netc 2>/de
     echo "initrd:            lab3-2port.cpio.gz  md5=$(md5sum "$OUT/lab3-2port.cpio.gz" | cut -d' ' -f1)"
     echo "dtb:               imx95-19x19-evk-enetc.dtb  md5=$(md5sum "$OUT/imx95-19x19-evk-enetc.dtb" | cut -d' ' -f1)"
     echo "tool_src_md5:      enet-lab3.c $(md5sum "$HERE/enet-lab3.c" | cut -d' ' -f1)"
+    # THE WEAKEST LINK, NAMED (holobench): the busybox base is a BUILD PRODUCT -
+    # not in git, so `git checkout <commit> && build-2port-artifact.sh` cannot
+    # reproduce without it. The artifact is reproducible GIVEN this base. Record
+    # the base's md5 + the toolchain so that if the base is ever rebuilt with a
+    # different busybox/toolchain/config, the initrd md5 changing is legible AS A
+    # BASE MISMATCH rather than looking like this builder regressing.
+    echo "busybox_base:      $DEFAULT_CPIO"
+    echo "busybox_base_md5:  $(md5sum "$DEFAULT_CPIO" | cut -d' ' -f1)   <- NOT in git; stage this exact file to reproduce"
+    echo "busybox_bin_md5:   $(md5sum "$WORK/bin/busybox" | cut -d' ' -f1)   (the member actually embedded)"
+    echo "cross_cc:          $("$CC" -dumpmachine 2>/dev/null) $("$CC" -dumpversion 2>/dev/null)"
 } > "$OUT/MANIFEST.txt"
 
 echo "=== 2-port artifact built -> $OUT ==="
