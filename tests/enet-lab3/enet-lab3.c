@@ -472,15 +472,32 @@ int main(int argc, char **argv)
             }
         }
 
-        /* Only ever fail if we have NEVER completed a round. */
+        /*
+         * Only ever fail if we have NEVER completed a round.
+         *
+         * A NODE MAY ONLY REPORT WHAT ITS OWN VANTAGE CAN SEE. We can see that
+         * no frames of a required ethertype arrived before our deadline. We
+         * CANNOT see whether that peer was silent or never existed at all -
+         * and those are different results. holobench's coordinator hit exactly
+         * this: a run where the silicon nodes were never launched, and another
+         * where a peer's beacon was blocked by sudo needing a tty, both of
+         * which a node reporting "missing peers" would have laundered into a
+         * WIRE failure. So the token and the verdict stay (our gate genuinely
+         * did not close - that IS a true statement about our own state) and
+         * only the implied CAUSE goes. Whether the run is INCONCLUSIVE or FAIL
+         * belongs to the coordinator, which can prove peer-start; we must not
+         * pre-empt it. Same shape as a scorer calling a crashed writer "nothing
+         * arrived": A CLAIM THAT OUTRUNS THE VANTAGE THAT PRODUCED IT.
+         */
         if (!passed_once && t >= deadline) {
-            printf("ENET-LAB3 FAIL: deadline, missing peers:");
+            printf("ENET-LAB3 FAIL: deadline, no frames from required peer(s):");
             for (int i = 0; i < npeers; i++) {
                 if (!seen[i]) {
                     printf(" 0x%04x", peers[i]);
                 }
             }
-            printf("\n");
+            printf(" - ABSENT or SILENT, this node cannot tell which; "
+                   "coordinator decides INCONCLUSIVE vs FAIL\n");
             return 1;
         }
 

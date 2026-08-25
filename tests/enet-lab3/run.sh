@@ -372,7 +372,7 @@ if [ "${NEG:-0}" = 1 ]; then
     if grep -aq 'ENET-LAB3 PASS:' "$WORK/imx95.log"; then
         echo "RESULT: FAIL (imx95 FALSE-PASSED with only one peer up - assertion is broken)"; exit 1
     fi
-    if [ "$saw5" -ge 1 ] && grep -aq 'ENET-LAB3 FAIL: deadline, missing peers: 0x88b6' "$WORK/imx95.log"; then
+    if [ "$saw5" -ge 1 ] && grep -aq 'ENET-LAB3 FAIL: deadline, no frames from required peer(s): 0x88b6' "$WORK/imx95.log"; then
         echo "RESULT: PASS (wire live - imx95 accepted 0x88B5's BODY - yet correctly did NOT pass, missing 0x88B6)"
         exit 0
     fi
