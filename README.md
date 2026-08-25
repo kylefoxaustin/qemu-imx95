@@ -55,9 +55,6 @@ upstream-mergeable into QEMU mainline.
 
 ![i.MX 95 — six Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7, the top of the A55 line](docs/images/imx95-hero.png)
 
-*Part of a consistent hero-image family across the QEMU fleet — solid silicon for
-the emulator repos, one accent per node (i.MX 95 amber).*
-
 ![i.MX 95 booting Linux on the emulated DPU display — six A55 SMP Tux logos](docs/images/dpu-boot-logo.png)
 
 *Real NXP BSP Linux scanned out at 1920×1200 by the emulated DPU (FetchLayer →
