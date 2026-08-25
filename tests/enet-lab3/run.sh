@@ -265,7 +265,17 @@ if [ "$JOIN" = 1 ]; then
          0x88B5,0x88B6 "$WORK/imx95.log"
     echo "--- imx95 ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
     grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 checked and counted all three peers)"; exit 0; }
-    echo "RESULT: FAIL/incomplete - were mcx(0x88B5), rt1180(0x88B6) and imx91(0x88B8) all live on $FLEET_GROUP?"; exit 1
+    # The evidence is printed ABOVE (the full ENET-LAB3 log), and the verdict must
+    # not outrun it: this branch fires whenever we did not MATCH a PASS token, and
+    # a peer that never came up is only ONE cause. A renamed/moved token in
+    # enet-lab3.c produces the identical red while the gate actually closed. So
+    # point at the log rather than at the wire (93emulator's rung: showing the
+    # evidence beats naming a cause you cannot observe).
+    echo "RESULT: FAIL/incomplete - no 'ENET-LAB3 PASS' matched. Read the log above"
+    echo "        before blaming the wire: either the required peers were not live"
+    echo "        on $FLEET_GROUP (mcx 0x88B5 / rt1180 0x88B6 / imx91 0x88B8), or the"
+    echo "        PASS token moved in enet-lab3.c and this grep no longer matches it."
+    exit 1
 fi
 
 if [ "${FABRIC:-0}" = 1 ]; then
@@ -286,7 +296,14 @@ if [ "${FABRIC:-0}" = 1 ]; then
     wait
     echo "--- imx95 (fabric) ---"; grep -aE 'ENET-LAB3' "$WORK/imx95.log" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
     grep -aq 'ENET-LAB3 PASS' "$WORK/imx95.log" && { echo "RESULT: PASS (imx95 reached its peers through the RT1180 fabric)"; exit 0; }
-    echo "RESULT: FAIL/incomplete - is the RT1180 fabric up (tools/netc-switch-fabric.sh --host) and are $FABRIC_PEERS attached?"; exit 1
+    # Same rung as JOIN above: the full log is printed immediately above, and this
+    # branch fires on "no PASS token matched", of which a down fabric is only one
+    # cause - a moved token in enet-lab3.c looks identical.
+    echo "RESULT: FAIL/incomplete - no 'ENET-LAB3 PASS' matched. Read the log above"
+    echo "        before blaming the fabric: either it is not up"
+    echo "        (tools/netc-switch-fabric.sh --host) or $FABRIC_PEERS are not"
+    echo "        attached, or the PASS token moved in enet-lab3.c."
+    exit 1
 fi
 
 if [ "${IMPOSTOR:-0}" = 1 ]; then
