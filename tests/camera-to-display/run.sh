@@ -41,6 +41,13 @@ INITRD=${INITRD:-$ROOT/tests/busybox-initramfs/busybox-initramfs.cpio.gz}
 CROSS=${CROSS:-aarch64-linux-gnu-}
 SRC_IMG=${SRC_IMG:-$HERE/scene.png}
 TMO=${TMO:-200}
+# HOLD=1 keeps the frame on the panel indefinitely instead of powering off.
+# Holobench's framebuffer pane is a ~1.5s PULL (QMP screendump on a timer) that
+# the guest cannot trigger, so a blit that lands and exits inside that window is
+# missed - and missed SILENTLY, since a black pane looks exactly like a dead
+# camera path. For a reserved board someone is watching, hold the frame.
+HOLD=${HOLD:-0}
+KEEP_DTB=${KEEP_DTB:-}
 
 skip() { echo "SKIP: $*"; exit 0; }
 [ -x "$QEMU" ]     || skip "no QEMU ($QEMU)"
@@ -85,6 +92,12 @@ BASE_DTB="$WORK/cam.dtb" OUT="$WORK/patched.dtb" \
     bash "$ROOT/tests/lcd-panel/attach-lcd.sh" "$WORK/cam.dtb" "$WORK/patched.dtb" \
     >/dev/null 2>&1 || cp "$WORK/cam.dtb" "$WORK/patched.dtb"
 [ -e "$WORK/patched.dtb" ] || { echo "FAIL: no patched dtb"; exit 1; }
+# KEEP_DTB=<path> emits the camera+panel dtb as a reusable artifact, so a board
+# farm can offer this configuration without re-deriving it.
+if [ -n "$KEEP_DTB" ]; then
+    cp "$WORK/patched.dtb" "$KEEP_DTB"
+    echo "wrote $KEEP_DTB (base + ov5640 camera graph + 1280x800 LVDS panel)"
+fi
 
 "${CROSS}gcc" -O2 -Wall -static -o "$WORK/v4l2_to_fb" "$HERE/v4l2_to_fb.c" \
     || { echo "FAIL: could not build v4l2_to_fb.c"; exit 1; }
@@ -115,10 +128,15 @@ ls -l /dev/fb0 /dev/video0 2>&1
 /v4l2_cap cap /dev/video0
 /v4l2_to_fb /dev/video0 /dev/fb0
 echo "=== CAM2LCD-DONE ==="
-sleep 4          # leave the image on the panel long enough to screendump
+if [ -f /HOLD ]; then
+    echo "holding the frame on the panel (Holobench pane polls ~1.5s)"
+    while true; do /bin/busybox sleep 3600; done
+fi
+sleep 4          # leave the image up long enough for the screendump
 /bin/busybox poweroff -f
 INIT
 chmod +x "$STAGE/init"
+[ "$HOLD" = 1 ] && touch "$STAGE/HOLD"
 ( cd "$STAGE" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initrd.gz"
 
 # Screendump the panel while the frame is still up, via the monitor socket.

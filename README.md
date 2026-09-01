@@ -260,6 +260,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop) | A | FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output |
 | Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
 | Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera | A | 5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers |
+| Camera -> LCD — the vision transport path end to end | A | a smart-camera frame in over CSI-2, out on the LVDS panel: capture hash == host hash, panel correlation r=1.0000 |
 | PCIe Root Complex — pcie0 + pcie1 (DesignWare) | A | link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains) |
 | HW JPEG codecs (encode + decode) | A | mxc-jpeg /dev/video2,3; libjpeg encode/decode (or an honest config error, never garbage) |
 | I2C — LPI2C x8 + slaves | A | codec/PMIC/expander answer on their buses; master IRQ path |
@@ -525,6 +526,34 @@ working host data path yet):
   through the same `ov5640` + V4L2 `STREAMON`/`DQBUF` path and asserts the
   `DQBUF`'d bytes are the host image, not the gradient — byte-for-byte through
   the ISI DMA.
+
+- **Camera → LCD (the vision transport path, end to end) — functional.** A
+  *smart camera* frame — a sensor emitting already-developed YUYV rather than
+  Bayer — arrives over MIPI CSI-2, the ISI DMAs it into DRAM, a V4L2 client
+  `DQBUF`s it and blits it into `/dev/fb0`, and the DPU scans it out to the
+  1280×800 LVDS panel. The NeoISP is deliberately **not** in this path: with no
+  image processing between capture and scanout, a transport fault cannot hide
+  behind a resample that still looks like a photograph.
+
+  ![A smart-camera frame in over MIPI CSI-2, out on the emulated LVDS panel — 640×480 centred on 1280×800](docs/images/camera-to-lcd.png)
+
+  `tests/camera-to-display/` proves it **two independent ways**, because either
+  alone is weak: the guest hashes the captured frame and the host hashes what it
+  fed in (equal ⇒ the image crossed *intact*, not merely arrived), and a
+  `screendump` of the panel is correlated against the source image (a correct
+  hash with a black screen is still a broken display path). Result: hashes
+  equal, **r = 1.0000**, luma MAE 0.5. Any image works — `SRC_IMG=photo.jpg
+  ./run.sh`; `HOLD=1` keeps the frame up for a board-farm pane that polls;
+  `KEEP_DTB=<path>` emits the camera+panel dtb as a reusable artifact.
+
+  ⚠️ Three things this cost, worth knowing before extending it: the mxc-isi
+  capture node is **multiplanar** (single-planar `G_FMT` returns `EINVAL`); the
+  pipeline negotiates 640×480 YUYV at a **3840-byte line stride** — six bytes of
+  stride per two bytes of pixel, so assuming packed lines shears the image while
+  a hash over the wrong extent still looks clean; and `STREAMON` will not
+  validate until the graph's links are enabled and the sensor format propagated
+  onto every crossbar sink (`tests/camera/v4l2_cap.c` `cap` mode already does
+  this, so the test composes with it rather than duplicating it).
 - **NeoISP (camera image signal processor) — brings up.** The i.MX95 ISP
   (`isp@4ae00000`, `nxp,imx95-b0-neoisp`) is a register-driven V4L2 mem2mem
   device — debayer / tone / colour pipeline — with two MMIO windows

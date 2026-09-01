@@ -26,12 +26,19 @@ Bayer through a real debayer is the next step, not this one.
 
 Result: `r=1.0000`, luma MAE 0.5, hashes equal.
 
+> **The hash does not certify the frame; it certifies the bytes you chose to
+> feed it.** With a 3840-byte stride carrying 1280 bytes of pixel, a hash over
+> the wrong extent comes out clean while the image is sheared. The check is
+> sound and its *scope* is the thing that silently moves.
+
 ## Running it
 
 ```sh
 QEMU=…/qemu-system-aarch64 ./run.sh          # uses scene.png
 SRC_IMG=~/my-photo.jpg ./run.sh              # or any image you like
 SHOT=/tmp/panel.ppm ./run.sh                 # keep the screendump
+HOLD=1 ./run.sh                              # hold the frame up (board-farm pane)
+KEEP_DTB=out.dtb ./run.sh                    # emit the camera+panel dtb
 ```
 
 Needs the usual operator-supplied pieces (kernel `Image`, base dtb, `dtc`,
@@ -49,4 +56,13 @@ without them.
   every crossbar sink before `STREAMON` validates. `tests/camera/v4l2_cap.c`
   already does that in `cap` mode, so this test runs it first rather than
   duplicating the logic.
-- The frame is centred on the panel (640×480 at +320+160 of 1280×800).
+- The frame is centred on the panel (640×480 at +320+160 of 1280×800), and
+  stays that way deliberately. Scaling to full panel would put a resample back
+  between capture and scanout — the very class of step that can hide a transport
+  fault by smearing it into something that still looks like a photograph — and
+  it would also destroy the known-black surround that makes the "99.5%
+  non-black" check meaningful rather than tautological.
+- A board-farm pane that polls (Holobench screendumps on a ~1.5 s timer, and the
+  guest cannot trigger it) will **miss** a blit that lands and exits inside that
+  window — and miss it silently, since a black pane looks exactly like a dead
+  camera path. `HOLD=1` holds the final frame for that case.
