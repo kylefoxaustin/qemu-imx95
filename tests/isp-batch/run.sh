@@ -204,6 +204,10 @@ for f in "$IN_HOST"/*.raw; do
     b=$(basename "$f")
     [ -f "$OUT_HOST/$b.bgr" ] || fail "no output derived from input name $b"
 done
-[ -n "${KEEP_OUT:-}" ] && cp -r "$OUT_HOST" "$KEEP_OUT"
+# -T so a second run REPLACES the kept output instead of nesting a new copy
+# inside it. Without it the newest receipt lands at $KEEP_OUT/out/receipt.txt
+# while a STALE one from an earlier run still sits at $KEEP_OUT/receipt.txt -
+# and the stale one is what you read. Nearly sent the wrong receipt that way.
+[ -n "${KEEP_OUT:-}" ] && { rm -rf "$KEEP_OUT"; cp -rT "$OUT_HOST" "$KEEP_OUT"; }
 
 echo "PASS: batch developed $produced frames, receipt complete, names derived, input read-only"
