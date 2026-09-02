@@ -73,21 +73,54 @@ SHOT="${SHOT:-$WORK/panel.ppm}"
 W=${W:-640}; H=${H:-480}; STRIDE=${STRIDE:-3840}
 # FRAME=<file> feeds a pre-made raw frame instead of converting SRC_IMG - used
 # to exercise the ISI's fallback path deliberately.
-FRAME=${FRAME:-$WORK/frame000.raw}
-if [ "$FRAME" = "$WORK/frame000.raw" ]; then
-    python3 "$HERE/mkframe.py" "$SRC_IMG" "$W" "$H" "$FRAME" "$STRIDE" || exit 1
+#
+# STAGE SEVERAL DISTINCT FRAMES, NOT ONE.
+#
+# Fed a single file the ISI rewinds and re-serves it, so every captured frame is
+# byte-identical - and a run that captured ONE frame and re-read it three times
+# produces exactly the same log, at r=1.0000. The hashes then prove TRANSPORT and
+# say nothing about per-frame capture, which is the property this test is read as
+# establishing. The model already cycles a DIRECTORY of frames, so pointing it at
+# one costs nothing and makes the frames tell each other apart.
+FRAME=${FRAME:-$WORK/frames}
+if [ "$FRAME" = "$WORK/frames" ]; then
+    mkdir -p "$WORK/frames"
+    for i in 0 1 2; do
+        f="$WORK/frames/frame00$i.raw"
+        python3 "$HERE/mkframe.py" "$SRC_IMG" "$W" "$H" "$f" "$STRIDE" || exit 1
+        python3 - "$f" "$i" "$STRIDE" <<'STAMP' || exit 1
+import sys
+path, idx, stride = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+b = bytearray(open(path, 'rb').read())
+val = (40 + idx * 60) & 0xff
+for row in range(8, 24):                  # a small patch, same place each frame
+    base = row * stride + 32
+    b[base:base + 64] = bytes([val]) * 64
+open(path, 'wb').write(bytes(b))
+STAMP
+    done
 else
     echo "using pre-made frame: $FRAME"
 fi
-HOST_HASH=$(python3 - "$FRAME" <<'PY'
-import sys
-h = 1469598103934665603
-for b in open(sys.argv[1], 'rb').read():
-    h = ((h ^ b) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-print("%016x" % h)
+# hash every staged frame: the guest's capture must match ONE of them
+HOST_HASHES=$(python3 - "$FRAME" <<'PY'
+import sys, os
+# FNV-1a 64-bit offset basis; must match v4l2_to_fb.c exactly
+def fnv(path):
+    h = 0xcbf29ce484222325
+    for b in open(path, 'rb').read():
+        h = ((h ^ b) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return "%016x" % h
+p = sys.argv[1]
+if os.path.isdir(p):
+    for n in sorted(os.listdir(p)):
+        print(fnv(os.path.join(p, n)))
+else:
+    print(fnv(p))
 PY
 )
-echo "host frame hash: $HOST_HASH"
+echo "host frame hashes:"; echo "$HOST_HASHES" | sed 's/^/  /'
+HOST_HASH=$(echo "$HOST_HASHES" | head -1)
 
 # dtb = base + ov5640 camera graph + a 1280x800 LVDS panel (so /dev/fb0 exists)
 "$DTC" -@ -I dts -O dtb -o "$WORK/ov5640.dtbo" "$CAM/ov5640-overlay.dtso" 2>/dev/null \
@@ -189,8 +222,16 @@ grep -qa "DISPLAYED" "$LOG" || fail "client never reached the framebuffer blit"
 GUEST_HASH=$(grep -a 'CAPTURE_HASH' "$LOG" | tail -1 | awk '{print $2}' | tr -d '\r')
 [ -n "$GUEST_HASH" ] || fail "no capture hash from the guest"
 echo "guest capture hash: $GUEST_HASH"
-[ "$GUEST_HASH" = "$HOST_HASH" ] \
-    || fail "capture hash $GUEST_HASH != host frame hash $HOST_HASH (image altered in transit)"
+echo "$HOST_HASHES" | grep -qx "$GUEST_HASH" \
+    || fail "capture hash $GUEST_HASH matches NO staged frame (image altered in transit)"
+
+# THE CAPTURE MUST VARY. Distinct frames were staged; if every captured frame
+# hashes the same, the pipeline is re-serving one frame and the r=1.0000 above
+# is a statement about transport only.
+ndist=$(grep -a '^FRAME ' "$LOG" | grep -oa 'hash=[0-9a-f]*' | sort -u | wc -l)
+[ "$ndist" -ge 2 ] \
+    || fail "all captured frames hash identically ($ndist distinct) - the capture is not per-frame"
+echo "captured $ndist distinct frame hashes (staged 3)"
 
 if [ -s "$SHOT" ]; then
     python3 "$HERE/checkshot.py" "$SHOT" "$SRC_IMG" "$W" "$H" || exit 1

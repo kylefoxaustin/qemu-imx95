@@ -39,7 +39,11 @@ struct node {
 
 static uint64_t fnv1a(const unsigned char *p, size_t n)
 {
-    uint64_t h = 1469598103934665603ULL;
+    /* FNV-1a 64-bit offset basis. Not 1469598103934665603 - that is this
+     * constant with a digit missing, which still hashes and still distinguishes
+     * inputs, so every internal check passes on numbers nobody outside this
+     * program can reproduce. A hash exists to be verified independently. */
+    uint64_t h = 0xcbf29ce484222325ULL;
     while (n--) { h ^= *p++; h *= 1099511628211ULL; }
     return h;
 }
