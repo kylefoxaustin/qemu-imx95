@@ -397,6 +397,26 @@ static void neoisp_regs_write(void *opaque, hwaddr off, uint64_t val,
     s->regs[off / 4] = val;
 
     if (off == NEO_TRIG_CAM0 && (val & NEO_TRIG_CAM0_TRIGGER)) {
+        /*
+         * TRIG_CAM0.TRIGGER IS A SELF-CLEARING COMMAND BIT, and modelling it
+         * as an ordinary latched bit breaks the SECOND frame and every one
+         * after it.
+         *
+         * The driver kicks each job with regmap_field_write(), which is a
+         * read-modify-write, and regmap_update_bits() SKIPS THE WRITE
+         * ALTOGETHER when the new value equals the old one. Leave the bit set
+         * and the next kick computes "no change", no MMIO write is ever
+         * issued, the ISP is never triggered, and the driver waits forever on
+         * a job that was never started. Frame 0 develops perfectly and frame 1
+         * hangs - which looks like an intermittent ISP fault and is really a
+         * command bit that never cleared. (Note this needs no register cache:
+         * the elision is in regmap_update_bits itself. This driver sets
+         * REGCACHE_NONE.)
+         *
+         * Clear it before running so a read-back reports idle, exactly as the
+         * hardware does once it has consumed the trigger.
+         */
+        s->regs[off / 4] = val & ~(uint32_t)NEO_TRIG_CAM0_TRIGGER;
         neoisp_run_frame(s);
     }
 }

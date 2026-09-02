@@ -294,11 +294,94 @@ static void test_neoisp_unmodelled_stage(void)
     qtest_end();
 }
 
+
+/*
+ * TWO FRAMES THROUGH ONE STREAMING SESSION.
+ *
+ * The single-frame tests above all passed while the model could develop
+ * exactly ONE frame per session and then wedge: TRIG_CAM0.TRIGGER was latched
+ * rather than self-clearing, so the driver's next kick - a
+ * regmap_field_write(), i.e. a read-modify-write - computed "no change",
+ * regmap_update_bits() skipped the MMIO write entirely, and the ISP was never
+ * triggered again. The guest waited forever on a job that never started.
+ *
+ * No single-frame test can catch that: the defect lives entirely in the
+ * TRANSITION to a second job. Found by the batch runner, which is the first
+ * consumer to ask for more than one frame; pinned here so it cannot come back.
+ * The second frame uses a DIFFERENT input so "developed twice" cannot be
+ * satisfied by stale output left over from the first.
+ */
+static void test_neoisp_two_frames(void)
+{
+    uint8_t bayer[W * H];
+    uint8_t out[W * H * 4];
+    uint32_t first_pixel, second_pixel;
+    int i;
+
+    qtest_start("-M imx95-19x19-evk -m 2G -display none");
+
+    for (i = 0; i < W * H; i++) {
+        bayer[i] = 0x40;
+    }
+    qtest_memwrite(global_qtest, IN_PA, bayer, sizeof(bayer));
+    memset(out, 0xa5, sizeof(out));
+    qtest_memwrite(global_qtest, OUT_PA, out, sizeof(out));
+
+    writel(ISP_BASE + IMG_SIZE_CAM0, (H << 16) | W);
+    writel(ISP_BASE + IMG_CONF_CAM0, 8);
+    writel(ISP_BASE + DEMOSAIC_CTRL_CAM0, 0 << 4);
+    writel(ISP_BASE + IMG0_IN_LS_CAM0, W);
+    writel(ISP_BASE + OUTCH0_LS_CAM0, W * 4);
+    writel(ISP_BASE + IMG0_IN_ADDR_CAM0, (uint32_t)(IN_PA >> 4));
+    writel(ISP_BASE + OUTCH0_ADDR_CAM0, (uint32_t)(OUT_PA >> 4));
+    writel(ISP_BASE + OB_WB0_R_CTRL,  OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GR_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GB_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_B_CTRL,  OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + INT_EN0, INT_S_FD2);
+
+    /* ---- frame 1 ---- */
+    writel(ISP_BASE + TRIG_CAM0, TRIG_TRIGGER);
+    g_assert_cmphex(readl(ISP_BASE + INT_STAT0) & INT_S_FD2, ==, INT_S_FD2);
+    qtest_memread(global_qtest, OUT_PA, out, sizeof(out));
+    first_pixel = out[0] | (out[1] << 8) | (out[2] << 16);
+    g_assert_cmphex(first_pixel, !=, 0xa5a5a5);   /* it really developed */
+
+    /*
+     * THE TRIGGER MUST HAVE CLEARED ITSELF. This is the actual defect, checked
+     * directly rather than only through its downstream symptom - a latched bit
+     * here is what makes the driver's next write vanish.
+     */
+    g_assert_cmphex(readl(ISP_BASE + TRIG_CAM0) & TRIG_TRIGGER, ==, 0);
+
+    /* clear frame-done exactly as the driver's IRQ handler does */
+    writel(ISP_BASE + INT_STAT0, INT_S_FD2);
+
+    /* ---- frame 2: different input, poisoned output ---- */
+    for (i = 0; i < W * H; i++) {
+        bayer[i] = 0xc0;
+    }
+    qtest_memwrite(global_qtest, IN_PA, bayer, sizeof(bayer));
+    memset(out, 0xa5, sizeof(out));
+    qtest_memwrite(global_qtest, OUT_PA, out, sizeof(out));
+
+    writel(ISP_BASE + TRIG_CAM0, TRIG_TRIGGER);
+    g_assert_cmphex(readl(ISP_BASE + INT_STAT0) & INT_S_FD2, ==, INT_S_FD2);
+    qtest_memread(global_qtest, OUT_PA, out, sizeof(out));
+    second_pixel = out[0] | (out[1] << 8) | (out[2] << 16);
+
+    g_assert_cmphex(second_pixel, !=, 0xa5a5a5);  /* the second job ran */
+    g_assert_cmphex(second_pixel, !=, first_pixel); /* on the NEW input */
+
+    qtest_end();
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/imx95/neoisp/develop", test_neoisp_develop);
     qtest_add_func("/imx95/neoisp/tuning", test_neoisp_tuning);
     qtest_add_func("/imx95/neoisp/unmodelled", test_neoisp_unmodelled_stage);
+    qtest_add_func("/imx95/neoisp/two-frames", test_neoisp_two_frames);
     return g_test_run();
 }
