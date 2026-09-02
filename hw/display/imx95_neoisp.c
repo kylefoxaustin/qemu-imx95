@@ -56,6 +56,21 @@
 #define NEO_IMG0_IN_LS_CAM0     0x50
 #define NEO_OUTCH0_LS_CAM0      0x58
 #define NEO_OUTCH1_LS_CAM0      0x5c
+/*
+ * OB/WB0 - optical-black subtraction and white-balance gain, per Bayer channel.
+ * One register per channel packs BOTH stages: offset in 15:0, gain in 31:16.
+ * Gain is Q8, so 1<<8 = 256 is unity (the driver's default), and offset 0.
+ * This is the first stage a tuning engineer touches, which is why it is the
+ * first one modelled: it is what makes the params node stop being a no-op.
+ */
+#define NEO_OB_WB0_R_CTRL_CAM0  0x204
+#define NEO_OB_WB0_GR_CTRL_CAM0 0x208
+#define NEO_OB_WB0_GB_CTRL_CAM0 0x20c
+#define NEO_OB_WB0_B_CTRL_CAM0  0x210
+#define  NEO_OBWB_OFFSET(v)     ((v) & 0xffff)
+#define  NEO_OBWB_GAIN(v)       (((v) >> 16) & 0xffff)
+#define  NEO_OBWB_GAIN_UNITY    256             /* Q8 */
+
 /* demosaic control: FMT bits 5:4 select the Bayer phase */
 #define NEO_DEMOSAIC_CTRL_CAM0  0x1000
 #define  NEO_DEMOSAIC_FMT(v)    (((v) >> 4) & 0x3)
@@ -136,6 +151,37 @@ static inline uint16_t clamp16(int v, int max)
  * cannot be bit-exact against the real block anyway, a defensible and obvious
  * kernel beats an elaborate one that is differently wrong.
  */
+/*
+ * Per-Bayer-channel black level and gain. Returns the corrected sample.
+ * A channel's identity at (x,y) selects which of the four OB/WB registers
+ * applies - R, GR, GB or B - which is why this cannot be folded into a single
+ * scalar: white balance IS the per-channel difference.
+ */
+static inline int neoisp_obwb(const IMX95NeoIspState *s, int v, int colour,
+                              int on_red_row, int maxval)
+{
+    uint32_t reg;
+    int off, gain;
+
+    if (colour == 0) {
+        reg = s->regs[NEO_OB_WB0_R_CTRL_CAM0 / 4];
+    } else if (colour == 2) {
+        reg = s->regs[NEO_OB_WB0_B_CTRL_CAM0 / 4];
+    } else {
+        /* the two greens are tuned separately: GR sits on a red row, GB on a
+         * blue one, and a sensor's two green photosites genuinely differ */
+        reg = on_red_row ? s->regs[NEO_OB_WB0_GR_CTRL_CAM0 / 4]
+                         : s->regs[NEO_OB_WB0_GB_CTRL_CAM0 / 4];
+    }
+    off  = NEO_OBWB_OFFSET(reg);
+    gain = NEO_OBWB_GAIN(reg);
+    if (!gain) {
+        gain = NEO_OBWB_GAIN_UNITY;             /* unprogrammed: pass through */
+    }
+    v = ((v - off) * gain) / NEO_OBWB_GAIN_UNITY;
+    return v < 0 ? 0 : (v > maxval ? maxval : v);
+}
+
 static void neoisp_develop(IMX95NeoIspState *s, const uint8_t *in, uint8_t *out,
                            int w, int h, int in_ls, int out_ls, int fmt, int bpp,
                            int obpp)
@@ -146,11 +192,19 @@ static void neoisp_develop(IMX95NeoIspState *s, const uint8_t *in, uint8_t *out,
 
     bayer_red_origin(fmt, &rx, &ry);
 
+/*
+ * Every raw sample passes through OB/WB before it is used, at the site whose
+ * colour it actually is - not the colour of the pixel being reconstructed.
+ * Applying the centre pixel's gain to its neighbours would silently defeat
+ * white balance, since the neighbours are the OTHER channels.
+ */
 #define RAW(xx, yy) ({                                                        \
         int _x = (xx) < 0 ? 0 : ((xx) > w - 1 ? w - 1 : (xx));                \
         int _y = (yy) < 0 ? 0 : ((yy) > h - 1 ? h - 1 : (yy));                \
-        bpp > 8 ? (int)lduw_le_p(in + (size_t)_y * in_ls + _x * 2)             \
-                : (int)in[(size_t)_y * in_ls + _x];                           \
+        int _v = bpp > 8 ? (int)lduw_le_p(in + (size_t)_y * in_ls + _x * 2)    \
+                         : (int)in[(size_t)_y * in_ls + _x];                  \
+        neoisp_obwb(s, _v, bayer_colour(_x, _y, rx, ry),                      \
+                    (_y & 1) == ry, maxval);                                  \
     })
 
     for (y = 0; y < h; y++) {

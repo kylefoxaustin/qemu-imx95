@@ -582,10 +582,14 @@ working host data path yet):
   arithmetic is proprietary. This is a faithful **bilinear** debayer —
   deliberately the textbook kernel a reader can check by hand rather than
   something cleverer that would be differently wrong — so a guest sees a real
-  developed image, not the image NXP's silicon would produce. **Tuning
-  parameters are not yet applied**: the `params` node (`NNIP`, 8912 bytes) is
-  accepted and ignored, so changing tuning does not change the output. That is
-  the next fidelity step and is called out here because a tuning knob that
+  developed image, not the image NXP's silicon would produce. **Tuning is
+  live for the first stage**: `OB_WB0` — per-Bayer-channel black-level offset
+  and white-balance gain (Q8, `1<<8` = unity) — is applied to every sample at
+  the site whose colour it actually is. A qtest halves the red gain and
+  requires red to fall while **green does not move**, which is what separates
+  white balance from a brightness control. The rest of the pipeline (gamma,
+  colour-correction matrix, denoise, tone mapping) is still accepted and
+  ignored, so those knobs remain no-ops — stated because a control that
   silently does nothing is worse than one that is absent.
 
   🚨 **Five things this cost, every one presenting as silence or as something

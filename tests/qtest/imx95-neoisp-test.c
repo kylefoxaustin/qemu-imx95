@@ -31,6 +31,12 @@
 #define IMG0_IN_LS_CAM0     0x50
 #define OUTCH0_LS_CAM0      0x58
 #define DEMOSAIC_CTRL_CAM0  0x1000
+#define OB_WB0_R_CTRL       0x204
+#define OB_WB0_GR_CTRL      0x208
+#define OB_WB0_GB_CTRL      0x20c
+#define OB_WB0_B_CTRL       0x210
+#define  OBWB(off, gain)    (((gain) << 16) | ((off) & 0xffff))
+#define  GAIN_UNITY         256
 
 /* somewhere in DRAM, clear of the kernel/initrd the machine does not load */
 #define IN_PA               0x90000000ULL
@@ -96,6 +102,11 @@ static void test_neoisp_develop(void)
     writel(ISP_BASE + OUTCH0_LS_CAM0, W * 4);
     writel(ISP_BASE + IMG0_IN_ADDR_CAM0, (uint32_t)(IN_PA >> 4));
     writel(ISP_BASE + OUTCH0_ADDR_CAM0, (uint32_t)(OUT_PA >> 4));
+    /* unity tuning: no black-level offset, gain 1.0 on every channel */
+    writel(ISP_BASE + OB_WB0_R_CTRL,  OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GR_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GB_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_B_CTRL,  OBWB(0, GAIN_UNITY));
     writel(ISP_BASE + INT_EN0, INT_S_FD2);
 
     writel(ISP_BASE + TRIG_CAM0, TRIG_TRIGGER);
@@ -154,9 +165,86 @@ static void test_neoisp_develop(void)
     qtest_end();
 }
 
+/*
+ * Does the tuning knob DO anything?
+ *
+ * A params interface that is accepted and ignored is worse than one that is
+ * absent: an engineer changes white balance, sees no change, and concludes the
+ * model is broken - or worse, concludes their tuning is wrong. So this drives
+ * the same frame twice, once at unity and once with the red channel's gain
+ * halved, and requires the red output to actually fall while green does not.
+ */
+static void test_neoisp_tuning(void)
+{
+    uint8_t bayer[W * H], out[W * H * 4];
+    int x, y, rx = 0, ry = 0;
+    double red_unity = 0, red_half = 0, grn_unity = 0, grn_half = 0;
+    int n = 0, pass;
+
+    qtest_start("-M imx95-19x19-evk -m 2G -display none");
+
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            uint8_t r, g, b;
+            int ox = (x & 1) == rx, oy = (y & 1) == ry;
+
+            scene_rgb(x, y, &r, &g, &b);
+            bayer[y * W + x] = (ox && oy) ? r : ((!ox && !oy) ? b : g);
+        }
+    }
+    qtest_memwrite(global_qtest, IN_PA, bayer, sizeof(bayer));
+
+    for (pass = 0; pass < 2; pass++) {
+        double sr = 0, sg = 0;
+
+        writel(ISP_BASE + IMG_SIZE_CAM0, (H << 16) | W);
+        writel(ISP_BASE + IMG_CONF_CAM0, 6);      /* enc 6 = 8-bit samples */
+        writel(ISP_BASE + DEMOSAIC_CTRL_CAM0, 0 << 4);
+        writel(ISP_BASE + IMG0_IN_LS_CAM0, W);
+        writel(ISP_BASE + OUTCH0_LS_CAM0, W * 4);
+        writel(ISP_BASE + IMG0_IN_ADDR_CAM0, (uint32_t)(IN_PA >> 4));
+        writel(ISP_BASE + OUTCH0_ADDR_CAM0, (uint32_t)(OUT_PA >> 4));
+        /* pass 0: unity everywhere. pass 1: HALVE the red gain only. */
+        writel(ISP_BASE + OB_WB0_R_CTRL,
+               OBWB(0, pass ? GAIN_UNITY / 2 : GAIN_UNITY));
+        writel(ISP_BASE + OB_WB0_GR_CTRL, OBWB(0, GAIN_UNITY));
+        writel(ISP_BASE + OB_WB0_GB_CTRL, OBWB(0, GAIN_UNITY));
+        writel(ISP_BASE + OB_WB0_B_CTRL,  OBWB(0, GAIN_UNITY));
+        writel(ISP_BASE + INT_EN0, INT_S_FD2);
+
+        writel(ISP_BASE + TRIG_CAM0, TRIG_TRIGGER);
+        g_assert_cmphex(readl(ISP_BASE + INT_STAT0) & INT_S_FD2, ==, INT_S_FD2);
+        writel(ISP_BASE + INT_STAT0, INT_S_FD2);
+
+        qtest_memread(global_qtest, OUT_PA, out, sizeof(out));
+        n = 0;
+        for (y = 1; y < H - 1; y++) {
+            for (x = 1; x < W - 1; x++) {
+                sr += out[(y * W + x) * 4 + 2];
+                sg += out[(y * W + x) * 4 + 1];
+                n++;
+            }
+        }
+        if (pass) { red_half = sr / n; grn_half = sg / n; }
+        else      { red_unity = sr / n; grn_unity = sg / n; }
+    }
+
+    g_test_message("neoisp tuning: red %.1f -> %.1f, green %.1f -> %.1f",
+                   red_unity, red_half, grn_unity, grn_half);
+    /* halving the red gain must roughly halve red... */
+    g_assert_cmpfloat(red_half, <, red_unity * 0.75);
+    /* ...and must NOT move green: that is what makes it WHITE BALANCE rather
+     * than a brightness control applied to everything */
+    g_assert_cmpfloat(grn_half, >, grn_unity * 0.95);
+    g_assert_cmpfloat(grn_half, <, grn_unity * 1.05);
+
+    qtest_end();
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/imx95/neoisp/develop", test_neoisp_develop);
+    qtest_add_func("/imx95/neoisp/tuning", test_neoisp_tuning);
     return g_test_run();
 }
