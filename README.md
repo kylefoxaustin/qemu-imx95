@@ -521,8 +521,14 @@ working host data path yet):
   directory of `*.raw` frames (lexically sorted) or a single file of
   back-to-back raw frames; each tick the active channel reads the next frame
   straight from the host (whole-frame reads) and DMAs it out at the channel's
-  pitch, looping. An undersized frame falls back to the gradient, so the
-  capture geometry must match. `tests/virtual-camera/` feeds a known host frame
+  pitch, looping. ⚠️ An unusable frame — wrong size, or unreadable — falls back
+  to the gradient, and because that fallback is **indistinguishable from
+  success** (the pipeline still captures, still displays, and a hash, a
+  non-black fraction and a "did a frame arrive" check all pass on a gradient),
+  the model **says so loudly**: it warns once per geometry, naming the file and
+  the bytes it needed against the bytes it got. Two different operator mistakes
+  — forgetting the property, and supplying the wrong geometry — otherwise land
+  on one healthy-looking output. `tests/virtual-camera/` feeds a known host frame
   through the same `ov5640` + V4L2 `STREAMON`/`DQBUF` path and asserts the
   `DQBUF`'d bytes are the host image, not the gradient — byte-for-byte through
   the ISI DMA.
@@ -1001,7 +1007,7 @@ remains is forward-looking:
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera ISP** | The ap1302 firmware-loading ISP front end (basic **MIPI CSI-2 → ISI V4L2 capture is now functional** via the ov5640 sensor — `STREAMON`/`DQBUF` real frames; the ISP's on-chip image processing is what remains) | after display |
+| **Camera ISP** | The **transport** is done — capture is functional and a frame now goes end to end from CSI-2 to the LCD panel (v2.5.0). The **NeoISP** binds and registers its 48 `/dev/video` nodes but processes no pixel: it is registration tier. What remains is the per-pixel path — debayer first, then black level / white balance / gamma / colour correction. Design note: `docs/design/neoisp-model.md` | **next** |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
@@ -1134,6 +1140,23 @@ fidelity compromise in the modelled hardware.
   timeout. Also lands the **board-to-board SPI + CAN interconnect** (joining
   eth/UART): `net/can/can_host_chardev.c` and a real eDMA-driven `fsl-lpspi`
   over `spi_link`, cross-validated 95↔91 (SPI) and 95↔MCX (CAN).
+- **v2.5.0 — camera → LCD: the vision transport path, end to end (on
+  `main`).** A *smart camera* frame — a sensor emitting already-developed YUYV
+  rather than Bayer — arrives over MIPI CSI-2, the ISI DMAs it into DRAM, a V4L2
+  client `DQBUF`s it and blits it into `/dev/fb0`, and the DPU scans it out to
+  the 1280×800 LVDS panel. The NeoISP is deliberately **not** in this path: with
+  no image processing between capture and scanout, a transport fault cannot hide
+  behind a resample that still looks like a photograph. Proved two independent
+  ways (`tests/camera-to-display/`), because either alone is weak — the guest
+  hashes the captured frame and the host hashes what it fed in (equal ⇒ the image
+  crossed *intact*, not merely arrived), **and** a `screendump` of the panel is
+  correlated against the source image (a correct hash with a black screen is
+  still a broken display path). Result: hashes equal, **r = 1.0000**, luma MAE
+  0.5. Also hardens the ISI's host-frame source: an unusable frame used to fall
+  back to the synthetic gradient **silently**, which every downstream check
+  passes; it now warns loudly and the harness fails on it. Ships alongside the
+  Neutron runner backend + cross-executor oracle and the enet-lab3 two-port lab
+  artifacts.
 - **Silicon-validated fidelity + the full U-Boot boot chain (on `main`).**
   Diffed the model against a **real i.MX 95 board** and corrected what silicon
   disagreed with: the Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO
