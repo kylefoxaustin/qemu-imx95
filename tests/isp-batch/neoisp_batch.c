@@ -53,7 +53,15 @@ struct node {
 
 static uint64_t fnv1a(const unsigned char *p, size_t n)
 {
-    uint64_t h = 1469598103934665603ULL;
+    /*
+     * The FNV-1a 64-bit offset basis is 14695981039346656037 (0xcbf29ce484222325).
+     * This had a digit missing, which still hashes and still distinguishes
+     * frames - so every internal check passed - but the receipt's hashes could
+     * not be reproduced by anyone using a stock FNV-1a. A hash in a receipt
+     * exists to be verified INDEPENDENTLY; one that only this program can
+     * reproduce is a checksum of itself.
+     */
+    uint64_t h = 0xcbf29ce484222325ULL;
     while (n--) { h ^= *p++; h *= 1099511628211ULL; }
     return h;
 }
