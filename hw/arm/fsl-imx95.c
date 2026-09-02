@@ -48,6 +48,7 @@
 #include "hw/audio/wm8962.h"
 #include "hw/sensor/tmp105.h"
 #include "hw/display/imx95_isi.h"
+#include "hw/display/imx95_neoisp.h"
 #include "hw/display/imx95_dsi.h"
 #include "hw/core/irq.h"
 #include "hw/intc/arm_gicv3.h"
@@ -488,8 +489,6 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             { 0x4ad30000, 64 * KiB }, /* mipi csi0 */
             { 0x4ad40000, 64 * KiB }, /* mipi csi1 */
             { 0x4ad50000, 0x80000 },  /* isi (image sensing interface) */
-            { 0x4ae00000, 64 * KiB }, /* neo isp registers */
-            { 0x4afe0000, 64 * KiB }, /* neo isp stats */
         };
         for (size_t i = 0; i < ARRAY_SIZE(linux_periph_regions); i++) {
             g_autofree char *name =
@@ -597,6 +596,19 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             sysbus_connect_irq(SYS_BUS_DEVICE(isi), i,
                                qdev_get_gpio_in(gicdev, isi_irq[i]));
         }
+
+        /*
+         * NeoISP (isp@4ae00000). Two windows - registers and stats - and the
+         * camera IRQ. Until now both windows were unimplemented backing store,
+         * which is why the driver bound completely and processed no pixel.
+         */
+        DeviceState *isp = qdev_new(TYPE_IMX95_NEOISP);
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(isp), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(isp), 0, 0x4ae00000);
+        sysbus_mmio_map(SYS_BUS_DEVICE(isp), 1, 0x4afe0000);
+        sysbus_connect_irq(SYS_BUS_DEVICE(isp), 0, qdev_get_gpio_in(gicdev, 222));
     }
 
     /*

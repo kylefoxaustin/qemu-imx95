@@ -159,3 +159,6 @@ config IMX95_ISI
 
 config IMX95_DSI
     bool
+
+config IMX95_NEOISP
+    bool
