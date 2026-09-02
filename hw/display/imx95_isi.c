@@ -28,6 +28,7 @@
 #include "system/dma.h"
 #include "qemu/timer.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "migration/vmstate.h"
 #include <glob.h>
 
@@ -142,6 +143,31 @@ static bool imx95_isi_frames_open(IMX95IsiState *s, Error **errp)
 }
 
 /*
+ * A host frame source that cannot be used falls back to the synthetic gradient,
+ * and that fallback is INVISIBLE: the pipeline still captures, still displays,
+ * and every downstream check - hash, non-black fraction, "did a frame arrive" -
+ * passes on a gradient. Two different operator mistakes (forgetting the
+ * property, or supplying a frame whose geometry does not match) both land on
+ * one healthy-looking output.
+ *
+ * So when a source was EXPLICITLY requested and cannot be honoured, say so.
+ * Once per geometry, because the alternative is a message per frame.
+ */
+static void imx95_isi_frame_source_failed(IMX95IsiState *s, const char *path,
+                                          size_t got, size_t want)
+{
+    if (s->frame_warned_size == want) {
+        return;                                 /* already said it for this size */
+    }
+    s->frame_warned_size = want;
+    warn_report("imx95.isi: host frame source '%s' unusable "
+                "(need %zu bytes per frame, got %zu) - FALLING BACK TO THE "
+                "SYNTHETIC GRADIENT. Capture will look healthy but the image is "
+                "not yours; regenerate the frame at the pipeline's negotiated "
+                "geometry.", path ? path : "(null)", want, got);
+}
+
+/*
  * Read the next frame (fsz bytes) from the host source into frame_buf, cycling
  * through the sequence and looping at the end. Returns true on success.
  */
@@ -159,6 +185,7 @@ static bool imx95_isi_next_frame(IMX95IsiState *s, size_t fsz)
 
         s->frame_index = (s->frame_index + 1) % s->n_frame_files;
         if (!g_file_get_contents(path, &data, &len, NULL) || len < fsz) {
+            imx95_isi_frame_source_failed(s, path, len, fsz);
             return false;
         }
         memcpy(s->frame_buf, data, fsz);
@@ -172,7 +199,11 @@ static bool imx95_isi_next_frame(IMX95IsiState *s, size_t fsz)
             rewind(s->frame_fp);
             got += fread(s->frame_buf + got, 1, fsz - got, s->frame_fp);
         }
-        return got == fsz;
+        if (got != fsz) {
+            imx95_isi_frame_source_failed(s, s->frames_path, got, fsz);
+            return false;
+        }
+        return true;
     }
     return false;
 }

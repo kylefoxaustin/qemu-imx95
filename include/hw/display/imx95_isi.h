@@ -54,6 +54,7 @@ struct IMX95IsiState {
     FILE    *frame_fp;
     uint8_t *frame_buf;
     size_t   frame_buf_size;
+    size_t   frame_warned_size; /* geometry already warned about, if any */
 };
 
 #endif /* HW_DISPLAY_IMX95_ISI_H */

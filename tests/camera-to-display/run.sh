@@ -71,8 +71,14 @@ SHOT="${SHOT:-$WORK/panel.ppm}"
 # The pipeline negotiates 640x480 YUYV with a 3840-byte line stride (6 bytes per
 # pixel of stride for 2 bytes of pixel). Build the host frame to match exactly.
 W=${W:-640}; H=${H:-480}; STRIDE=${STRIDE:-3840}
-FRAME="$WORK/frame000.raw"
-python3 "$HERE/mkframe.py" "$SRC_IMG" "$W" "$H" "$FRAME" "$STRIDE" || exit 1
+# FRAME=<file> feeds a pre-made raw frame instead of converting SRC_IMG - used
+# to exercise the ISI's fallback path deliberately.
+FRAME=${FRAME:-$WORK/frame000.raw}
+if [ "$FRAME" = "$WORK/frame000.raw" ]; then
+    python3 "$HERE/mkframe.py" "$SRC_IMG" "$W" "$H" "$FRAME" "$STRIDE" || exit 1
+else
+    echo "using pre-made frame: $FRAME"
+fi
 HOST_HASH=$(python3 - "$FRAME" <<'PY'
 import sys
 h = 1469598103934665603
@@ -157,8 +163,20 @@ timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -device ov5640,bus=lpi2c1,address=0x3c \
   -global driver=imx95.isi,property=frames,value="$FRAME" \
   -monitor "unix:$MON,server,nowait" \
-  -serial file:"$LOG" -serial null >/dev/null 2>&1 || true
+  -serial file:"$LOG" -serial null >/dev/null 2>"$WORK/qemu.err" || true
 wait "$SHOOTER" 2>/dev/null
+
+# QEMU's own warnings matter: the ISI shouts here when a host frame source is
+# unusable and it has fallen back to the synthetic gradient. Discarding this
+# stream would hide exactly the failure the model was taught to announce.
+if [ -s "$WORK/qemu.err" ]; then
+    echo "--- qemu stderr ---"; cat "$WORK/qemu.err"
+fi
+if grep -q "FALLING BACK TO THE SYNTHETIC GRADIENT" "$WORK/qemu.err" 2>/dev/null; then
+    echo "FAIL: the ISI could not use the host frame and drew its gradient instead"
+    echo "      (the capture would still have looked healthy - that is the point)"
+    exit 1
+fi
 
 echo "--- camera-to-display report ---"
 sed -n '/=== CAM2LCD ===/,/=== CAM2LCD-DONE ===/p' "$LOG" \
