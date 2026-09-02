@@ -13,10 +13,14 @@ def main():
     thresh = float(sys.argv[5]) if len(sys.argv) > 5 else 0.95
     d = open(dev, "rb").read()
     r = open(ref, "rb").read()
-    need = W * H * 4
-    if len(d) < need:
-        print(f"FAIL: developed output is {len(d)} bytes, expected >= {need}")
+    # Bytes per pixel is whatever the pipeline negotiated - this one settles on
+    # BGR3 (3 bytes), not the 4 an RGB32 guess would assume.
+    bpp = len(d) // (W * H)
+    if bpp not in (3, 4):
+        print(f"FAIL: developed output is {len(d)} bytes for {W}x{H} "
+              f"({bpp} B/px) - not a packed 24- or 32-bit image")
         return 1
+    print(f"  developed {W}x{H} at {bpp} bytes/pixel ({len(d):,} bytes)")
 
     names = ("red", "green", "blue")
     worst = 1.0
@@ -25,7 +29,7 @@ def main():
         for y in range(1, H - 1, 2):
             for x in range(1, W - 1, 2):
                 # developed is packed B,G,R,A
-                xs.append(d[(y * W + x) * 4 + (2 - c)])
+                xs.append(d[(y * W + x) * bpp + (2 - c)])   # packed B,G,R
                 ys.append(r[(y * W + x) * 3 + c])
         n = len(xs)
         mx, my = sum(xs) / n, sum(ys) / n
@@ -36,7 +40,8 @@ def main():
         print(f"  {names[c]:5s} correlation r={cor:+.4f}")
         worst = min(worst, cor)
 
-    nonzero = sum(1 for i in range(0, need, 4) if d[i] or d[i+1] or d[i+2])
+    nonzero = sum(1 for i in range(0, W * H * bpp, bpp)
+                  if d[i] or d[i + 1] or d[i + 2])
     print(f"  non-black {100*nonzero/(W*H):.1f}%   weakest channel r={worst:+.4f}")
     if nonzero < W * H * 0.2:
         print("FAIL: the developed frame is essentially black")

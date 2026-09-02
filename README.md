@@ -260,6 +260,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop) | A | FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output |
 | Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
 | Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera | A | 5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers |
+| Camera ISP (NeoISP) — raw Bayer developed to colour | A | stock V4L2 mem2mem: Bayer in, developed image out, per-channel r = 0.995/0.998/1.000 |
 | Camera -> LCD — the vision transport path end to end | A | a smart-camera frame in over CSI-2, out on the LVDS panel: capture hash == host hash, panel correlation r=1.0000 |
 | PCIe Root Complex — pcie0 + pcie1 (DesignWare) | A | link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains) |
 | HW JPEG codecs (encode + decode) | A | mxc-jpeg /dev/video2,3; libjpeg encode/decode (or an honest config error, never garbage) |
@@ -560,7 +561,47 @@ working host data path yet):
   validate until the graph's links are enabled and the sensor format propagated
   onto every crossbar sink (`tests/camera/v4l2_cap.c` `cap` mode already does
   this, so the test composes with it rather than duplicating it).
-- **NeoISP (camera image signal processor) — brings up.** The i.MX95 ISP
+- **NeoISP (camera image signal processor) — DEVELOPS RAW BAYER.** The i.MX 95
+  ISP (`isp@4ae00000`, `nxp,imx95-b0-neoisp`) is modelled
+  (`hw/display/imx95_neoisp.c`): a raw Bayer frame goes in through the stock
+  V4L2 mem2mem path and a developed colour image comes out.
+
+  ![Raw Bayer in, developed image out — the NeoISP running a real frame through the stock Linux neoisp driver](docs/images/neoisp-develop.png)
+
+  The driver needs very little to start work: `TRIG_CAM0` bit 0 triggers,
+  `IMG0_IN_ADDR`/`OUTCH*_ADDR` give the buffers, `IMG_SIZE` the geometry,
+  `DEMOSAIC_CTRL` the Bayer phase, and `INT_STAT0.FD2` completes the job.
+  `tests/isp-develop/` drives it exactly as an application would — node
+  discovery, format negotiation, the queue dance, the completion interrupt —
+  and gates on **per-channel correlation** against the RGB the mosaic was
+  sampled from: **r = 0.995 / 0.998 / 1.000**. A qtest
+  (`tests/qtest/imx95-neoisp-test.c`) drives the registers directly with no
+  kernel involved.
+
+  ⚠️ **Fidelity, stated rather than implied.** The real block's per-pixel
+  arithmetic is proprietary. This is a faithful **bilinear** debayer —
+  deliberately the textbook kernel a reader can check by hand rather than
+  something cleverer that would be differently wrong — so a guest sees a real
+  developed image, not the image NXP's silicon would produce. **Tuning
+  parameters are not yet applied**: the `params` node (`NNIP`, 8912 bytes) is
+  accepted and ignored, so changing tuning does not change the output. That is
+  the next fidelity step and is called out here because a tuning knob that
+  silently does nothing is worse than one that is absent.
+
+  🚨 **Five things this cost, every one presenting as silence or as something
+  that looked fine** — worth having before extending it. The driver registers
+  **eight node-groups that all use the same names**, so finding nodes by name
+  assembles a job from three different groups and it simply never becomes ready.
+  `params` is a **metadata** node — reading `fmt.pix_mp` gives garbage geometry.
+  **Four** nodes have enabled links (`input0`, `params`, `frame`, `stats`) and
+  the driver will not schedule while any lacks a buffer. **Packed output goes
+  to channel 1**, not channel 0 — the driver zeroes channel 0 deliberately to
+  say so. And `IMG_CONF.IBPP0` is an **encoding, not a bit count** (6 means
+  eight bits): reading it literally clamps every sample to 63 and yields a
+  perfectly structured image that is merely dark and desaturated — the most
+  deceptive of the five, because only the pixel *values* give it away.
+
+- **NeoISP registration (superseded by the above, kept for the node inventory).** The i.MX95 ISP
   (`isp@4ae00000`, `nxp,imx95-b0-neoisp`) is a register-driven V4L2 mem2mem
   device — debayer / tone / colour pipeline — with two MMIO windows
   (`registers` @0x4ae00000, `stats` @0x4afe0000) the `neoisp` driver programs
@@ -1007,7 +1048,7 @@ remains is forward-looking:
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera ISP** | The **transport** is done — capture is functional and a frame now goes end to end from CSI-2 to the LCD panel (v2.5.0). The **NeoISP** binds and registers its 48 `/dev/video` nodes but processes no pixel: it is registration tier. What remains is the per-pixel path — debayer first, then black level / white balance / gamma / colour correction. Design note: `docs/design/neoisp-model.md` | **next** |
+| **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path, gated at r = 0.995+ per channel. What remains is the rest of the pipeline — black level, white balance, gamma, colour correction — and, before any of those, making the `params` node actually take effect: it is currently accepted and ignored, so tuning changes nothing. Design note: `docs/design/neoisp-model.md` | tuning next |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
@@ -1157,6 +1198,19 @@ fidelity compromise in the modelled hardware.
   passes; it now warns loudly and the harness fails on it. Ships alongside the
   Neutron runner backend + cross-executor oracle and the enet-lab3 two-port lab
   artifacts.
+- **v2.6.0 — the ISP develops raw Bayer (on `main`).** `isp@4ae00000` was two
+  windows of backing store: the `neoisp` driver bound completely — regmap, soft
+  reset, power domain, clocks, IRQ 222, 48 `/dev/video` nodes — and processed no
+  pixel. `hw/display/imx95_neoisp.c` makes it work. A raw Bayer frame goes in
+  through the stock V4L2 mem2mem path and a developed colour image comes out,
+  gated on **per-channel correlation** against the RGB the mosaic was sampled
+  from (**r = 0.995 / 0.998 / 1.000**, `tests/isp-develop/`), plus a qtest that
+  drives the registers with no kernel involved. The debayer is bilinear and the
+  block's real arithmetic is proprietary, so this is structurally correct rather
+  than bit-exact — and **tuning parameters are accepted but not yet applied**,
+  which is stated in the model's own header because a knob that silently does
+  nothing is worse than one that is absent.
+
 - **Silicon-validated fidelity + the full U-Boot boot chain (on `main`).**
   Diffed the model against a **real i.MX 95 board** and corrected what silicon
   disagreed with: the Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO

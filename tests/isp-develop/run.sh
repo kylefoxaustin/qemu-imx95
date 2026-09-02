@@ -104,6 +104,8 @@ sleep 3
 insmod /mods/neoisp.ko 2>&1 | sed 's/^/insmod: /'
 sleep 2
 /neoisp_m2m /bayer.raw /developed.raw $W $H
+echo "--- kernel view ---"
+/bin/busybox dmesg 2>/dev/null | /bin/busybox grep -i "neoisp\\|isp" | /bin/busybox tail -25
 echo "--- base64 of the developed frame follows ---"
 /bin/busybox base64 /developed.raw 2>/dev/null | head -c 6000000
 echo ""
@@ -120,7 +122,7 @@ timeout -k 5 "$TMO" "$QEMU" -M imx95-19x19-evk -m 2G -display none \
   -serial file:"$LOG" -serial null >/dev/null 2>"$WORK/qemu.err" || true
 
 echo "--- isp-develop report ---"
-sed -n '/=== ISPDEV ===/,/--- base64/p' "$LOG" | grep -aE 'NEOISP-M2M|neoisp-|error|Error' | head -20
+sed -n '/=== ISPDEV ===/,/--- base64/p' "$LOG" | grep -aE 'NEOISP-M2M|neoisp-|neoisp|error|Error' | head -30
 [ -s "$WORK/qemu.err" ] && { echo "--- qemu stderr ---"; head -5 "$WORK/qemu.err"; }
 
 fail() { echo "FAIL: $*"; exit 1; }
@@ -132,6 +134,7 @@ sed -n '/--- base64 of the developed frame follows ---/,/=== ISPDEV-DONE ===/p' 
 base64 -d "$WORK/dev.b64" > "$WORK/developed.raw" 2>/dev/null \
     || fail "could not decode the developed frame off the console"
 
+[ -n "${KEEP_OUT:-}" ] && { cp "$WORK/developed.raw" "$KEEP_OUT"; cp "$BAYER.rgb24" "$KEEP_OUT.ref"; }
 python3 "$HERE/checkdev.py" "$WORK/developed.raw" "$BAYER.rgb24" "$W" "$H" || exit 1
 
 echo "PASS: NeoISP developed a real Bayer frame - the image reconstructs the source scene"

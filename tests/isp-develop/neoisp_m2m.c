@@ -264,7 +264,7 @@ int main(int argc, char **argv)
     const char *out_file = argc > 2 ? argv[2] : "/developed.raw";
     int W = argc > 3 ? atoi(argv[3]) : 640;
     int H = argc > 4 ? atoi(argv[4]) : 480;
-    struct node in0 = {0}, params = {0}, frame = {0};
+    struct node in0 = {0}, params = {0}, frame = {0}, stats = {0};
     FILE *f;
     size_t got;
     int base;
@@ -279,10 +279,23 @@ int main(int argc, char **argv)
               W, H, V4L2_PIX_FMT_SBGGR8, base) < 0) return 1;
     if (setup(&frame, "neoisp-frame", V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
               W, H, V4L2_PIX_FMT_RGB32, base + 3) < 0) return 1;
-    /* params is a metadata node: take whatever format it reports */
+    /*
+     * params and stats are metadata nodes: take whatever format they report.
+     *
+     * BOTH must be fed. The driver's node_desc table marks input0, params,
+     * frame AND stats as MEDIA_LNK_FL_ENABLED by default, and prepare_job
+     * refuses to schedule while any ENABLED node lacks a queued buffer. Miss
+     * one and there is no error anywhere - the job simply never becomes ready
+     * and DQBUF blocks forever, which reads as a dead device rather than an
+     * unmet precondition.
+     */
     if (setup(&params, "neoisp-params", V4L2_BUF_TYPE_META_OUTPUT, 0, 0, 0,
               base + 2) < 0) {
         printf("NEOISP-M2M: no params node in use\n");
+    }
+    if (setup(&stats, "neoisp-stats", V4L2_BUF_TYPE_META_CAPTURE, 0, 0, 0,
+              base + 5) < 0) {
+        printf("NEOISP-M2M: no stats node in use\n");
     }
 
     /* load the Bayer frame into the input buffer */
@@ -294,16 +307,28 @@ int main(int argc, char **argv)
     printf("NEOISP-M2M bayer-hash %016llx\n",
            (unsigned long long)fnv1a(in0.buf[0], got));
 
+    /*
+     * STREAMON EVERYTHING FIRST, then queue the buffers.
+     *
+     * The other order looks natural and quietly loses the frame: vb2 hands
+     * pre-queued buffers to the driver only AFTER start_streaming returns, but
+     * this driver schedules a job from inside start_streaming. So a buffer
+     * queued beforehand is not yet visible, the job runs with a NULL output
+     * buffer, and the hardware is programmed with output address 0 - which
+     * presents as a device that triggers once and produces nothing.
+     */
+    if (params.fd > 0 && stream_on(&params) < 0) perror("params STREAMON");
+    if (stats.fd > 0 && stream_on(&stats) < 0) perror("stats STREAMON");
+    if (stream_on(&in0) < 0) { perror("input0 STREAMON"); return 1; }
+    if (stream_on(&frame) < 0) { perror("frame STREAMON"); return 1; }
+
     if (params.fd > 0) {
         memset(params.buf[0], 0, params.len[0]);   /* default tuning */
         if (qbuf(&params, 0) < 0) perror("params QBUF");
     }
-    if (qbuf(&in0, got) < 0) { perror("input0 QBUF"); return 1; }
+    if (stats.fd > 0 && qbuf(&stats, 0) < 0) perror("stats QBUF");
     if (qbuf(&frame, 0) < 0) { perror("frame QBUF"); return 1; }
-
-    if (params.fd > 0 && stream_on(&params) < 0) perror("params STREAMON");
-    if (stream_on(&in0) < 0) { perror("input0 STREAMON"); return 1; }
-    if (stream_on(&frame) < 0) { perror("frame STREAMON"); return 1; }
+    if (qbuf(&in0, got) < 0) { perror("input0 QBUF"); return 1; }
 
     if (dqbuf(&frame) < 0) { perror("frame DQBUF"); return 1; }
     printf("NEOISP-M2M developed-hash %016llx\n",

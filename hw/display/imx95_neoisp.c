@@ -52,11 +52,34 @@
 #define NEO_IMG_SIZE_CAM0       0x34
 #define NEO_IMG0_IN_ADDR_CAM0   0x3c
 #define NEO_OUTCH0_ADDR_CAM0    0x44
+#define NEO_OUTCH1_ADDR_CAM0    0x48
 #define NEO_IMG0_IN_LS_CAM0     0x50
 #define NEO_OUTCH0_LS_CAM0      0x58
+#define NEO_OUTCH1_LS_CAM0      0x5c
 /* demosaic control: FMT bits 5:4 select the Bayer phase */
 #define NEO_DEMOSAIC_CTRL_CAM0  0x1000
 #define  NEO_DEMOSAIC_FMT(v)    (((v) >> 4) & 0x3)
+
+/*
+ * IMG_CONF.IBPP0 is an ENCODING, not a bit count. The driver writes
+ * neoisp_format->bpp_enc, and the format table maps those to real sample
+ * widths - notably 6 means EIGHT bits, not six. Reading it literally clamps
+ * every sample to 2^6-1 = 63, which looks like a correctly structured image
+ * that is simply dark and desaturated: the shape survives, so nothing appears
+ * broken, and only the pixel VALUES give it away.
+ */
+static int neo_ibpp_bits(unsigned enc)
+{
+    switch (enc) {
+    case 0:  return 12;
+    case 1:  return 14;
+    case 2:  return 16;
+    case 4:  return 10;
+    case 5:  return 10;                         /* 10-bit packed */
+    case 6:  return 8;
+    default: return 8;
+    }
+}
 
 static uint32_t neo_int_stat_off(IMX95NeoIspState *s)
 {
@@ -183,17 +206,27 @@ static void neoisp_run_frame(IMX95NeoIspState *s)
     int w = size & 0xffff, h = (size >> 16) & 0xffff;
     /* addresses are stored >> 4 */
     hwaddr in_pa  = (hwaddr)neo_reg(s, NEO_IMG0_IN_ADDR_CAM0) << 4;
+    /*
+     * Which output CHANNEL carries the image depends on the format, and the
+     * driver is explicit about it: for a PACKED format (BGR3, YUYV...) it
+     * deliberately writes channel 0 as zero and puts the buffer on channel 1;
+     * channel 0 carries the first plane of a PLANAR format. Reading only
+     * channel 0 sees address 0 and produces nothing, with no error anywhere -
+     * the device simply triggers and never completes.
+     */
     hwaddr out_pa = (hwaddr)neo_reg(s, NEO_OUTCH0_ADDR_CAM0) << 4;
     uint32_t in_ls  = neo_reg(s, NEO_IMG0_IN_LS_CAM0) & ~0xfu;
     uint32_t out_ls = neo_reg(s, NEO_OUTCH0_LS_CAM0) & ~0xfu;
-    int bpp = NEO_IMG_CONF_IBPP0(neo_reg(s, NEO_IMG_CONF_CAM0));
+    unsigned ibpp_enc = NEO_IMG_CONF_IBPP0(neo_reg(s, NEO_IMG_CONF_CAM0));
+    int bpp = neo_ibpp_bits(ibpp_enc);
     int obpp;
     int fmt = NEO_DEMOSAIC_FMT(neo_reg(s, NEO_DEMOSAIC_CTRL_CAM0));
     g_autofree uint8_t *in = NULL;
     g_autofree uint8_t *out = NULL;
 
-    if (bpp == 0) {
-        bpp = 8;                                /* IBPP0 unset: assume 8-bit raw */
+    if (!out_pa || !out_ls) {                   /* packed output: channel 1 */
+        out_pa = (hwaddr)neo_reg(s, NEO_OUTCH1_ADDR_CAM0) << 4;
+        out_ls = neo_reg(s, NEO_OUTCH1_LS_CAM0) & ~0xfu;
     }
     if (!w || !h || !in_pa || !out_pa) {
         qemu_log_mask(LOG_GUEST_ERROR, "imx95.neoisp: trigger with an incomplete "
@@ -270,18 +303,7 @@ static void neoisp_regs_write(void *opaque, hwaddr off, uint64_t val,
     s->regs[off / 4] = val;
 
     if (off == NEO_TRIG_CAM0 && (val & NEO_TRIG_CAM0_TRIGGER)) {
-        warn_report("imx95.neoisp: TRIGGER size=0x%x in=0x%x out=0x%x "
-                    "in_ls=0x%x out_ls=0x%x conf=0x%x en=0x%x",
-                    neo_reg(s, NEO_IMG_SIZE_CAM0),
-                    neo_reg(s, NEO_IMG0_IN_ADDR_CAM0),
-                    neo_reg(s, NEO_OUTCH0_ADDR_CAM0),
-                    neo_reg(s, NEO_IMG0_IN_LS_CAM0),
-                    neo_reg(s, NEO_OUTCH0_LS_CAM0),
-                    neo_reg(s, NEO_IMG_CONF_CAM0),
-                    s->regs[neo_int_en_off(s) / 4]);
         neoisp_run_frame(s);
-        warn_report("imx95.neoisp: after run frames=%" PRIu64 " stat=0x%x",
-                    s->frames, s->regs[neo_int_stat_off(s) / 4]);
     }
 }
 
