@@ -94,7 +94,12 @@ PY
 
 
 # --- the host folders the engineer would supply --------------------------------
-IN_HOST="$WORK/in"; OUT_HOST="$WORK/out"
+# BATCH_IN_HOST / BATCH_OUT_HOST let a caller point the run at DURABLE folders
+# instead of the harness's mktemp dir. The receipt records whatever paths were
+# actually used, so with a temp workdir its provenance fields name a directory
+# that is deleted before anyone can follow them - correct, well-formed, and
+# pointing at nothing. Use these to produce a receipt whose paths still resolve.
+IN_HOST="${BATCH_IN_HOST:-$WORK/in}"; OUT_HOST="${BATCH_OUT_HOST:-$WORK/out}"
 mkdir -p "$IN_HOST" "$OUT_HOST"
 # EVERY STAGED FRAME MUST BE DISTINCT.
 #
