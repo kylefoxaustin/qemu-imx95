@@ -32,6 +32,7 @@ struct IMX95NeoIspState {
      * different offsets; the EVK is b0. */
     bool v2;
     uint64_t frames;            /* frames developed, for the qtest */
+    bool warned_stages;         /* already said which stages are unmodelled */
 };
 
 #endif

@@ -71,6 +71,30 @@
 #define  NEO_OBWB_GAIN(v)       (((v) >> 16) & 0xffff)
 #define  NEO_OBWB_GAIN_UNITY    256             /* Q8 */
 
+/*
+ * Stages this model does NOT implement. Each block's control register carries
+ * its enable in BIT(31), so a guest that programs one is asking for processing
+ * that will not happen.
+ *
+ * ⚠️ PARTIAL HONOURING IS WORSE THAN NONE, and this is the reason these are
+ * announced rather than quietly skipped. An engineer who loads a full tuning
+ * blob sees white balance work - which earns the interface their trust - then
+ * changes gamma, sees no difference, and concludes GAMMA DOES NOT AFFECT THIS
+ * HARDWARE. That is a specific false belief about silicon, arrived at BECAUSE
+ * part of the control was honest. Saying which stages are live is the only way
+ * a partial implementation stays safe to use.
+ */
+static const struct {
+    hwaddr off;
+    const char *name;
+} neoisp_unmodelled[] = {
+    { 0x400,  "colour temperature / auto white balance" },
+    { 0x800,  "Bayer noise reduction" },
+    { 0x900,  "vignetting correction" },
+    { 0x1480, "edge enhancement" },
+    { 0x166c, "GCM black level / gamma / colour matrix" },
+};
+
 /* demosaic control: FMT bits 5:4 select the Bayer phase */
 #define NEO_DEMOSAIC_CTRL_CAM0  0x1000
 #define  NEO_DEMOSAIC_FMT(v)    (((v) >> 4) & 0x3)
@@ -317,6 +341,22 @@ static void neoisp_run_frame(IMX95NeoIspState *s)
         return;
     }
     s->frames++;
+
+    /* Say plainly what was asked for and not done - once per device. */
+    if (!s->warned_stages) {
+        for (size_t i = 0; i < ARRAY_SIZE(neoisp_unmodelled); i++) {
+            if (s->regs[neoisp_unmodelled[i].off / 4] & (1u << 31)) {
+                s->warned_stages = true;
+                warn_report("imx95.neoisp: '%s' is ENABLED by the guest but is "
+                            "NOT modelled. Black level and white balance (OB_WB0) "
+                            "are applied; gamma, colour matrix, denoise and tone "
+                            "mapping are not. Tuning those stages will not change "
+                            "the output - that is a limit of this model, NOT of "
+                            "the hardware.", neoisp_unmodelled[i].name);
+                break;
+            }
+        }
+    }
 
     /* Frame done. FD2 is the bit the driver's IRQ handler treats as completion. */
     s->regs[neo_int_stat_off(s) / 4] |= NEO_INT_S_FD2;

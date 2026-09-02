@@ -241,10 +241,64 @@ static void test_neoisp_tuning(void)
     qtest_end();
 }
 
+/*
+ * Enabling a stage the model does not implement must not be silent.
+ *
+ * This only checks the frame still develops - the warning itself goes to
+ * stderr, where a harness greps for it. The point of the test is that an
+ * unmodelled stage is a KNOWN state rather than an undefined one: the block
+ * keeps working and says what it skipped, instead of either faulting or
+ * pretending it applied a tuning it ignored.
+ */
+static void test_neoisp_unmodelled_stage(void)
+{
+    uint8_t bayer[W * H], out[W * H * 4];
+    int x, y;
+
+    qtest_start("-M imx95-19x19-evk -m 2G -display none");
+
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            uint8_t r, g, b;
+            scene_rgb(x, y, &r, &g, &b);
+            bayer[y * W + x] = ((x & 1) == 0 && (y & 1) == 0) ? r :
+                               (((x & 1) && (y & 1)) ? b : g);
+        }
+    }
+    qtest_memwrite(global_qtest, IN_PA, bayer, sizeof(bayer));
+
+    writel(ISP_BASE + IMG_SIZE_CAM0, (H << 16) | W);
+    writel(ISP_BASE + IMG_CONF_CAM0, 6);
+    writel(ISP_BASE + IMG0_IN_LS_CAM0, W);
+    writel(ISP_BASE + OUTCH0_LS_CAM0, W * 4);
+    writel(ISP_BASE + IMG0_IN_ADDR_CAM0, (uint32_t)(IN_PA >> 4));
+    writel(ISP_BASE + OUTCH0_ADDR_CAM0, (uint32_t)(OUT_PA >> 4));
+    writel(ISP_BASE + OB_WB0_R_CTRL,  OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GR_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_GB_CTRL, OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + OB_WB0_B_CTRL,  OBWB(0, GAIN_UNITY));
+    writel(ISP_BASE + INT_EN0, INT_S_FD2);
+
+    /* enable a stage the model does not implement (edge enhancement) */
+    writel(ISP_BASE + 0x1480, 1u << 31);
+
+    writel(ISP_BASE + TRIG_CAM0, TRIG_TRIGGER);
+    g_assert_cmphex(readl(ISP_BASE + INT_STAT0) & INT_S_FD2, ==, INT_S_FD2);
+
+    qtest_memread(global_qtest, OUT_PA, out, sizeof(out));
+    /* the frame must still develop - an unmodelled stage degrades the
+     * fidelity, it does not break the block */
+    g_assert_cmpint(out[(H / 2 * W + W / 2) * 4 + 1], !=, 0xa5);
+    g_test_message("neoisp: unmodelled stage enabled, frame still developed");
+
+    qtest_end();
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/imx95/neoisp/develop", test_neoisp_develop);
     qtest_add_func("/imx95/neoisp/tuning", test_neoisp_tuning);
+    qtest_add_func("/imx95/neoisp/unmodelled", test_neoisp_unmodelled_stage);
     return g_test_run();
 }

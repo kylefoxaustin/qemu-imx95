@@ -588,9 +588,17 @@ working host data path yet):
   the site whose colour it actually is. A qtest halves the red gain and
   requires red to fall while **green does not move**, which is what separates
   white balance from a brightness control. The rest of the pipeline (gamma,
-  colour-correction matrix, denoise, tone mapping) is still accepted and
-  ignored, so those knobs remain no-ops — stated because a control that
-  silently does nothing is worse than one that is absent.
+  colour-correction matrix, denoise, tone mapping, vignetting, edge
+  enhancement) is not modelled — and if a guest **enables** one of those stages
+  the model **says so**, naming the stage and adding that this is a limit of
+  the model and *not* of the hardware.
+
+  ⭐ **Partial honouring is worse than none, which is why that warning exists.**
+  An engineer who loads a full tuning blob sees white balance work — earning the
+  interface their trust — then changes gamma, sees no difference, and concludes
+  *gamma does not affect this hardware*. That is a specific false belief about
+  silicon, arrived at **because** part of the control was honest. A partial
+  implementation is only safe to use if it states which stages are live.
 
   🚨 **Five things this cost, every one presenting as silence or as something
   that looked fine** — worth having before extending it. The driver registers
