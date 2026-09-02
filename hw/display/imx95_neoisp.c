@@ -114,7 +114,8 @@ static inline uint16_t clamp16(int v, int max)
  * kernel beats an elaborate one that is differently wrong.
  */
 static void neoisp_develop(IMX95NeoIspState *s, const uint8_t *in, uint8_t *out,
-                           int w, int h, int in_ls, int out_ls, int fmt, int bpp)
+                           int w, int h, int in_ls, int out_ls, int fmt, int bpp,
+                           int obpp)
 {
     int rx, ry, x, y;
     int maxval = (1 << bpp) - 1;
@@ -157,11 +158,19 @@ static void neoisp_develop(IMX95NeoIspState *s, const uint8_t *in, uint8_t *out,
                     b = v; r = diag;
                 }
             }
-            /* OUTCH0 is packed 32bpp; the driver's default is BGRA-ish order */
-            dst[x * 4 + 0] = clamp16(b, maxval) >> shift;
-            dst[x * 4 + 1] = clamp16(g, maxval) >> shift;
-            dst[x * 4 + 2] = clamp16(r, maxval) >> shift;
-            dst[x * 4 + 3] = 0xff;
+            /*
+             * Output pixel width comes from the line stride the driver
+             * programmed, not from an assumption: this pipeline negotiates
+             * BGR3 (3 bytes) as readily as a 32-bit format, and writing the
+             * wrong width would shear the image while every byte count still
+             * looked plausible.
+             */
+            dst[x * obpp + 0] = clamp16(b, maxval) >> shift;
+            dst[x * obpp + 1] = clamp16(g, maxval) >> shift;
+            dst[x * obpp + 2] = clamp16(r, maxval) >> shift;
+            if (obpp == 4) {
+                dst[x * 4 + 3] = 0xff;
+            }
         }
     }
 #undef RAW
@@ -178,6 +187,7 @@ static void neoisp_run_frame(IMX95NeoIspState *s)
     uint32_t in_ls  = neo_reg(s, NEO_IMG0_IN_LS_CAM0) & ~0xfu;
     uint32_t out_ls = neo_reg(s, NEO_OUTCH0_LS_CAM0) & ~0xfu;
     int bpp = NEO_IMG_CONF_IBPP0(neo_reg(s, NEO_IMG_CONF_CAM0));
+    int obpp;
     int fmt = NEO_DEMOSAIC_FMT(neo_reg(s, NEO_DEMOSAIC_CTRL_CAM0));
     g_autofree uint8_t *in = NULL;
     g_autofree uint8_t *out = NULL;
@@ -197,6 +207,10 @@ static void neoisp_run_frame(IMX95NeoIspState *s)
     if (!out_ls) {
         out_ls = w * 4;
     }
+    obpp = out_ls / w;
+    if (obpp != 3 && obpp != 4) {
+        obpp = 4;                               /* unrecognised stride: assume 32bpp */
+    }
 
     in  = g_malloc0((size_t)in_ls * h);
     out = g_malloc0((size_t)out_ls * h);
@@ -207,7 +221,7 @@ static void neoisp_run_frame(IMX95NeoIspState *s)
         return;
     }
 
-    neoisp_develop(s, in, out, w, h, in_ls, out_ls, fmt, bpp);
+    neoisp_develop(s, in, out, w, h, in_ls, out_ls, fmt, bpp, obpp);
 
     if (dma_memory_write(&address_space_memory, out_pa, out, (size_t)out_ls * h,
                          MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
@@ -256,7 +270,18 @@ static void neoisp_regs_write(void *opaque, hwaddr off, uint64_t val,
     s->regs[off / 4] = val;
 
     if (off == NEO_TRIG_CAM0 && (val & NEO_TRIG_CAM0_TRIGGER)) {
+        warn_report("imx95.neoisp: TRIGGER size=0x%x in=0x%x out=0x%x "
+                    "in_ls=0x%x out_ls=0x%x conf=0x%x en=0x%x",
+                    neo_reg(s, NEO_IMG_SIZE_CAM0),
+                    neo_reg(s, NEO_IMG0_IN_ADDR_CAM0),
+                    neo_reg(s, NEO_OUTCH0_ADDR_CAM0),
+                    neo_reg(s, NEO_IMG0_IN_LS_CAM0),
+                    neo_reg(s, NEO_OUTCH0_LS_CAM0),
+                    neo_reg(s, NEO_IMG_CONF_CAM0),
+                    s->regs[neo_int_en_off(s) / 4]);
         neoisp_run_frame(s);
+        warn_report("imx95.neoisp: after run frames=%" PRIu64 " stat=0x%x",
+                    s->frames, s->regs[neo_int_stat_off(s) / 4]);
     }
 }
 

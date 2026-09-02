@@ -76,3 +76,33 @@ transport:
 picture rather than *the* picture. Correlating against the source image is what
 separates "the debayer ran" from "the debayer ran correctly", and a hash alone
 cannot tell those apart.
+
+## Driving it from userspace: the node-group trap
+
+The driver registers **eight node-groups of six nodes each** — `input0`,
+`input1`, `params`, `frame`, `ir`, `stats` — and **every group uses the same
+names**. A client that finds each node by name gets an arbitrary group per
+node: in the first attempt here `input0` came from one group, `params` from a
+second and `frame` from a third, so no group ever had a complete set, the job
+never became ready, and `DQBUF` blocked forever with no error printed anywhere.
+
+⭐ It is the week's failure shape again, in a new place. The selector was
+*correct* — those really are nodes with those names — and its **scope** was
+wrong. Same as the hash taken over the wrong extent, the bandwidth counter read
+on the wrong interconnect instance, and the golden that could not discriminate:
+the check is sound, the thing it is pointed at silently is not.
+
+Assemble a job from ONE group: find `neoisp-input0`, confirm its siblings sit at
+`+2` (`params`) and `+3` (`frame`), and use those. Two other things cost a run
+each:
+
+- **`params` is a metadata node** (`V4L2_BUF_TYPE_META_OUTPUT`, fourcc `NNIP`,
+  8912 bytes). Reading `fmt.pix_mp` on it returns garbage geometry
+  (`1346981454x8912`) and then fails confusingly; use `fmt.meta` and the
+  single-planar buffer path. And it must be fed — the driver will not schedule
+  a job while a linked node has no buffer, which is a hang, not an error.
+- **The output format is negotiated, not assumed.** This pipeline settles on
+  `BGR3` — 24 bpp — where the obvious guess is 32. The model therefore derives
+  output pixel width from the line stride the driver programs rather than
+  hard-coding it; the wrong width shears the image while every byte count still
+  looks plausible.
