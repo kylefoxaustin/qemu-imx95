@@ -67,7 +67,13 @@ def main():
         print("PREFLIGHT: something from a previous run is still on this wire. "
               "Its frames are indistinguishable from a peer's, so any result "
               "here - green OR red - would be about the wrong segment.")
-        print("PREFLIGHT: pkill -x qemu-system-aarch64, or pick another group.")
+        # Do NOT advise a blanket `pkill -x qemu-system-aarch64`: on a shared
+        # host that kills every other session's emulator too, and a name is not
+        # evidence of ownership. Point at the pid instead.
+        print("PREFLIGHT: find the owner with "
+              "`ss -unap | grep %d` and stop THAT pid, or pick another group. "
+              "Do not blanket-kill by process name - on a shared host that "
+              "takes out other sessions' emulators." % port)
         return 1
 
     print("PREFLIGHT: %s:%d silent for %.0fs - wire is empty" %

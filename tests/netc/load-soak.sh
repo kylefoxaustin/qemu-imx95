@@ -87,7 +87,17 @@ cp "$INITRD" "$RUN/initramfs.cpio.gz"
 # 1) Host iperf sink (the load target slirp maps to 10.0.2.2:5001 — the
 # default port the baked-in guest iperf client connects to).
 echo "starting host iperf -s (TCP 5001) ..."
-pkill -x iperf 2>/dev/null || true
+# ⚠️ NO BLANKET `pkill -x iperf`. A NAME PREDICATE KILLS SOMEBODY ELSE'S
+# PROCESS: this host is shared, and another session's iperf is indistinguishable
+# from a leftover of ours by name alone. Reap only what a previous run of THIS
+# script recorded, by pid, and only if that pid is still an iperf.
+if [ -f "$RUN/iperf-server.pid" ]; then
+    _old=$(cat "$RUN/iperf-server.pid" 2>/dev/null || true)
+    if [ -n "${_old:-}" ] && [ -d "/proc/$_old" ] &&
+       [ "$(basename "$(readlink -f /proc/$_old/exe 2>/dev/null || echo x)")" = iperf ]; then
+        kill "$_old" 2>/dev/null || true
+    fi
+fi
 nohup iperf -s >"$RUN/iperf-server.log" 2>&1 &
 echo $! >"$RUN/iperf-server.pid"
 sleep 1
@@ -108,6 +118,6 @@ echo
 echo "=== NETC load soak launched ==="
 echo "run dir:   $RUN"
 echo "throughput watch:  grep ZSNAP $RUN/serial.log | tail"
-echo "liveness:          pgrep -af '$(basename "$QEMU").*$(basename "$RUN")'"
+echo "liveness:          ls -l /proc/\$(cat $RUN/qemu.pid)/exe   # by pid, not by name"
 echo "errors (want 0):   grep -aoE '(rx|tx)(err|drop)=[0-9]+' $RUN/serial.log | sort -u"
-echo "stop:              kill \$(cat $RUN/timeout.pid); pkill -x iperf"
+echo "stop:              kill \$(cat $RUN/timeout.pid) \$(cat $RUN/iperf-server.pid)"
