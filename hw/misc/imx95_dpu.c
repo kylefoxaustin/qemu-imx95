@@ -64,6 +64,7 @@
 #include "system/address-spaces.h"
 #include "exec/cpu-common.h"
 #include "qemu/timer.h"
+#include "hw/misc/dma-account.h"
 
 #define TYPE_IMX95_DPU "imx95.dpu"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95DPUState, IMX95_DPU)
@@ -571,6 +572,7 @@ static int imx95_dpu_blit_plane(IMX95DPUState *s, DisplaySurface *surface,
         }
         cpu_physical_memory_read(base + (uint64_t)sy * stride, row,
                                  (size_t)pw * 4);
+        dma_account("dpu", "scanout", false, (size_t)pw * 4);
         d = (uint32_t *)(sd + (size_t)dy * sstride);
         for (uint32_t ox = 0; ox < ow; ox++) {
             int dx = px + (int)ox;
@@ -689,9 +691,11 @@ static int imx95_dpu_blit_yuv(IMX95DPUState *s, DisplaySurface *surface,
         }
         cpu_physical_memory_read(ybase + (uint64_t)sy * ystride, yrow,
                                  (size_t)pw * (yuv ? 1 : 4));
+        dma_account("dpu", "scanout", false, (size_t)pw * (yuv ? 1 : 4));
         if (yuv) {
             cpu_physical_memory_read(cbase + (uint64_t)(sy / 2) * cstride, crow,
                                      (size_t)(pw / 2) * 2);
+            dma_account("dpu", "scanout", false, (size_t)(pw / 2) * 2);
         }
         d = (uint32_t *)(sd + (size_t)dy * sstride);
         for (uint32_t ox = 0; ox < ow; ox++) {
@@ -898,6 +902,7 @@ static void imx95_blit_rotate(IMX95DPUState *s)
     for (uint32_t i = 0; i < ch; i++) {
         cpu_physical_memory_read(sbase + (uint64_t)i * sstride,
                                  band + (size_t)i * cw * 4, (size_t)cw * 4);
+        dma_account("dpu", "blit", false, (size_t)cw * 4);
     }
     /* output row j (0..cw-1) is the transpose of source column j */
     for (uint32_t j = 0; j < cw; j++) {
@@ -907,6 +912,7 @@ static void imx95_blit_rotate(IMX95DPUState *s)
         }
         cpu_physical_memory_write(dbase + (uint64_t)j * dstride, drow,
                                   (size_t)ch * 4);
+        dma_account("dpu", "blit", true, (size_t)ch * 4);
     }
     if (s->trace) {
         qemu_log("imx95-dpu: blit ROTATE band %ux%u src=0x%" PRIx64
@@ -925,6 +931,7 @@ static void imx95_blit_rgba_to_yuyv(uint64_t sbase,
     for (uint32_t y = 0; y < h; y++) {
         cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
                                  (size_t)w * 4);
+        dma_account("dpu", "blit", false, (size_t)w * 4);
         for (uint32_t x = 0; x + 1 < w; x += 2) {
             uint32_t p0 = ldl_le_p(srow + x * 4);
             uint32_t p1 = ldl_le_p(srow + (x + 1) * 4);
@@ -941,6 +948,7 @@ static void imx95_blit_rgba_to_yuyv(uint64_t sbase,
         }
         cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
                                   (size_t)w * 2);
+        dma_account("dpu", "blit", true, (size_t)w * 2);
     }
 }
 
@@ -955,6 +963,7 @@ static void imx95_blit_yuyv_to_rgba(uint64_t sbase,
     for (uint32_t y = 0; y < h; y++) {
         cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
                                  (size_t)w * 2);
+        dma_account("dpu", "blit", false, (size_t)w * 2);
         for (uint32_t x = 0; x + 1 < w; x += 2) {
             uint8_t y0 = srow[x * 2 + 0], u = srow[x * 2 + 1];
             uint8_t y1 = srow[x * 2 + 2], v = srow[x * 2 + 3];
@@ -967,6 +976,7 @@ static void imx95_blit_yuyv_to_rgba(uint64_t sbase,
         }
         cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
                                   (size_t)w * 4);
+        dma_account("dpu", "blit", true, (size_t)w * 4);
     }
 }
 
@@ -986,6 +996,7 @@ static void imx95_blit_rgba_to_nv12(uint64_t sbase,
     for (uint32_t y = 0; y < h; y++) {
         cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
                                  (size_t)w * 4);
+        dma_account("dpu", "blit", false, (size_t)w * 4);
         for (uint32_t x = 0; x < w; x++) {
             uint32_t p = ldl_le_p(srow + x * 4);
             uint8_t yy, uu, vv;
@@ -995,6 +1006,7 @@ static void imx95_blit_rgba_to_nv12(uint64_t sbase,
         }
         cpu_physical_memory_write(ybase + (uint64_t)y * ystride, yrow,
                                   (size_t)w);
+        dma_account("dpu", "blit", true, (size_t)w);
         if ((y & 1) == 0) {                 /* one chroma row per 2 luma rows */
             for (uint32_t x = 0; x + 1 < w; x += 2) {
                 uint32_t p0 = ldl_le_p(srow + x * 4);
@@ -1009,6 +1021,7 @@ static void imx95_blit_rgba_to_nv12(uint64_t sbase,
             }
             cpu_physical_memory_write(cbase + (uint64_t)(y / 2) * cstride,
                                       crow, (size_t)w);
+            dma_account("dpu", "blit", true, (size_t)w);
         }
     }
 }
@@ -1026,8 +1039,10 @@ static void imx95_blit_nv12_to_rgba(uint64_t ybase,
     for (uint32_t y = 0; y < h; y++) {
         cpu_physical_memory_read(ybase + (uint64_t)y * ystride, yrow,
                                  (size_t)w);
+        dma_account("dpu", "blit", false, (size_t)w);
         cpu_physical_memory_read(cbase + (uint64_t)(y / 2) * cstride, crow,
                                  (size_t)w);
+        dma_account("dpu", "blit", false, (size_t)w);
         for (uint32_t x = 0; x < w; x++) {
             uint32_t ci = (x / 2) * 2;
             uint8_t r, g, b;
@@ -1036,6 +1051,7 @@ static void imx95_blit_nv12_to_rgba(uint64_t ybase,
         }
         cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
                                   (size_t)w * 4);
+        dma_account("dpu", "blit", true, (size_t)w * 4);
     }
 }
 
@@ -1187,12 +1203,14 @@ static void imx95_blit_run(IMX95DPUState *s)
                 uint32_t sy = (uint32_t)((uint64_t)y * sh / h);
                 cpu_physical_memory_read(sbase + (uint64_t)sy * sstride, srow,
                                          (size_t)sw * 4);
+                dma_account("dpu", "blit", false, (size_t)sw * 4);
                 for (uint32_t x = 0; x < w; x++) {
                     uint32_t sx = (uint32_t)((uint64_t)x * sw / w);
                     memcpy(drow + x * 4, srow + sx * 4, 4);
                 }
                 cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
                                           (size_t)w * 4);
+                dma_account("dpu", "blit", true, (size_t)w * 4);
             }
             if (s->trace) {
                 qemu_log("imx95-dpu: blit SCALE %ux%u -> %ux%u src=0x%" PRIx64
@@ -1218,8 +1236,10 @@ static void imx95_blit_run(IMX95DPUState *s)
             for (uint32_t y = 0; y < h; y++) {
                 cpu_physical_memory_read(sbase + (uint64_t)y * sstride, srow,
                                          w * 4);
+                dma_account("dpu", "blit", false, w * 4);
                 cpu_physical_memory_read(dbase + (uint64_t)y * dstride, drow,
                                          w * 4);
+                dma_account("dpu", "blit", false, w * 4);
                 for (uint32_t x = 0; x < w; x++) {
                     uint8_t *sp = srow + x * 4, *dp = drow + x * 4;
                     uint8_t sa = sp[3], da = dp[3];
@@ -1235,6 +1255,7 @@ static void imx95_blit_run(IMX95DPUState *s)
                 }
                 cpu_physical_memory_write(dbase + (uint64_t)y * dstride, drow,
                                           w * 4);
+                dma_account("dpu", "blit", true, w * 4);
             }
             if (s->trace) {
                 qemu_log("imx95-dpu: blit BLEND %ux%u csf=%u cdf=%u asf=%u "
@@ -1247,8 +1268,10 @@ static void imx95_blit_run(IMX95DPUState *s)
         for (uint32_t y = 0; y < h; y++) {
             cpu_physical_memory_read(sbase + (uint64_t)y * sstride, row,
                                      w * dbytes);
+            dma_account("dpu", "blit", false, w * dbytes);
             cpu_physical_memory_write(dbase + (uint64_t)y * dstride, row,
                                       w * dbytes);
+            dma_account("dpu", "blit", true, w * dbytes);
         }
         if (s->trace) {
             qemu_log("imx95-dpu: blit COPY %ux%u %ubpp src=0x%" PRIx64
@@ -1265,6 +1288,7 @@ static void imx95_blit_run(IMX95DPUState *s)
         for (uint32_t y = 0; y < h; y++) {
             cpu_physical_memory_write(dbase + (uint64_t)y * dstride, row,
                                       w * dbytes);
+            dma_account("dpu", "blit", true, w * dbytes);
         }
         if (s->trace) {
             qemu_log("imx95-dpu: blit FILL %ux%u %ubpp color=0x%08x "

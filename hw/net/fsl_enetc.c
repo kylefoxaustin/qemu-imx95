@@ -23,6 +23,7 @@
 #include "migration/vmstate.h"
 #include "net/eth.h"
 #include "net/checksum.h"
+#include "hw/misc/dma-account.h"
 
 /* --- BAR0 sub-block bases --- */
 #define ENETC_SI_BASE       0x00000
@@ -313,6 +314,7 @@ static void enetc_tx_kick(FslEnetcState *s)
         uint32_t lstatus;
 
         pci_dma_read(pci, ring + (uint64_t)ci * ENETC_BD_SIZE, bd, sizeof(bd));
+        dma_account("enetc", "txbd", false, sizeof(bd));
         addr = ldq_le_p(bd);
         buf_len = lduw_le_p(bd + 8);
         lstatus = ldl_le_p(bd + 12);
@@ -324,6 +326,7 @@ static void enetc_tx_kick(FslEnetcState *s)
 
         if (frame_len + buf_len <= sizeof(frame)) {
             pci_dma_read(pci, addr, frame + frame_len, buf_len);
+            dma_account("enetc", "txdata", false, buf_len);
             frame_len += buf_len;
         }
 
@@ -518,6 +521,7 @@ static bool fsl_enetc_rx_has_room(FslEnetcState *s, uint32_t need)
 
         pci_dma_read(pci, ring + (uint64_t)idx * ENETC_BD_SIZE +
                      ENETC_RXBD_LSTATUS_OFF, lstatus, sizeof(lstatus));
+        dma_account("enetc", "rxbd", false, sizeof(lstatus));
         if (ldl_le_p(lstatus) & ENETC_RXBD_LSTATUS_R) {
             return false;       /* not yet consumed by the driver */
         }
@@ -632,9 +636,11 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
         bool final = (off + chunk >= size);
 
         pci_dma_read(pci, bd_addr, bd, sizeof(bd));
+        dma_account("enetc", "rxbd", false, sizeof(bd));
         buf_addr = ldq_le_p(bd);
         if (chunk) {
             pci_dma_write(pci, buf_addr, buf + off, chunk);
+            dma_account("enetc", "rxdata", true, chunk);
         }
 
         /*
@@ -654,6 +660,7 @@ static ssize_t fsl_enetc_receive(NetClientState *nc, const uint8_t *buf,
         stl_le_p(bd + ENETC_RXBD_LSTATUS_OFF,
                  ENETC_RXBD_LSTATUS_R | (final ? ENETC_RXBD_LSTATUS_F : 0));
         pci_dma_write(pci, bd_addr, bd, sizeof(bd));
+        dma_account("enetc", "rxbd", true, sizeof(bd));
 
         if (++s->rx_pi == len) {
             s->rx_pi = 0;

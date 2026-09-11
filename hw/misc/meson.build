@@ -82,6 +82,7 @@ system_ss.add(when: 'CONFIG_IMX95_GPC', if_true: files('imx95_gpc.c'))
 system_ss.add(when: 'CONFIG_IMX95_SRC', if_true: files('imx95_src.c'))
 system_ss.add(when: 'CONFIG_IMX95_AONMIX', if_true: files('imx95_aonmix.c'))
 system_ss.add(when: 'CONFIG_IMX95_ANATOP', if_true: files('imx95_anatop.c'))
+system_ss.add(files('dma-account.c'))
 system_ss.add(when: 'CONFIG_IMX95_DPU', if_true: files('imx95_dpu.c'))
 system_ss.add(when: 'CONFIG_IMX95_NEUTRON', if_true: files(
   'imx95_neutron.c',
