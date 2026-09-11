@@ -29,6 +29,8 @@ flatview_destroy_rcu(void *view, void *root) "%p (root %p)"
 global_dirty_changed(unsigned int bitmask) "bitmask 0x%"PRIx32
 
 # physmem.c
+address_space_read(void *as, uint64_t addr, uint64_t len, uint32_t attrs) "as:%p addr 0x%"PRIx64":%"PRIx64" attrs:0x%x"
+address_space_write(void *as, uint64_t addr, uint64_t len, uint32_t attrs) "as:%p addr 0x%"PRIx64":%"PRIx64" attrs:0x%x"
 address_space_map(void *as, uint64_t addr, uint64_t len, bool is_write, uint32_t attrs) "as:%p addr 0x%"PRIx64":%"PRIx64" write:%d attrs:0x%x"
 find_ram_offset(uint64_t size, uint64_t offset) "size: 0x%" PRIx64 " @ 0x%" PRIx64
 find_ram_offset_loop(uint64_t size, uint64_t candidate, uint64_t offset, uint64_t next, uint64_t mingap) "trying size: 0x%" PRIx64 " @ 0x%" PRIx64 ", offset: 0x%" PRIx64" next: 0x%" PRIx64 " mingap: 0x%" PRIx64

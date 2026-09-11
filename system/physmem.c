@@ -3423,6 +3423,7 @@ MemTxResult address_space_read_full(AddressSpace *as, hwaddr addr,
     FlatView *fv;
 
     if (len > 0) {
+        trace_address_space_read(as, addr, len, *(uint32_t *)&attrs);
         RCU_READ_LOCK_GUARD();
         fv = address_space_to_flatview(as);
         result = flatview_read(fv, addr, attrs, buf, len);
@@ -3439,6 +3440,7 @@ MemTxResult address_space_write(AddressSpace *as, hwaddr addr,
     FlatView *fv;
 
     if (len > 0) {
+        trace_address_space_write(as, addr, len, *(uint32_t *)&attrs);
         RCU_READ_LOCK_GUARD();
         fv = address_space_to_flatview(as);
         result = flatview_write(fv, addr, attrs, buf, len);
