@@ -114,6 +114,25 @@ of them are assumptions this README made without saying so.
   the model announces its fallbacks before deciding how much the hash gate is
   carrying.
 
+- **⚠️ Do not assume capture and scanout can run at the same time.** This is
+  the assumption this test never wrote down, and on the i.MX 91 it is false.
+  The 95 has independent paths — MIPI-CSI in and LVDS out, different pins, both
+  live at once — so "camera to display in one boot" is a single pipeline here.
+  The 91 has **one parallel MediaMix bus** on GPIO_IO00-21, muxed either
+  `MEDIAMIX_CAM_*` or `MEDIAMIX_DISP_*` and never both: enabling the display DPI
+  claims the pins the sensor's I2C needs, so the sensor never probes. A direct
+  port would produce a `/dev/video0` with no source and fail `STREAMON` with
+  `EPIPE`.
+
+  So check the *pipeline shape* before porting, not just the parameters: can
+  this part capture and scan out simultaneously at all? If not, the test becomes
+  capture → hand off → display, with an unbind between phases and the same
+  bytes carried across. The 91emulator session built that (`821bd6fbe2` on the
+  fork, PASS r=0.9970); the load-bearing detail — freeing the pins does **not**
+  retrigger a deferred probe, so the sensor's I2C must be force-reprobed — lives
+  there rather than being restated here, so it cannot drift out of sync with
+  their code.
+
 - Cross-check the FNV-1a constants **at runtime**, C against host Python, on the
   same bytes — not by eye. The 64-bit offset basis and prime appear at four
   sites across two languages, and two halves agreeing on the *same wrong*
