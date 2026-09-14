@@ -119,3 +119,32 @@ of them are assumptions this README made without saying so.
   sites across two languages, and two halves agreeing on the *same wrong*
   constant produces a confident PASS. The 93 port did this and both sides
   reported `a64eb7d880fe85c0`.
+
+## ⚠️ Hashes from tags v2.5.0 and v2.6.0 cannot be reproduced
+
+`imx95-v2.5.0` and `imx95-v2.6.0` shipped a **non-standard FNV-1a offset
+basis** — `1469598103934665603` instead of `14695981039346656037`
+(`0xcbf29ce484222325`). One digit short. Fixed on `main` and in
+`imx95-v2.6.1`; the affected tags are published and are not being rewritten.
+
+| tag | affected files |
+|---|---|
+| `imx95-v2.5.0` | `tests/camera-to-display/v4l2_to_fb.c` |
+| `imx95-v2.6.0` | + `tests/isp-develop/neoisp_m2m.c` |
+| `imx95-v2.6.1` and later | none |
+
+**Why it survived so long:** a dropped digit still hashes, still distinguishes
+inputs, and still varies frame to frame — so every *internal* check passed. Both
+halves of a self-contained test agree with each other while agreeing with
+nobody outside it. The defect is invisible to any test that only compares its
+own outputs, which is most of them.
+
+So: a hash recorded by those tags is internally consistent and externally
+meaningless. If you are verifying a receipt from that era, recompute from the
+frames with a stock FNV-1a rather than trusting the recorded value — and do
+the C-against-host-Python cross-check on the same bytes at runtime, which is
+the check that catches this class. Comparing constants by eye does not; two
+halves can agree on the same wrong value.
+
+Found by the 91emulator session while porting this test, by using the
+canonical constant and noticing ours disagreed.
