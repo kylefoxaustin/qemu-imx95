@@ -36,9 +36,26 @@ PF brought up via a fixed-link `10gbase-r` node (no real Aquantia PHY / EMDIO):
   modelled wire. Self-contained (assembles its initramfs from busybox).
 - `load-soak.sh` — the long throughput/stability soak launcher (see "Throughput
   / stability load soak" below). Requires host `iperf`.
-- `build-load-initramfs.sh` — (re)builds the iperf load initramfs the soak boots.
-- `netc-load-initramfs.cpio.gz` — the committed, prebuilt load initramfs so the
-  soak runs without network access.
+- `build-load-initramfs.sh` — builds the iperf load initramfs the soak boots.
+  `load-soak.sh` and `load-soak-2port.sh` invoke it automatically if the
+  initramfs is absent, so it is **not stored in the tree**.
+
+  The fixture is assembled from third-party binaries fetched at build time;
+  nothing from them is redistributed here. The pinned upstream packages, all
+  from `http://ports.ubuntu.com/ubuntu-ports/pool` and overridable by the
+  environment variables in the script:
+
+  | package | version | licence |
+  |---|---|---|
+  | `iperf` | `2.1.5+dfsg1-1` (arm64) | BSD-style |
+  | `libc6` (glibc) | `2.35-0ubuntu3.13` (arm64) | LGPL-2.1-or-later |
+  | `libstdc++6` | `12.3.0-1ubuntu1~22.04.3` (arm64) | GPL-3.0-or-later WITH GCC-exception-3.1 |
+  | `libgcc-s1` | `12.3.0-1ubuntu1~22.04.3` (arm64) | GPL-3.0-or-later WITH GCC-exception-3.1 |
+
+  `busybox` is reused from `tests/busybox-initramfs/`, which likewise builds its
+  own fixture rather than storing it. Note that Ubuntu moves superseded point
+  releases to `old-releases`, so these URLs will need bumping eventually; the
+  script's environment overrides allow a local mirror.
 
 > **Artifact-path convention:** these scripts use `KBUILD` (default
 > `~/Documents/linux-imx95-build`) for the kernel build and `SM_ELF` for the SM
@@ -174,5 +191,6 @@ time.
 - `build-load-initramfs.sh` regenerates `netc-load-initramfs.cpio.gz` from
   scratch: busybox (reused offline from `tests/busybox-initramfs`) plus a
   dynamically-linked aarch64 `iperf` and its glibc/libstdc++ runtime fetched
-  from Ubuntu 22.04 (jammy) arm64 `.deb`s. The prebuilt cpio is committed so
-  the soak runs without network; rebuild only to bump iperf/libc versions.
+  from Ubuntu 22.04 (jammy) arm64 `.deb`s. The cpio is **not** committed:
+  `load-soak.sh` and `load-soak-2port.sh` run `build-load-initramfs.sh` when it
+  is absent, so the first run needs network access.

@@ -1,0 +1,40 @@
+path,change,spdx,copyright,lines
+docs/system/arm/imx95-evk.rst,added,GPL-2.0-or-later,none,242
+hw/arm/fsl-imx95.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,1635
+hw/arm/imx95-evk.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,135
+hw/char/imx_lpuart.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,382
+hw/i2c/imx_lpi2c.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,296
+hw/misc/imx95_anatop.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,201
+hw/misc/imx95_aonmix.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,160
+hw/misc/imx95_dpu.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,117
+hw/misc/imx95_ele_server.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,284
+hw/misc/imx95_gpc.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,160
+hw/misc/imx95_pmic.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,357
+hw/misc/imx95_src.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,228
+hw/misc/imx95_wdog.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,198
+hw/misc/imx95_xcache.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,185
+hw/misc/imx_mu.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,454
+hw/timer/imx95_sysctr.c,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,241
+include/hw/arm/fsl-imx95.h,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,481
+include/hw/char/imx_lpuart.h,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,123
+include/hw/misc/imx95_ele_server.h,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,47
+include/hw/misc/imx_mu.h,added,GPL-2.0-or-later,Copyright (c) 2026 Kyle Fox,144
+tests/functional/aarch64/test_imx95_evk.py,added,GPL-2.0-or-later,none,157
+MAINTAINERS,modified,(pre-existing upstream file),,18+/0-
+docs/system/target-arm.rst,modified,(pre-existing upstream file),,1+/0-
+hw/arm/Kconfig,modified,(pre-existing upstream file),,27+/0-
+hw/arm/boot.c,modified,(pre-existing upstream file),,10+/2-
+hw/arm/meson.build,modified,(pre-existing upstream file),,2+/0-
+hw/char/Kconfig,modified,(pre-existing upstream file),,3+/0-
+hw/char/meson.build,modified,(pre-existing upstream file),,1+/0-
+hw/char/trace-events,modified,(pre-existing upstream file),,5+/0-
+hw/i2c/Kconfig,modified,(pre-existing upstream file),,4+/0-
+hw/i2c/meson.build,modified,(pre-existing upstream file),,1+/0-
+hw/i2c/trace-events,modified,(pre-existing upstream file),,6+/0-
+hw/misc/Kconfig,modified,(pre-existing upstream file),,32+/0-
+hw/misc/meson.build,modified,(pre-existing upstream file),,10+/0-
+hw/misc/trace-events,modified,(pre-existing upstream file),,45+/0-
+hw/timer/Kconfig,modified,(pre-existing upstream file),,3+/0-
+hw/timer/meson.build,modified,(pre-existing upstream file),,1+/0-
+hw/timer/trace-events,modified,(pre-existing upstream file),,4+/0-
+tests/functional/aarch64/meson.build,modified,(pre-existing upstream file),,2+/0-

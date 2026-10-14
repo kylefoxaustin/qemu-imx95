@@ -1,4 +1,5 @@
 // EXPECT: SORTED=1 2 3 4 5
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include <stdio.h>
 #include <stdlib.h>
 static int cmp(const void *a, const void *b){ return *(const int *)a - *(const int *)b; }

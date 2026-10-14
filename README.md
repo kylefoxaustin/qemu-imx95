@@ -15,7 +15,7 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 > NETC. The upstream QEMU README is preserved at [`README.rst`](README.rst) —
 > this file describes the i.MX 95-specific work.
 
-qemu-imx95 is the **first QEMU model of the i.MX 95**, and one node in a fleet of
+qemu-imx95 is the **first publicly available QEMU model of the i.MX 95** we are aware of, and one node in a fleet of
 NXP QEMU ports (i.MX 91 / 93 / 95 and the MCXN947 microcontroller) that share
 device models and a validation standard. The i.MX 95 sits at the **top of the
 A55 line**: **six Cortex-A55** application cores, a **Cortex-M33** running NXP's
@@ -31,7 +31,7 @@ traffic. It also runs the **full boot chain a real board does** — boot-ROM
 handover tables → SM → SPL → **U-Boot proper off eMMC** → a U-Boot prompt that
 **writes eMMC** and **network-boots a Linux kernel over Ethernet** (`tftp` + `booti`)
 all the way to a userspace shell. Beyond booting it brings up much of the EVK:
-**NETC networking** (ENETC, TCP/IP verified byte-exact board-to-board), **read/write
+**NETC networking** (ENETC, TCP/IP verified byte-exact between two emulated boards), **read/write
 SD/eMMC** (a real ext4 rootfs over uSDHC/ADMA), the **DPU display** — multi-plane
 compositing, both pixel pipelines, a **Weston/Wayland desktop** — the **2D blit
 engine** (real NXP G2D), **HW JPEG** encode/decode, **FlexCAN**, **USB** HID
@@ -58,15 +58,14 @@ upstream-mergeable into QEMU mainline.
 ![i.MX 95 booting Linux on the emulated DPU display — six A55 SMP Tux logos](docs/images/dpu-boot-logo.png)
 
 *Real NXP BSP Linux scanned out at 1920×1200 by the emulated DPU (FetchLayer →
-FrameGen), on the stock `imx95-19x19-evk` device tree. Six Tux logos = six
+FrameGen), on the NXP `imx95-19x19-evk` device tree. Six Tux logos = six
 Cortex-A55 cores.*
 
 ## Quickstart
 
 This fork **builds and runs as-is** — everything needed to *use* the i.MX 95
 machine is on the default `main` branch (a plain clone lands there).
-Nothing needs patching. (The `docs/reviews/` patch artifacts are for
-*contributing back* to upstream QEMU; you never apply them to use this fork.)
+Nothing needs patching.
 
 **1. Clone and build** — a standard QEMU build (verified on Ubuntu 22.04+; see
 [Building](#building) for host packages):
@@ -154,15 +153,17 @@ the per-step (Steps 2–6) detail, and
 [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) for the
 machine documentation.
 
-**FlexCAN, networking, the DPU display and its 2D blit engine are functional;
-USB and audio come up at the registration bar** — the five FlexCAN controllers
+**FlexCAN, networking, audio, the DPU display and its 2D blit engine are
+functional; USB comes up at the registration bar** — the five FlexCAN controllers
 (real Linux driver), all three ENETC Ethernet ports (incl. the 10G), the DPU
 display path (boot logo on screen) and the 2D blit engine (proven through the
 real NXP G2D stack) run end to end, while the usb2 ChipIdea host (`usb-kbd`
-input) and all three EVK ASoC sound cards bind and enumerate against stock Linux (see
+input) binds and enumerates against stock Linux. Audio playback (WM8962/SAI3)
+and PDM capture (MICFIL) run end to end; BT-SCO and SAI RX capture bind without
+a codec-driven ADC route (see
 "What runs today" for the per-device **functional** / **brings up** split).
-Functional A/V datapaths (audio playback/capture, VPU decode) and other
-customer-specific real-time peripherals (TSN, DSP) remain further out. See
+VPU decode and other customer-specific real-time peripherals (TSN, DSP) remain
+further out. See
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md) §5 for
 the full statement.
 
@@ -212,7 +213,8 @@ Run /init as init process
   virtio-9p, camera, both PCIe RCs, M33 SM + M7) for a full day: 0 anomalies,
   flat RSS, 1368 in-guest roll-call heartbeats clean.
 - **Two independent third-party robotics stacks ran to convergence** in the
-  Linux userspace — cross-built and run by external adopters, not the author:
+  Linux userspace — built and run from a separate working session, with the
+  recipes and logs in their own repositories (not reproducible from this tree):
   **ORB-SLAM3**
   ([`orbslam3-imx95`](https://github.com/kylefoxaustin/orbslam3-imx95) —
   OpenCV + g2o + DBoW2, 139 MB vocabulary) and **VINS-Fusion**
@@ -369,7 +371,7 @@ working host data path yet):
   GStreamer stack, composited and scanned out by the DPU.*
 - **USB keyboard — brings up.** The usb2 **ChipIdea** host is modelled,
   so `-device usb-kbd` enumerates as a USB HID keyboard and drives the display
-  window. Works on the **stock** EVK dtb: the host's VBUS regulator, gated by a
+  window. Works on the EVK dtb without edits: the host's VBUS regulator, gated by a
   PCAL6524 I²C expander on lpi2c7, is modelled so the host leaves deferred probe.
 - **USB3 SuperSpeed (DWC3) — brings up.** The `snps,dwc3` core
   (`usb@4c100000`, `fsl,imx95-dwc3`) is modelled with QEMU's `usb_dwc3` (which
@@ -708,8 +710,8 @@ rate under TCG, not a silicon estimate — and since host load during the run wa
 not recorded, the rate is a **floor, not a ceiling**: contention can only depress
 it. The error/drop/anomaly counts, being counts, are load-insensitive).
 **All three ENETC ports are wired** —
-the two 1G ports (ENETC0 + ENETC1), validated **back-to-back** with a dual-board
-EVK ⇄ FRDM traffic test (`eth0` ⇄ `eth1` in separate netns,
+the two 1G ports (ENETC0 + ENETC1), validated **port-to-port on one emulated board**
+(`eth0` ⇄ `eth1` in separate netns, runnable on either the EVK or FRDM dtb,
 `tests/netc/run-2port.sh`), plus the **10G port** (ENETC2, `ethernet@10,0`),
 brought up **two ways**: a fixed-link `10gbase-r` node (`tests/netc/run-10g.sh`),
 and — since **v2.4.0** — through the **real PHY chain** (NETC EMDIO → Aquantia
@@ -728,8 +730,8 @@ characterized with precise failure points — see
 
 The campaign found and fixed two real bugs in the artifact before any
 external user would have hit them: an LPUART FIFO read-only-bit storm
-(commit `741af2f5e3`) and an undocumented `file` host-package dependency in a
-test script (commit `7def38532a`).
+and an undocumented `file` host-package dependency in a
+test script.
 
 ## Interconnect — board-to-board (mission #5)
 
@@ -1060,7 +1062,7 @@ remains is forward-looking:
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path, gated at r = 0.995+ per channel. What remains is the rest of the pipeline — black level, white balance, gamma, colour correction — and, before any of those, making the `params` node actually take effect: it is currently accepted and ignored, so tuning changes nothing. Design note: `docs/design/neoisp-model.md` | tuning next |
+| **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path, gated at r = 0.995+ per channel. What remains is the rest of the pipeline — black level, white balance, gamma, colour correction — the remaining `params` stages, which are accepted and not yet applied (the first stage, `OB_WB0` black level / white balance, is live). Design note: `docs/design/neoisp-model.md` | tuning next |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
@@ -1097,7 +1099,7 @@ fidelity compromise in the modelled hardware.
 - **v1.0** — polish: boot time cut ~9× (icount off the default boot path), the
   system counter modelled as a real clockevent timer, the vestigial C-stub SCMI
   server removed (real SM is now the only provider), and documentation.
-- **v1.0.1** — LPUART RX read-only-bit storm fix (commit `741af2f5e3`).
+- **v1.0.1** — LPUART RX read-only-bit storm fix.
 - **v1.x** — Cortex-M7 integration, completing the i.MX 95 CPU complement
   (6× A55 + M33 SM + M7). Six steps: M7 instance + parallel boot + 36 h soak
   (Step 2); silicon-faithful SM-driven release via `SRC_GEN.SCR.M7MIX_RELEASE`
@@ -1125,7 +1127,7 @@ fidelity compromise in the modelled hardware.
   (`tests/qtest/fsl-enetc-test.c`), and a 24-hour iperf load-soak passed (zero
   errors, flat memory).
 - **v2.x (on `main`)** — the EVK's display / HMI / media peripherals on
-  top of v2.0.0: the **second + third ENETC ports** (1G back-to-back EVK ⇄ FRDM
+  top of v2.0.0: the **second + third ENETC ports** (1G port-to-port on one emulated board
   traffic, plus the 10G `eth2`); the **DPU display** path (FetchLayer
   scanout + a from-scratch `fsl,imx-irqsteer` driving the FrameGen vblank, so
   the boot logo renders — six Tux at 1920×1200 — and atomic commits complete on
@@ -1177,7 +1179,7 @@ fidelity compromise in the modelled hardware.
   that used to be quoted here (~29 CPU-bound → ~51 RAM-bound) are `[DERIVED]`
   extrapolations from that per-board figure; **no run at that scale has ever been
   performed**, and the host census was not recorded, so they are predictions and
-  not results. See `docs/reviews/v2.3.0.md` for the full provenance.
+  not results.
 - **v2.4.0 — Path B: the 10G port links through its real PHY chain (on
   `main`).** The stock `ethernet@10,0` (`10gbase-r`,
   `managed = "in-band-status"`) now comes up at 10 Gbps through a fully-modelled
@@ -1219,31 +1221,35 @@ fidelity compromise in the modelled hardware.
   from (**r = 0.995 / 0.998 / 1.000**, `tests/isp-develop/`), plus a qtest that
   drives the registers with no kernel involved. The debayer is bilinear and the
   block's real arithmetic is proprietary, so this is structurally correct rather
-  than bit-exact — and **tuning parameters are accepted but not yet applied**,
+  than bit-exact — and **tuning beyond the first stage is accepted but not yet
+  applied** (`OB_WB0` black level / white balance is live),
   which is stated in the model's own header because a knob that silently does
   nothing is worse than one that is absent.
 
-- **Silicon-validated fidelity + the full U-Boot boot chain (on `main`).**
-  Diffed the model against a **real i.MX 95 board** and corrected what silicon
-  disagreed with: the Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO
-  identity registers, and a Neutron mailbox RESET that was quietly reloading NPU
-  firmware before every inference (average inference 165 ms → 41 ms). Modelled
-  the **A55/SM boot order** (all A55 cores held in `CA55_CPUWAIT` until the SM
-  boots the AP), which un-broke the SPL banner, and added the **ROM
-  handover/passover tables** so **U-Boot proper loads off eMMC and reaches its
-  prompt**. Fixed **three ENETC RX-descriptor bugs that Linux had hidden** (R-bit
-  ownership, swapped F/R status bits, ignored `RBPIR` writes) and added the
-  **EMDIO clause-22 PHY** — so U-Boot **writes eMMC and network-boots a Linux
-  kernel over Ethernet to userspace** (`tests/uboot/run.sh`,
-  `tests/uboot/run-linux.sh`). Also added the **NETC 1588 PHC** (`ptp_netc`) and
-  proved TCP is byte-exact board-to-board (a missing ENETC TX-checksum-offload
-  fix — TCP had never actually worked, only ping had). Two further silicon-diffed
-  corrections followed: a **host-seeded BBNSM RTC** (the guest wall-clock was
-  stuck at 1970 — the SM RTC → SCMI BBM → Linux `hctosys` chain now yields real
-  host time, so guest `date` is correct), and a **two-phase Neutron mailbox**
-  (the driver's synchronous `RUN_ACK` (0xA3) is posted before the later `DONE`,
-  matching how silicon acknowledges a submitted job — the on-NPU compute stays
-  out of scope as before).
+- **Silicon-diffed fidelity + the full U-Boot boot chain (on `main`).**
+  Register-diffed the model against a **real board** — an **FRDM-IMX95-PRO**,
+  the same SoC as the modelled 19x19 EVK but a different board, which bounds
+  what the comparison can settle. Silicon disagreed with, and corrected: the
+  Mali GPU_ID, the NETC EMDIO PCI class/revision, RGPIO identity registers, a
+  Neutron mailbox RESET that was quietly reloading NPU firmware before every
+  inference (average inference 165 ms → 41 ms), and a **two-phase Neutron
+  mailbox** (the driver's synchronous `RUN_ACK` (0xA3) is posted before the
+  later `DONE`, matching how silicon acknowledges a submitted job — the on-NPU
+  compute stays out of scope as before). The board also confirmed ENETC rev 4,
+  the SCMI protocol counts and the LPUART/LPSPI/LPI2C identity registers.
+  Found by other means, not by the register diff: the **A55/SM boot order**
+  (all A55 cores held in `CA55_CPUWAIT` until the SM boots the AP), which
+  un-broke the SPL banner; the **ROM handover/passover tables**, so **U-Boot
+  proper loads off eMMC and reaches its prompt**; **three ENETC RX-descriptor
+  bugs that Linux had hidden** (R-bit ownership, swapped F/R status bits,
+  ignored `RBPIR` writes) and the **EMDIO clause-22 PHY** — so U-Boot **writes
+  eMMC and network-boots a Linux kernel over Ethernet to userspace**
+  (`tests/uboot/run.sh`, `tests/uboot/run-linux.sh`); the **NETC 1588 PHC**
+  (`ptp_netc`); a missing **ENETC TX-checksum offload**, without which TCP had
+  never worked and only ping had (surfaced by a failing interconnect gate
+  between two emulated boards, not by silicon); and a **host-seeded BBNSM RTC**
+  (the guest wall-clock was stuck at 1970 — the SM RTC → SCMI BBM → Linux
+  `hctosys` chain now yields real host time, so guest `date` is correct).
 
 ## License & credits
 
@@ -1251,9 +1257,47 @@ GPL-2.0-or-later, same as QEMU. Based on upstream QEMU; see
 [`README.rst`](README.rst) and `LICENSE` for QEMU's own authorship and
 licensing.
 
+## Licence, provenance & compliance
+
+GPL-2.0-or-later, the same as QEMU. The implementation was written by the maintainer working
+with an AI coding assistant (Anthropic's Claude); hardware behaviour was specified from the NXP
+i.MX 95 Reference Manual, and the result was reviewed, built, executed and validated on
+emulation and against an FRDM-IMX95-PRO board (same SoC; the machine modelled is the 19x19 EVK).
+
+Licence, derivation and validation checks were run on the **13-patch upstream-candidate subset**
+— branch `imx95-v2-compliance` at `3d82d068f32`, 21 added files and 18 modified — **not** on the
+whole `main` branch, which adds roughly 350 files. Results:
+
+- **21 of 21** added files carry `SPDX-License-Identifier: GPL-2.0-or-later`; every added
+  `.c`/`.h` file on `main` carries one too.
+- **19 of 21** carry a copyright notice. The two without are the `.rst` and the functional test,
+  matching upstream convention: 0 of 2 peer `test_*_evk.py` files carry one, and 36 of the 38
+  peer board documents carry no SPDX tag either.
+- **0** added files carry a third-party copyright notice.
+- **0** verbatim overlap at 8 significant lines against four corpora totalling 40,173 files —
+  this repository, and NXP's `linux-imx`, `uboot-imx` and `imx-qemu` driver trees. `linux-imx`
+  and `uboot-imx` are also zero at 5 lines; the 5-line hits elsewhere are QEMU framework
+  boilerplate, established by inspecting the matched blocks.
+- No external dependencies and no vendored third-party source. The fork adds no compiled
+  binaries; the images it tracks are screenshots and test fixtures under `docs/images/` and
+  `tests/`. Test fixtures needing third-party binaries are built on demand rather than stored.
+
+Method, the per-file manifest, the full results and **the limits of each check** are in the
+documents below. The derivation check is a local one: 8 significant lines is one threshold, not
+any particular tool's algorithm; it detects reformatted copies but not restructured or
+renamed-variable derivation; and four corpora are not a commercial database.
+
+### Where the documents are
+
+| document | contents |
+|---|---|
+| [`docs/oss-compliance-log.md`](docs/oss-compliance-log.md) | full procedure and log: what was run, how to read `reuse` output, every finding and non-finding with the peer counts behind it, the pitfalls that produced wrong answers during the pass, the known gaps in the wider fork, and a re-run checklist |
+| [`docs/oss-compliance-manifest.csv`](docs/oss-compliance-manifest.csv) | per-file manifest (path, added/modified, SPDX, copyright, lines) |
+| [`docs/oss-compliance-derivcheck.py`](docs/oss-compliance-derivcheck.py) | the derivation-check script, so the table above can be reproduced or re-run at a different threshold |
+
 ---
 
 **Created and maintained by Kyle Fox — [@kylefoxaustin](https://github.com/kylefoxaustin).**
-The first-ever QEMU port of the NXP i.MX 95 — the full CPU complement
+The first public QEMU port of the NXP i.MX 95 known to the maintainer — the full CPU complement
 (6× Cortex-A55 + the Cortex-M33 System Manager + the Cortex-M7), booting real
 Linux on the real NXP System Manager firmware.

@@ -1,3 +1,4 @@
 // EXPECT: IN-GUEST-LIBC SUM1..100=5050
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include <stdio.h>
 int main(void){ long s=0; for (int i=1;i<=100;i++) s+=i; printf("IN-GUEST-LIBC SUM1..100=%ld\n", s); return 0; }

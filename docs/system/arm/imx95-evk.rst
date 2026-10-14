@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: GPL-2.0-or-later
+
 NXP i.MX 95 19x19 Evaluation Kit (``imx95-19x19-evk``)
 ======================================================
 

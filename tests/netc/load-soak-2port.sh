@@ -26,6 +26,7 @@
 #   KBUILD - kernel build dir (Image + dtb + scripts/dtc/dtc)
 #   SM_ELF - System Manager m33_image.elf      (legacy SMELF also accepted)
 #   LOADCPIO - single-port load initramfs to borrow iperf+libs from
+#              (auto-built via build-load-initramfs.sh if absent)
 #              (default: ./netc-load-initramfs.cpio.gz; build-load-initramfs.sh)
 # Tunables: BOARD (evk|frdm), TIMEOUT_S, SNAP_SEC, SNAP_MAX, IPERF_T.
 set -u
@@ -55,7 +56,13 @@ DTC=$KBUILD/scripts/dtc/dtc
 
 need() { [ -e "$2" ] || { echo "missing $1: $2"; exit 1; }; }
 need QEMU "$QEMU"; need IMAGE "$IMAGE"; need DTC "$DTC"
-need SM_ELF "$SM_ELF"; need LOADCPIO "$LOADCPIO"; need DTB "$DTB"
+need SM_ELF "$SM_ELF"; need DTB "$DTB"
+
+if [ ! -e "$LOADCPIO" ]; then
+    echo "load initramfs missing; building it..."
+    "$HERE/build-load-initramfs.sh" || { echo "initramfs build failed" >&2; exit 1; }
+fi
+need LOADCPIO "$LOADCPIO"
 
 OUTDIR=$ROOT/build/netc-2port-soak-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$OUTDIR"

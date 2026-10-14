@@ -26,6 +26,10 @@
  * programs registers that do nothing and no event ever fires. In particular
  * TMR_STAT.ETSx_VLD is left clear: netc_timer_handle_etts_event() spins while
  * that bit is set, so faking it would hang the guest.
+ *
+ * Copyright (c) 2026 Kyle Fox
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
