@@ -33,6 +33,8 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | SPDIF / XCVR (playback) | A | PASS (boot) | audio transceiver playback datapath |
 | MIPI CSI-2 -> ISI (capture) | A | HARNESS | 5 byte-checked UYVY frames off /dev/video0 |
 | Virtual camera (host-frame source) | A | HARNESS | ISI scans real host frames into V4L2 buffers |
+| NeoISP (camera ISP) debayer | A | HARNESS | ⚑ bilinear debayer + OB_WB0 black level/white balance are applied; gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; raw Bayer in, developed image out via the stock V4L2 mem2mem path; per-channel r = 0.995/0.998/1.000 |
+| Camera -> LCD (capture to panel) | A | HARNESS | smart-camera frame in over CSI-2, out on the LVDS panel; capture hash == host hash, panel screendump r=1.0000 |
 | PCIe RC pcie0 + pcie1 (DWC) | A | HARNESS | link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA |
 | HW JPEG codecs (enc + dec) | A | PASS (qtest) | mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error |
 | LPI2C x8 + slaves | A | PASS (boot) | codec/PMIC/expander answer; master IRQ path |
@@ -47,7 +49,6 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | ChipIdea USB2 host (usb-kbd) | B | HARNESS | usb-kbd enumerates as HID; VBUS expander on lpi2c7 |
 | USB3 SuperSpeed (DWC3) | B | PASS (boot) | snps,dwc3 core binds |
 | MIPI-DSI display output | B | PASS (boot) | dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up |
-| NeoISP (camera ISP) | B | PASS (boot) | ISP driver binds |
 | DDR PMU | B | PASS (boot) | perf PMU driver binds |
 | OCOTP eFuse + EdgeLock ELE | B | PASS (boot) | ELE responder (GET_INFO/RANDOM real entropy); fuse shadow seeded |
 | Clocks/power/reset (CCM/ANATOP/SRC via SM) | B | PASS (boot) | programmed by the SM; Linux reads real rates over SCMI |
@@ -66,5 +67,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 43 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 44 present (26 PASS / 0 FAIL observed this run), 5 N/A-absent.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# i.MX 95 NeoISP bring-up - the camera image signal processor registers.
+# i.MX 95 NeoISP develop - a raw Bayer frame in, a developed colour image out.
 #
 # The NeoISP (isp@4ae00000, "nxp,imx95-b0-neoisp") is the i.MX95's camera ISP: a
 # register-driven V4L2 mem2mem device (debayer / tone / colour pipeline) with two
@@ -16,11 +16,17 @@
 # eight node-groups of V4L2 nodes (neoisp-input0/input1/params/frame/ir/stats per
 # group) + the per-group media devices. No external abort.
 #
-# This is the "brings up" milestone (the ISP registers + all its /dev/video nodes
-# appear); the proprietary per-pixel ISP pipeline compute is not modelled, the
-# same fidelity ceiling as the JPEG/Neutron blocks. The two MMIO windows are
-# already backed by the machine, so this needs no model change - only the dtb
-# enable + the module.
+# This goes past the registration bar: the frame is DEVELOPED. hw/display/
+# imx95_neoisp.c performs a Bayer-phase-aware bilinear demosaic and applies
+# OB_WB0 black level / white balance, so the model - not just the dtb enable -
+# is what makes this pass. checkdev.py then correlates the developed output
+# against the RGB the Bayer was sampled from, PER CHANNEL, gating on the
+# weakest (default 0.95; a real run measures 0.995 / 0.998 / 1.000).
+#
+# NOT the whole ISP: gamma, colour matrix, denoise and tone mapping are
+# accepted and announced by the model, never silently applied. The exact
+# demosaic kernel is NXP-proprietary, so this is a faithful bilinear develop,
+# not a reproduction of silicon.
 #
 # Required (override via env): QEMU, KBUILD (Image + base dtb + dtc + neoisp.ko),
 # SM_ELF. SKIPs if any is missing.

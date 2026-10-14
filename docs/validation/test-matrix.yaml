@@ -47,6 +47,9 @@ present:
   # --- Camera (Tier A) ---
   - { block: "MIPI CSI-2 -> ISI (capture)",        tier: A, test: "harness:camera",     evidence: "5 byte-checked UYVY frames off /dev/video0" }
   - { block: "Virtual camera (host-frame source)", tier: A, test: "harness:camera",           evidence: "ISI scans real host frames into V4L2 buffers" }
+  - { block: "NeoISP (camera ISP) debayer",        tier: A, test: "harness:isp-develop",      evidence: "raw Bayer in, developed image out via the stock V4L2 mem2mem path; per-channel r = 0.995/0.998/1.000",
+      caveat: "bilinear debayer + OB_WB0 black level/white balance are applied; gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied" }
+  - { block: "Camera -> LCD (capture to panel)",   tier: A, test: "harness:camera-to-display", evidence: "smart-camera frame in over CSI-2, out on the LVDS panel; capture hash == host hash, panel screendump r=1.0000" }
   # --- PCIe (Tier A) ---
   - { block: "PCIe RC pcie0 + pcie1 (DWC)",        tier: A, test: "harness:pcie",             evidence: "link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA" }
   # --- Accelerator w/ real compute (Tier A) ---
@@ -68,7 +71,6 @@ present:
   - { block: "ChipIdea USB2 host (usb-kbd)",       tier: B, test: "harness:usb",              evidence: "usb-kbd enumerates as HID; VBUS expander on lpi2c7" }
   - { block: "USB3 SuperSpeed (DWC3)",             tier: B, test: boot,                       evidence: "snps,dwc3 core binds" }
   - { block: "MIPI-DSI display output",            tier: B, test: boot,                       evidence: "dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up" }
-  - { block: "NeoISP (camera ISP)",                tier: B, test: boot,                       evidence: "ISP driver binds" }
   - { block: "DDR PMU",                            tier: B, test: boot,                       evidence: "perf PMU driver binds" }
   - { block: "OCOTP eFuse + EdgeLock ELE",         tier: B, test: boot,                       evidence: "ELE responder (GET_INFO/RANDOM real entropy); fuse shadow seeded" }
   - { block: "Clocks/power/reset (CCM/ANATOP/SRC via SM)", tier: B, test: boot,               evidence: "programmed by the SM; Linux reads real rates over SCMI" }
@@ -114,6 +116,12 @@ readme_groups:
   - { label: "Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera", tier: A,
       evidence: "5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers",
       blocks: ["MIPI CSI-2 -> ISI (capture)", "Virtual camera (host-frame source)"] }
+  - { label: "Camera ISP (NeoISP) — raw Bayer developed to colour", tier: A,
+      evidence: "stock V4L2 mem2mem: Bayer in, developed image out, per-channel r = 0.995/0.998/1.000",
+      blocks: ["NeoISP (camera ISP) debayer"] }
+  - { label: "Camera -> LCD — the vision transport path end to end", tier: A,
+      evidence: "a smart-camera frame in over CSI-2, out on the LVDS panel: capture hash == host hash, panel correlation r=1.0000",
+      blocks: ["Camera -> LCD (capture to panel)"] }
   - { label: "PCIe Root Complex — pcie0 + pcie1 (DesignWare)", tier: A,
       evidence: "link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains)",
       blocks: ["PCIe RC pcie0 + pcie1 (DWC)"] }
@@ -141,9 +149,9 @@ readme_groups:
   - { label: "USB — ChipIdea USB2 host (usb-kbd HID) + USB3 SuperSpeed (DWC3)", tier: B,
       evidence: "usb-kbd enumerates as HID (VBUS expander on lpi2c7); the snps,dwc3 core binds",
       blocks: ["ChipIdea USB2 host (usb-kbd)", "USB3 SuperSpeed (DWC3)"] }
-  - { label: "MIPI-DSI display output + NeoISP", tier: B,
-      evidence: "dw-mipi-dsi -> rm67191 panel (card0-DSI-1) and the NeoISP driver bind at the registration bar",
-      blocks: ["MIPI-DSI display output", "NeoISP (camera ISP)"] }
+  - { label: "MIPI-DSI display output", tier: B,
+      evidence: "dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up at the registration bar",
+      blocks: ["MIPI-DSI display output"] }
   - { label: "DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM)", tier: B,
       evidence: "PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI",
       blocks: ["DDR PMU", "OCOTP eFuse + EdgeLock ELE", "Clocks/power/reset (CCM/ANATOP/SRC via SM)"] }

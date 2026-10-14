@@ -273,7 +273,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | GPIO (RGPIO x5) + TPM PWM + ADC | A | GPIO line get/set (card-detect on GPIO3); TPM PWM duty/period; ADC operator-settable per-channel props (injection verified) |
 | Watchdog (WDOG3) + virtio-mmio/9p host share | A | wdog binds; 4 virtio-mmio transports + 9p host share mount e2e |
 | USB — ChipIdea USB2 host (usb-kbd HID) + USB3 SuperSpeed (DWC3) | B | usb-kbd enumerates as HID (VBUS expander on lpi2c7); the snps,dwc3 core binds |
-| MIPI-DSI display output + NeoISP | B | dw-mipi-dsi -> rm67191 panel (card0-DSI-1) and the NeoISP driver bind at the registration bar |
+| MIPI-DSI display output | B | dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up at the registration bar |
 | DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM) | B | PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI |
 | Audio capture bring-up — BT-SCO + SAI RX | B | cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7) |
 | Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary | C | kbase identifies the Mali-G310 (arch 10.12.7) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result |
@@ -1062,7 +1062,7 @@ remains is forward-looking:
 | Feature | What | Target |
 |---|---|---|
 | **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
-| **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path, gated at r = 0.995+ per channel. What remains is the rest of the pipeline — black level, white balance, gamma, colour correction — the remaining `params` stages, which are accepted and not yet applied (the first stage, `OB_WB0` black level / white balance, is live). Design note: `docs/design/neoisp-model.md` | tuning next |
+| **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path; the harness gates per-channel correlation at r ≥ 0.95 and measures 0.995 / 0.998 / 1.000. Black level and white balance (`OB_WB0`) are live. What remains is the rest of the `params` pipeline — gamma, colour matrix, denoise, tone mapping — which the model accepts and announces rather than silently applying. Design note: `docs/design/neoisp-model.md` | tuning next |
 | **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
