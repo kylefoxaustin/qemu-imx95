@@ -262,7 +262,8 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop) | A | FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output |
 | Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
 | Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera | A | 5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers |
-| Camera ISP (NeoISP) — raw Bayer developed to colour | A | stock V4L2 mem2mem: Bayer in, developed image out, per-channel r = 0.995/0.998/1.000 |
+| Camera ISP (NeoISP) — raw Bayer developed to colour | A | stock V4L2 mem2mem: Bayer in, developed image out, per-channel r = 0.995/0.998/1.000; and in batch, many distinct frames in one boot with a receipt of distinct input AND output hashes over a read-only input share |
+| Camera -> ISP chain — the vision pipeline end to end | A | raw Bayer over CSI-2 -> ISI DMA to DRAM -> the NeoISP develops THAT buffer, shared as a dmabuf rather than copied: weakest-channel r = 0.9970/0.9969 and each developed frame matched to its own source by captured-mosaic hash |
 | Camera -> LCD — the vision transport path end to end | A | a smart-camera frame in over CSI-2, out on the LVDS panel: capture hash == host hash, panel correlation r=1.0000 |
 | PCIe Root Complex — pcie0 + pcie1 (DesignWare) | A | link up + enumeration; arbitrary endpoint bind, MSI-X via ITS, DMA (two RC domains) |
 | HW JPEG codecs (encode + decode) | A | mxc-jpeg /dev/video2,3; libjpeg encode/decode (or an honest config error, never garbage) |

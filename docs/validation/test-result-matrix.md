@@ -35,6 +35,8 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | Virtual camera (host-frame source) | A | HARNESS | ISI scans real host frames into V4L2 buffers |
 | NeoISP (camera ISP) debayer | A | HARNESS | ⚑ bilinear debayer + OB_WB0 black level/white balance are applied; gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; raw Bayer in, developed image out via the stock V4L2 mem2mem path; per-channel r = 0.995/0.998/1.000 |
 | Camera -> LCD (capture to panel) | A | HARNESS | smart-camera frame in over CSI-2, out on the LVDS panel; capture hash == host hash, panel screendump r=1.0000 |
+| Camera -> ISP chain (CSI-2 -> ISI -> DRAM -> NeoISP) | A | HARNESS | ⚑ there is no ISI->ISP wire in the models and none on silicon - the ISI writes DRAM and the NeoISP, a V4L2 mem2mem device, reads DRAM; the join is memory. The NeoISP stage caveat applies: gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; the functional vision path in one boot: raw Bayer over CSI-2, ISI DMA into a V4L2 capture buffer in DRAM, that buffer exported with VIDIOC_EXPBUF and queued as neoisp-input0 (no memcpy - the ISP reads the ISI's own buffer), developed out; 1280x720 RGGB, weakest-channel r = 0.9970/0.9969, and each developed frame matched to its own source by captured-mosaic hash (2 distinct sources) |
+| NeoISP batch develop (many distinct frames) | A | HARNESS | NFRAMES deliberately-distinct raw frames developed in one boot over a 9p share (default 6; measured in=6 ok=6 rejected=0); the receipt must show as many distinct INPUT hashes as frames staged AND as many distinct OUTPUT hashes, so a runner that develops one frame and re-serves it cannot pass; the input share is verified to have stayed read-only |
 | PCIe RC pcie0 + pcie1 (DWC) | A | HARNESS | link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA |
 | HW JPEG codecs (enc + dec) | A | PASS (qtest) | mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error |
 | LPI2C x8 + slaves | A | PASS (boot) | codec/PMIC/expander answer; master IRQ path |
@@ -67,5 +69,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 44 present (26 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 46 present (26 PASS / 0 FAIL observed this run), 5 N/A-absent.
 
