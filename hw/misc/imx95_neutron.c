@@ -40,6 +40,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/misc/imx95_neutron_compute.h"
 #include "migration/blocker.h"
+#include "migration/vmstate.h"
 #include "qom/object.h"
 #include "system/address-spaces.h"
 
@@ -132,6 +133,7 @@ typedef enum NeutronPhase {
     PHASE_RUNNING,
     PHASE_COMPLETE,
 } NeutronPhase;
+QEMU_BUILD_BUG_ON(sizeof(NeutronPhase) != sizeof(uint32_t));
 
 struct IMX95NeutronState {
     SysBusDevice parent_obj;
@@ -752,6 +754,67 @@ static void neutron_unrealize(DeviceState *dev)
     }
 }
 
+/*
+ * Migration. The device already refuses to be saved mid-inference (the
+ * blocker above), so the stream only ever has to describe a settled NPU:
+ * IDLE, or COMPLETE with a result the guest has not collected yet.
+ *
+ * Deliberately NOT migrated:
+ *  - done_timer / done_job / backend_ctx: in-flight-inference state, which
+ *    exists only in PHASE_RUNNING. The blocker makes that phase unsavable.
+ *  - DTCM and ITCM: memory_region_init_ram() registers them as migratable
+ *    RAM blocks, so the loaded firmware travels with the machine's RAM.
+ *  - the backend selection and runner knobs: QOM properties, re-applied
+ *    identically on the destination command line.
+ */
+static int neutron_pre_save(void *opaque)
+{
+    IMX95NeutronState *s = opaque;
+
+    /*
+     * Belt and braces for the blocker: if a future change ever drops it, fail
+     * the save loudly here rather than produce a stream that restores an
+     * inference nobody is going to finish.
+     */
+    if (s->phase == PHASE_RUNNING) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static int neutron_post_load(void *opaque, int version_id)
+{
+    IMX95NeutronState *s = opaque;
+
+    /* IRQ line level is not in the stream — re-assert it from the state. */
+    qemu_set_irq(s->irq, s->irq_pending);
+    return 0;
+}
+
+static const VMStateDescription vmstate_imx95_neutron = {
+    .name = TYPE_IMX95_NEUTRON,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = neutron_pre_save,
+    .post_load = neutron_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(resetctrl, IMX95NeutronState),
+        VMSTATE_UINT32_ARRAY(regs, IMX95NeutronState, NEUTRON_DEV_SIZE / 4),
+        VMSTATE_BOOL(started, IMX95NeutronState),
+        VMSTATE_BOOL(irq_pending, IMX95NeutronState),
+        /*
+         * phase is an enum; sizeof it is asserted to be a uint32_t below, so
+         * vmstate_info_uint32 describes it exactly.
+         */
+        VMSTATE_SINGLE(phase, IMX95NeutronState, 0, vmstate_info_uint32,
+                       NeutronPhase),
+        VMSTATE_UINT64(job_seq, IMX95NeutronState),
+        VMSTATE_UINT64(active_seq, IMX95NeutronState),
+        VMSTATE_UINT32(pending_cmd, IMX95NeutronState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static void neutron_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -759,6 +822,7 @@ static void neutron_class_init(ObjectClass *klass, const void *data)
     dc->realize = neutron_realize;
     dc->unrealize = neutron_unrealize;
     device_class_set_legacy_reset(dc, neutron_reset);
+    dc->vmsd = &vmstate_imx95_neutron;
     device_class_set_props(dc, neutron_props);
     {
         /*
