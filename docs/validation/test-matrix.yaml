@@ -81,6 +81,9 @@ present:
   - { block: "Clocks/power/reset (CCM/ANATOP/SRC via SM)", tier: B, test: boot,               evidence: "programmed by the SM; Linux reads real rates over SCMI" }
   - { block: "Audio capture bring-up (BT-SCO + SAI RX)", tier: B, test: boot,                 evidence: "cards register; no codec ADC-DAPM route (documented, known-limitations sec.7)" }
 
+  # --- Machine infrastructure (Tier A) ---
+  - { block: "VM save/restore (device migration state)", tier: A, test: "qtest:imx95-vmstate-test", evidence: "Machine saved to a file and restored into a second QEMU: the DPU's 4 MiB register file, both streams' interrupt blocks and a 2D blit command burst left mid-stream all read back identical, and the blit burst completes correctly on the restored machine; the Neutron NPU's settled state (RESETCTRL, mailbox window, FSM phase) likewise. Negative control: both halves fail with dc->vmsd removed", caveat: "covers the DPU and the Neutron NPU, the two devices that had no vmsd at all; the other 21 i.MX 95 devices each carry one but their field-level completeness is unaudited, and no Linux-booted TCG save/restore has been run" }
+
   # --- Registration only, compute proprietary (Tier C) ---
   - { block: "Mali-G310 GPU (Valhall CSF)",        tier: C, test: "qtest:imx95-mali-test",    evidence: "kbase identifies GPU arch 10.12.7, then fails CSF bring-up cleanly (-EIO)", caveat: "compute needs proprietary libmali" }
   - { block: "VPU (Wave6 / cnm633c)",              tier: C, test: boot,                       evidence: "wave6-vpu binds, /dev/video* present; no codec firmware -> no frames", caveat: "decode/encode is proprietary firmware" }
@@ -166,6 +169,9 @@ readme_groups:
   - { label: "Audio capture bring-up — BT-SCO + SAI RX", tier: B,
       evidence: "cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7)",
       blocks: ["Audio capture bring-up (BT-SCO + SAI RX)"] }
+  - { label: "VM save/restore — device migration state", tier: A,
+      evidence: "A machine is saved to a file and restored into a second QEMU: the DPU's register file, both display streams' interrupt blocks and a 2D blit command burst deliberately left mid-stream all come back identical, and the burst then completes correctly on the restored machine; the Neutron NPU's settled state does too. Proven by negative control - both halves fail with the vmsd removed. Scope: these are the two devices that had no migration state at all; the rest carry one but are unaudited",
+      blocks: ["VM save/restore (device migration state)"] }
   - { label: "Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary", tier: C,
       evidence: "kbase identifies the Mali-G310 (arch 10.12.7) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result",
       blocks: ["Mali-G310 GPU (Valhall CSF)", "VPU (Wave6 / cnm633c)", "Neutron NPU"] }

@@ -277,6 +277,7 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | MIPI-DSI display output | B | dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up at the registration bar |
 | DDR PMU + OCOTP/EdgeLock ELE + Clocks/power (CCM/ANATOP/SRC via SM) | B | PMU + fuse + ELE (real GET_RANDOM entropy) drivers bind; CCM/ANATOP/SRC are programmed by the SM, Linux reads real rates over SCMI |
 | Audio capture bring-up — BT-SCO + SAI RX | B | cards register; no codec-driven ADC-DAPM route yet (documented, known-limitations sec.7) |
+| VM save/restore — device migration state | A | A machine is saved to a file and restored into a second QEMU: the DPU's register file, both display streams' interrupt blocks and a 2D blit command burst deliberately left mid-stream all come back identical, and the burst then completes correctly on the restored machine; the Neutron NPU's settled state does too. Proven by negative control - both halves fail with the vmsd removed. Scope: these are the two devices that had no migration state at all; the rest carry one but are unaudited |
 | Mali-G310 GPU · VPU (Wave6) · Neutron NPU — Linux sees them, compute proprietary | C | kbase identifies the Mali-G310 (arch 10.12.7) then faults cleanly; wave6-vpu binds (/dev/video*); the Neutron driver comes up e2e with a default-on guest honest-fault. Compute for all three is NXP/Arm-proprietary firmware — out of scope; none fabricate a result |
 
 **Absent on i.MX 95 silicon — N/A (never a failure):**

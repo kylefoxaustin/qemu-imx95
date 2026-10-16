@@ -55,6 +55,7 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | OCOTP eFuse + EdgeLock ELE | B | PASS (boot) | ELE responder (GET_INFO/RANDOM real entropy); fuse shadow seeded |
 | Clocks/power/reset (CCM/ANATOP/SRC via SM) | B | PASS (boot) | programmed by the SM; Linux reads real rates over SCMI |
 | Audio capture bring-up (BT-SCO + SAI RX) | B | PASS (boot) | cards register; no codec ADC-DAPM route (documented, known-limitations sec.7) |
+| VM save/restore (device migration state) | A | PASS (qtest) | ⚑ covers the DPU and the Neutron NPU, the two devices that had no vmsd at all; the other 21 i.MX 95 devices each carry one but their field-level completeness is unaudited, and no Linux-booted TCG save/restore has been run; Machine saved to a file and restored into a second QEMU: the DPU's 4 MiB register file, both streams' interrupt blocks and a 2D blit command burst left mid-stream all read back identical, and the blit burst completes correctly on the restored machine; the Neutron NPU's settled state (RESETCTRL, mailbox window, FSM phase) likewise. Negative control: both halves fail with dc->vmsd removed |
 | Mali-G310 GPU (Valhall CSF) | C | PASS (qtest) | ⚑ compute needs proprietary libmali; kbase identifies GPU arch 10.12.7, then fails CSF bring-up cleanly (-EIO) |
 | VPU (Wave6 / cnm633c) | C | PASS (boot) | ⚑ decode/encode is proprietary firmware; wave6-vpu binds, /dev/video* present; no codec firmware -> no frames |
 | Neutron NPU | C | PASS (qtest) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; default-on guest honest-fault via MBOX1 error_code (qom-set 0 to opt out) |
@@ -69,5 +70,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 46 present (26 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 47 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
 
