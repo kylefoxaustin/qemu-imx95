@@ -64,6 +64,7 @@
 #include "system/address-spaces.h"
 #include "exec/cpu-common.h"
 #include "qemu/timer.h"
+#include "migration/vmstate.h"
 #include "hw/misc/dma-account.h"
 
 #define TYPE_IMX95_DPU "imx95.dpu"
@@ -1582,12 +1583,73 @@ static void imx95_dpu_realize(DeviceState *dev, Error **errp)
                                           &s->ctx[1]);
 }
 
+/*
+ * Migration. The 4 MiB register file is the device's own backing store for
+ * every block in the DPU (fetch units, layerblend, extdst, framegen, and the
+ * blit pipeline), so it migrates whole: a restored guest reads back exactly
+ * what it wrote, and the scanout geometry is re-derived from it on the first
+ * composite after load.
+ *
+ * Deliberately NOT migrated: con/con1/ctx (consoles are created fresh by
+ * realize on the destination), the qemu_irq lines (levels are re-asserted in
+ * post_load), and trace/pipe_trace (host-side env knobs, not guest state).
+ */
+static int imx95_dpu_post_load(void *opaque, int version_id)
+{
+    IMX95DPUState *s = opaque;
+
+    /*
+     * IRQ line levels are not part of the stream: re-derive both the display
+     * and the blit-completion outputs from the restored status/enable pairs.
+     */
+    imx95_dpu_update_irq(s);
+    imx95_blit_update_irq(s);
+
+    /*
+     * The destination's consoles have never been painted, so the incremental
+     * damage path has nothing to build on — force one full re-composite.
+     */
+    s->invalidate = true;
+    return 0;
+}
+
+static const VMStateDescription vmstate_imx95_dpu = {
+    .name = TYPE_IMX95_DPU,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = imx95_dpu_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BUFFER_POINTER_UNSAFE(regs, IMX95DPUState, 0,
+                                      IMX95_DPU_REG_SIZE),
+        /* stream-0 display interrupt block + the frame tick */
+        VMSTATE_UINT32(int_status, IMX95DPUState),
+        VMSTATE_UINT32(int_enable, IMX95DPUState),
+        /* stream-1 display interrupt block (disp_irq2), registers n=0 and n=1 */
+        VMSTATE_UINT32_ARRAY(int_status2, IMX95DPUState, 2),
+        VMSTATE_UINT32_ARRAY(int_enable2, IMX95DPUState, 2),
+        VMSTATE_UINT32(frame_index, IMX95DPUState),
+        VMSTATE_TIMER_PTR(vblank_timer, IMX95DPUState),
+        /*
+         * The HIF decoder can be mid-burst when the save happens: a command
+         * stream is written one word at a time, so hif_count/hif_off/
+         * hif_have_off are live state, not scratch.
+         */
+        VMSTATE_UINT32(hif_count, IMX95DPUState),
+        VMSTATE_UINT32(hif_off, IMX95DPUState),
+        VMSTATE_BOOL(hif_have_off, IMX95DPUState),
+        VMSTATE_UINT32(comctrl_status0, IMX95DPUState),
+        VMSTATE_UINT32(comctrl_status1, IMX95DPUState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static void imx95_dpu_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = imx95_dpu_realize;
     device_class_set_legacy_reset(dc, imx95_dpu_reset);
+    dc->vmsd = &vmstate_imx95_dpu;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     dc->desc = "NXP i.MX 95 DPU";
 }
