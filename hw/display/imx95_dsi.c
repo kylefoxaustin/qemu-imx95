@@ -13,11 +13,13 @@
  * the bridge enables and the panel's DSI init command stream completes without
  * the model transporting real pixels (the DPU model does the framebuffer
  * scanout):
- *   - DSI_VERSION (0x00): the core reads the IP version; report 0x31333100
- *     (HWVER_131) so it takes the v1.31 timing path.
- *   - DSI_CMD_PKT_STATUS (0x74): the command/payload FIFO status; report 0 so
- *     the "FIFO not full" / "command done" polls pass instantly (the panel
- *     driver's DCS init sequence completes).
+ *   - DSI_VERSION (0x00): the core reads the IP version; report 0x30313531
+ *     (HWVER_151), the revision this chip actually integrates.
+ *   - DSI_CMD_PKT_STATUS (0x74): the command/payload FIFO status; report
+ *     0x00050015 - the EMPTY bits SET and FULL/BUSY clear - so the "FIFO not
+ *     full" / "command done" polls pass instantly (the panel driver's DCS init
+ *     sequence completes).  Reporting 0 here reads as "FIFOs not empty" and
+ *     stalls that init stream.
  *   - DSI_PHY_STATUS (0xb0): report PHY_LOCK | PHY_STOP_STATE_CLK_LANE so the
  *     D-PHY lock / clock-lane stop-state polls pass.
  * Every other register reads back what was written.

@@ -19,7 +19,10 @@
 #define MALI_BASE     0x4d900000ULL
 #define MALI_GPU_ID   0x0
 
-/* Mali-G310 = TVAX: arch_major=10, arch_minor=12, arch_rev=0, product_major=4. */
+/*
+ * Mali-G310 = TVAX: arch_major=10, arch_minor=12, arch_rev=7, product_major=4,
+ * version_status=1 - as read back from real i.MX 95 silicon.
+ */
 #define GPU_ID_G310   0xAC740001u
 
 static void test_mali_gpu_id(void)
@@ -29,7 +32,7 @@ static void test_mali_gpu_id(void)
     /* kbase reads GPU_ID first; it must identify a known Valhall product. */
     g_assert_cmphex(qtest_readl(qts, MALI_BASE + MALI_GPU_ID), ==, GPU_ID_G310);
 
-    /* arch fields decode to 10.12.0 (the real TVAX revision). */
+    /* arch fields decode to 10.12.7 (the revision on real silicon). */
     uint32_t id = qtest_readl(qts, MALI_BASE + MALI_GPU_ID);
     g_assert_cmpuint((id >> 28) & 0xf, ==, 10);   /* arch_major */
     g_assert_cmpuint((id >> 24) & 0xf, ==, 12);   /* arch_minor */
