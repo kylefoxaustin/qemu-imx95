@@ -115,7 +115,16 @@ enum FslImx95Configuration {
     FSL_IMX95_EDMA1_CHANNELS = 31,  /* edma1@44000000 (fsl,imx93-edma3) */
     FSL_IMX95_EDMA2_CHANNELS = 64,  /* edma2@42000000 (fsl,imx95-edma5) */
     FSL_IMX95_EDMA2_CHAN_STRIDE = 0x8000,
-    FSL_IMX95_NUM_IRQS      = 320,  /* GIC SPI budget (max is 1020) */
+    /*
+     * GIC SPI budget.  Real i.MX 95 silicon implements 384 SPIs ("GICv3: 384
+     * SPIs implemented" on a FRDM-IMX95-PRO), and the stock DT wires SPIs up
+     * to 375 (MIPI-CSI 374/375, ISI 344-350, SMMU 325-334).  The budget is
+     * load-bearing, not cosmetic: the GIC's incoming GPIO array is laid out
+     * [0..N-1] SPIs then [N..N+31] PPIs per CPU, so a board that wires an SPI
+     * at or above N silently lands on a CPU's PPI line instead - and anything
+     * landing in the SGI range trips the assert in gicv3_set_irq().
+     */
+    FSL_IMX95_NUM_IRQS      = 384,  /* GIC SPI budget (max is 1020) */
 };
 
 /*
