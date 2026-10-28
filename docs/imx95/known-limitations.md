@@ -381,6 +381,47 @@ exercised", an honest "no data", or a clean workaround. The one borderline case
 (the ELE read-fuse stub, below) is flagged honestly rather than trusted. They are
 recorded here so the scope is explicit rather than surprising.
 
+- **The Arm SMMU-v3 is not modelled; all DMA is identity-mapped.** This is the
+  largest *silent-wrong* exposure in the model and is kept honest by
+  announcement rather than by modelling. `iommu@490d0000` is a declared stub
+  (`hw/misc/imx95_smmu_stub.c`) that reads as zero: enough for U-Boot SPL's
+  `disable_smmuv3()` to finish, and it makes Linux's `arm-smmu-v3` fail probe
+  deterministically (`no translation support!`, -ENXIO). Because `iommus` and
+  `iommu-map` are *optional* fw_devlink supplier bindings, the 11 stream IDs
+  across 9 masters (eDMA3, uSDHC1-3, USB2, USB3, Neutron, pcie0/1, NETC) are
+  not blocked: each waits out the 10 s deferred-probe timeout, warns `deferred
+  probe timeout, ignoring dependency`, and binds with direct DMA ops. Measured
+  on a plain boot: `fsl_enetc4 0002:00:10.0: deferred probe timeout, ignoring
+  dependency` at t=12.3 s. Real silicon runs the same masters *translated* and
+  in *strict* mode (13 iommu groups, `features 0x01f4deaf`, ias 40 / oas 36 on
+  a FRDM-IMX95-PRO), so IOVA never equals PA there. The false-pass classes are
+  therefore: a CPU physical address used where a `dma_addr_t` is required
+  (notably the Neutron `base_ddr` ioctl field, which the kernel writes to
+  hardware unvalidated), DMA after `dma_unmap`, under-sized mappings, a new
+  master or ENETC VF with no entry, and IOVA leaks. The machine warns once on
+  the guest's first `SMMU_IDR0` read, and `imx95-evk.c` warns again if a
+  supplied dtb has had the properties stripped (such a dtb must never be
+  booted on silicon, where unattached streams get ABORT stream-table entries).
+
+  **Why it is not simply modelled.** QEMU ships a full SMMUv3, and a re-run of
+  the 2026-06 integration spike with the GIC SPI budget corrected (320 → 384,
+  which was the real cause of that spike's abort — not MSI/ITS corruption as
+  first recorded) gets surprisingly far on the *stock* dtb with no patching and
+  no `iommu.passthrough`: the driver probes (`ias 44-bit, oas 44-bit, features
+  0x00008205`), 11 iommu groups form, platform masters included, zero faults,
+  boot to userspace, and devices bind at 0.8 s instead of 12.3 s. It is still
+  not shippable, for a sharper reason than before: QEMU's SMMUv3 translates
+  only its single `primary-bus`, so masters that keep their `iommus` property
+  land in a translating domain Linux programs but QEMU does not honour —
+  `tests/sd-emmc` FAILs and `tests/netc/run-2port` FAILs, while `tests/usb3`
+  and `tests/neutron` pass *only because those tests strip the property* and
+  the device bypasses the SMMU entirely. **A partially-plumbed SMMU is worse
+  than none**: identity mapping is at least self-consistent, whereas that
+  configuration makes Linux believe translation is happening while QEMU does
+  not do it. Every stream ID must be routed through an SMMU address space
+  before the SMMU is enabled; there is no incremental path. The experiment is
+  preserved on branch `smmu-spike-2` (marked DO NOT MERGE).
+
 - **ELE `READ_FUSE` (0x97) returns fuse value 0 with a SUCCESS status for the
   S400-served fuse banks that are not modelled** (`hw/misc/imx95_ele_server.c`).
   This is the one item in this list that leans *silent-wrong*: a consumer cannot
