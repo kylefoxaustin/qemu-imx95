@@ -42,8 +42,88 @@ struct Imx95EvkMachineState {
  * node has no interrupt-parent, so it inherits the root's GIC (#interrupt-cells
  * = 3): <GIC_SPI irq IRQ_TYPE_LEVEL_HIGH>.
  */
+/*
+ * Warn when the supplied dtb has had its IOMMU properties removed.
+ *
+ * The SMMU-v3 is not modelled, so a master whose node still carries
+ * `iommus`/`iommu-map` binds about ten seconds late, after the deferred-probe
+ * timeout gives up on the IOMMU supplier and falls back to direct DMA.  Our
+ * own tests skip that wait by stripping the property (tests/usb3,
+ * tests/neutron, tests/pcie1, tests/pcie-9p, tests/soak-everything), which is
+ * fine here and actively dangerous on silicon: the real SMMU fills the stream
+ * table with ABORT entries for streams nobody attached, so a stripped master's
+ * DMA is dropped outright.  Say so rather than let such a dtb travel quietly.
+ *
+ * Only audited when the dtb actually has an SMMU node - deleting or disabling
+ * that node is a legitimate configuration (NXP ship exactly that in
+ * imx95-19x19-evk-pcie1-ep.dtso) and implies no stripping.
+ */
+static void imx95_evk_audit_iommu_dtb(void *fdt)
+{
+    static const struct {
+        const char *node;   /* node name including unit address */
+        const char *prop;
+    } masters[] = {
+        { "dma-controller@42210000", "iommus" },     /* edma3        */
+        { "mmc@42850000",            "iommus" },     /* usdhc1       */
+        { "mmc@42860000",            "iommus" },     /* usdhc2       */
+        { "mmc@428b0000",            "iommus" },     /* usdhc3       */
+        { "imx95-neutron@4ab00004",  "iommus" },     /* Neutron NPU  */
+        { "usb@4c100000",            "iommus" },     /* USB3 dwc3    */
+        { "usb@4c200000",            "iommus" },     /* USB2 ChipIdea*/
+        { "pcie@4c300000",           "iommu-map" },  /* pcie0        */
+        { "pcie@4c380000",           "iommu-map" },  /* pcie1        */
+        { "pcie@4ca00000",           "iommu-map" },  /* NETC/ENETC   */
+    };
+    g_autofree char **smmu = NULL;
+    GString *missing = NULL;
+
+    smmu = qemu_fdt_node_path(fdt, NULL, (char *)"arm,smmu-v3", NULL);
+    if (!smmu || !smmu[0]) {
+        return;     /* no SMMU node: nothing was stripped from it */
+    }
+
+    for (int i = 0; i < ARRAY_SIZE(masters); i++) {
+        g_autofree char *base = g_strdup(masters[i].node);
+        g_autofree char **paths = NULL;
+        char *at = strchr(base, '@');
+
+        if (at) {
+            *at = '\0';
+        }
+        paths = qemu_fdt_node_unit_path(fdt, base, NULL);
+        for (int j = 0; paths && paths[j]; j++) {
+            const char *name = strrchr(paths[j], '/');
+
+            if (!name++ || strcmp(name, masters[i].node)) {
+                continue;
+            }
+            if (!qemu_fdt_getprop(fdt, paths[j], masters[i].prop,
+                                  NULL, NULL)) {
+                if (!missing) {
+                    missing = g_string_new(NULL);
+                } else {
+                    g_string_append(missing, ", ");
+                }
+                g_string_append(missing, masters[i].node);
+            }
+        }
+    }
+
+    if (missing) {
+        warn_report("this dtb has an SMMU node, but the IOMMU property is "
+                    "missing from: %s. It has been patched for the emulator, "
+                    "where the SMMU is not modelled. Do NOT boot this dtb on "
+                    "real i.MX 95 silicon - the SMMU will abort DMA from "
+                    "those masters.", missing->str);
+        g_string_free(missing, TRUE);
+    }
+}
+
 static void imx95_evk_modify_dtb(const struct arm_boot_info *info, void *fdt)
 {
+    imx95_evk_audit_iommu_dtb(fdt);
+
     for (int i = FSL_IMX95_NUM_VIRTIO_MMIO - 1; i >= 0; i--) {
         hwaddr base = FSL_IMX95_VIRTIO_MMIO_BASE +
                       (hwaddr)i * FSL_IMX95_VIRTIO_MMIO_SIZE;
