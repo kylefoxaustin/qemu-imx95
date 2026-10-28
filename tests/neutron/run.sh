@@ -80,7 +80,8 @@ assert n == 1, "neutron node not found"
 # Drop the SMMU/iommu dependency. QEMU does not model the arm-smmu-v3 at
 # 0x490d0000 (its ID registers read 0 -> the driver logs "no translation
 # support!" and fails to probe), so the neutron compute device - the only NPU
-# node with an iommus phandle (stream id 0x0d) - can never bind, with no
+# node with an iommus phandle (stream id 0x0d) - binds only after the 10 s
+# deferred-probe timeout, which outlasts this test's wait, with no
 # /dev/neutron0. The NPU DMAs directly under emulation (identity-mapped), so
 # strip the iommus property and the device probes.
 t, n = re.subn(r'\n\t+iommus = <0x[0-9a-f]+ 0x0?d>;', '', t, count=1)

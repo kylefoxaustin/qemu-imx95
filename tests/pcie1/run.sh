@@ -15,7 +15,8 @@
 #
 # The same two dtb adjustments pcie0 needs apply to pcie1's node (the 95 models
 # neither the SMMU nor the controller requester-ID->stream-ID LUT translation):
-#   - strip the iommu-map (no SMMU supplier, else the endpoint defers forever);
+#   - strip the iommu-map (no SMMU supplier, else the endpoint binds only after
+#     the 10 s deferred-probe timeout, outlasting this test's wait);
 #   - make the msi-map identity (QEMU's ITS keys on the raw requester-ID).
 #
 # Required (override via env): QEMU, KBUILD (Image + base dtb + dtc), SM_ELF.

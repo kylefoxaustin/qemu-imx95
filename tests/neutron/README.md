@@ -35,8 +35,12 @@ domain fine):
 
 - **IOMMU**: the compute node (`imx95-neutron@4ab00004`) has `iommus = <&smmu>`,
   but QEMU has no `arm-smmu-v3` model — the driver logs *"no translation
-  support!"* and a device needing the IOMMU can't bind. The patch drops the
-  `iommus` phandle so the NPU DMAs directly (identity-mapped under emulation).
+  support!"*. A device needing the IOMMU is not blocked outright - `iommus` is
+  an optional supplier binding, so it binds about 10 s later with *"deferred
+  probe timeout, ignoring dependency"* and falls back to direct DMA. The patch
+  drops the `iommus` phandle to skip that wait; either way the NPU DMAs
+  identity-mapped (device address == physical address), where real silicon
+  translates it in a strict IOMMU domain.
 - **TCM**: `rproc_elf_load_segments` copies the firmware into the NPU's DTCM
   (`0x4ab08000`, 32K) and ITCM (`0x4ab10000`, 64K); the model now backs both as
   RAM so the `memcpy_toio` does not external-abort.

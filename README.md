@@ -381,8 +381,9 @@ working host data path yet):
   **SuperSpeed host** (two root hubs), where the USB2 ChipIdea host above is
   EHCI. A low-priority reads-as-0 region under the 64 KiB DWC3 window keeps
   `dwc3_core_init`'s reads of the unmodelled glue registers from faulting
-  (`tests/usb3/`). The `iommus=<&smmu>` phandle must be stripped (no SMMU model)
-  for the core to probe, as with the Neutron NPU; device enumeration on the
+  (`tests/usb3/`). The `iommus=<&smmu>` phandle is stripped to skip the 10 s
+  deferred-probe wait the absent SMMU otherwise imposes (see **Known
+  limitations**), as with the Neutron NPU; device enumeration on the
   SuperSpeed host is a follow-on (USB device enumeration is via the ChipIdea
   host today).
 - **PCIe Root Complex (pcie0 + pcie1) — functional.** A from-scratch DesignWare
@@ -1024,6 +1025,35 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
 4. With `cpuidle.off=1`, Linux uses shallow WFI on the still-running per-CPU
    arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
    follow-up to qemu-devel.
+
+**The Arm SMMU-v3 is not modelled, so all DMA is identity-mapped.** The window
+at `iommu@490d0000` reads as zero. That is enough for U-Boot SPL's
+`disable_smmuv3()` to complete, and it makes Linux's `arm-smmu-v3` fail probe
+deterministically (`no translation support!`, -ENXIO). Because `iommus` and
+`iommu-map` are *optional* device-tree supplier bindings, the masters behind the
+SMMU are not blocked: each one waits out the 10 s deferred-probe timeout, warns
+`deferred probe timeout, ignoring dependency`, and binds with **direct DMA ops,
+where the device address equals the physical address**. The affected masters on
+a stock dtb are eDMA3, uSDHC1-3, USB2 (ChipIdea), USB3 (dwc3), the Neutron NPU,
+and every PCIe/NETC endpoint — 11 stream IDs across 9 masters. Our tests strip
+the property only to skip that wait; the machine warns on the first guest read
+of `SMMU_IDR0`, and warns again if a supplied dtb has had the properties
+stripped.
+
+Real i.MX 95 silicon runs those same masters in a **translated, strict-mode**
+IOMMU domain, so this is a gap in the direction that matters: DMA-addressing
+bugs that hardware catches pass silently here. Specifically, a CPU physical
+address used where a `dma_addr_t` is required (including the Neutron
+`base_ddr` ioctl field, which the kernel writes to hardware unvalidated), DMA
+after `dma_unmap`, an under-sized mapping, a new master or ENETC VF with no
+`iommus`/`iommu-map` entry, and IOVA leaks all work in this emulator and fault
+on the real part. Validate DMA-API correctness on hardware before release, and
+consider `CONFIG_DMA_API_DEBUG=y` for emulator runs. Equally, anything that
+*needs* a working IOMMU cannot be exercised here at all: VFIO/device
+passthrough, `/sys/kernel/iommu_groups`, DMA isolation between the A55s and the
+NPU/USB3/PCIe, SMMU fault reporting and the PMCG counters. A dtb with its IOMMU
+properties stripped must never be booted on silicon, where the SMMU aborts DMA
+from any stream nobody attached.
 
 **The GPU and the VPU (Wave6) are not functionally modelled** (no GPU rendering,
 no VPU video codec; the HW JPEG codecs, a separate block, are functional). Linux

@@ -8,8 +8,10 @@
 # bind and the xHCI registers as a USB 3.0 SuperSpeed host (two root hubs), with
 # no external abort - the reads-as-0 stub it replaces faulted dwc3_core_init.
 #
-# The stock EVK dtb tags usb3 with iommus=<&smmu 0xe>; with no SMMU model the
-# core would never probe (deferred), so the test strips that phandle (identity
+# The stock EVK dtb tags usb3 with iommus=<&smmu 0xe>. With no SMMU model the
+# core still binds, but only after the 10 s deferred-probe timeout gives up on
+# the IOMMU supplier ("deferred probe timeout, ignoring dependency"), so the
+# test strips that phandle to skip the wait (identity
 # DMA), the same approach the Neutron NPU test uses.
 #
 # NOTE: device enumeration on the SuperSpeed host is a follow-on - cold-plugged

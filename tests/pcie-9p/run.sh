@@ -16,7 +16,8 @@
 # Two dtb adjustments are needed - the same "QEMU doesn't model that block" kind
 # the USB3/Neutron tests make:
 #   - strip the pcie iommu-map: the 95 doesn't model the SMMU, so without this
-#     every endpoint defers forever waiting for the IOMMU supplier;
+#     every endpoint waits out the 10 s deferred-probe timeout before binding
+#     identity-mapped, which outlasts this test's wait;
 #   - make the pcie msi-map identity: QEMU's ITS keys on the raw PCI
 #     requester-ID, whereas the stock map translates it via the controller LUT
 #     (which QEMU does not apply), so the MSI device-ID would not match.
