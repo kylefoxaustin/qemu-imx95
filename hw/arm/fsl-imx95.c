@@ -292,7 +292,6 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
         /* GPIO1..5 are real RGPIO models (imx95.gpio) below. */
-        FSL_IMX95_SMMU,
         /*
          * All eight LPI2C controllers are real masters below (LPI2C1/2/3/4 =
          * Linux i2c-2/3/4/5, LPI2C5 = i2c-6, LPI2C6 = i2c-7, LPI2C7 = i2c-0
@@ -703,6 +702,27 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
             return false;
         }
         sysbus_mmio_map(SYS_BUS_DEVICE(gpu), 0, 0x4d900000);
+    }
+
+    /*
+     * Arm SMMU-v3 (iommu@490d0000): a declared stub that reads as zero, which
+     * is what both guests need - SPL's disable_smmuv3() poll loops complete,
+     * and Linux's arm-smmu-v3 fails probe deterministically ("no translation
+     * support!"). It is a device rather than a create_unimplemented_device()
+     * window purely so it can announce the consequence once, on the guest's
+     * first IDR0 read: with no IOMMU registered every master behind the SMMU
+     * runs identity-mapped, where real silicon translates. See
+     * imx95_smmu_stub.c for why that is a false-pass hazard worth a warning.
+     */
+    {
+        DeviceState *smmu = qdev_new("imx95.smmu-stub");
+
+        object_property_add_child(OBJECT(s), "smmu-stub", OBJECT(smmu));
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(smmu), errp)) {
+            return false;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(smmu), 0,
+                        fsl_imx95_memmap[FSL_IMX95_SMMU].addr);
     }
 
     return true;
@@ -2205,8 +2225,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * binds and a -device usb-... enumerates on the SuperSpeed host. The glue
      * (imx95-dwc3 @0x4c010010, inside the hsio blk-ctl) and the USB PHY are
      * logging stubs - the dwc3-imx driver only pokes a few mode/clock regs. The
-     * dtb's iommus=<&smmu 0xe> must be stripped (no SMMU model) for the core to
-     * probe, same as the Neutron NPU; tests/usb3/ does that.
+     * dtb's iommus=<&smmu 0xe> is stripped by tests/usb3/ (same as the Neutron
+     * NPU) only to skip the 10 s deferred-probe wait the absent SMMU imposes -
+     * the core binds either way, identity-mapped. See imx95_smmu_stub.c.
      */
     {
         SysBusDevice *sbd = SYS_BUS_DEVICE(&s->usb3);

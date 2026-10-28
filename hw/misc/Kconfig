@@ -158,6 +158,9 @@ config IMX95_NEUTRON_RUNNER_STUB
 config IMX95_MALI
     bool
 
+config IMX95_SMMU_STUB
+    bool
+
 config IMX95_ELE_SERVER
     bool
     select IMX_MU

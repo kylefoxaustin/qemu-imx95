@@ -95,6 +95,7 @@ system_ss.add(when: 'CONFIG_IMX95_NEUTRON_RUNNER',
 system_ss.add(when: 'CONFIG_IMX95_NEUTRON_RUNNER_STUB',
   if_true: files('imx95_neutron_backend_runner_stub.c'))
 system_ss.add(when: 'CONFIG_IMX95_MALI', if_true: files('imx95_mali.c'))
+system_ss.add(when: 'CONFIG_IMX95_SMMU_STUB', if_true: files('imx95_smmu_stub.c'))
 system_ss.add(when: 'CONFIG_IMX_TPM_PWM', if_true: files('imx_tpm_pwm.c'))
 system_ss.add(when: 'CONFIG_IMX93_ADC', if_true: files('imx93_adc.c'))
 system_ss.add(when: 'CONFIG_IMX95_JPEG',

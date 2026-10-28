@@ -640,6 +640,7 @@ config FSL_IMX95
     select IMX95_DPU
     select IMX95_NEUTRON
     select IMX95_MALI
+    select IMX95_SMMU_STUB
     select IMX95_ISI
     select IMX95_NEOISP
     select IMX95_DSI
