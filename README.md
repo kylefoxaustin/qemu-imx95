@@ -1038,7 +1038,10 @@ a stock dtb are eDMA3, uSDHC1-3, USB2 (ChipIdea), USB3 (dwc3), the Neutron NPU,
 and every PCIe/NETC endpoint — 11 stream IDs across 9 masters. Our tests strip
 the property only to skip that wait; the machine warns on the first guest read
 of `SMMU_IDR0`, and warns again if a supplied dtb has had the properties
-stripped.
+stripped. The first warning fires on every Linux boot; a harness that treats
+stderr as a failure can silence it with
+`-global driver=imx95.smmu-stub,property=quiet,value=true` (long form required)
+without changing anything the guest sees.
 
 Real i.MX 95 silicon runs those same masters in a **translated, strict-mode**
 IOMMU domain, so this is a gap in the direction that matters: DMA-addressing

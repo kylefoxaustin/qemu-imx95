@@ -35,6 +35,22 @@
  *
  * The warning fires on IDR0 only, not on any access: SPL touches just
  * GBPA/CR0/CR0_ACK and must stay quiet, or every U-Boot boot would cry wolf.
+ *
+ * It still fires on every Linux boot, because the stock dtb always carries the
+ * arm,smmu-v3 node even when a test has stripped the masters' `iommus`
+ * properties - so a harness that treats stderr output as a failure trips on it.
+ * For those, and only those, there is an opt-out:
+ *
+ *     -global driver=imx95.smmu-stub,property=quiet,value=true
+ *
+ * The long form is required: -global's shorthand splits on the first '.', so
+ * "-global imx95.smmu-stub.quiet=true" looks for a class named "imx95" and is
+ * rejected with "invalid class name".
+ *
+ * It suppresses the announcement and changes nothing else - the SMMU is just as
+ * unmodelled either way, and the guest still prints "no translation support!".
+ * Default is off, since a gap nobody is told about is how this one went
+ * unnoticed for months.
  */
 
 #include "qemu/osdep.h"
@@ -43,6 +59,7 @@
 #include "qemu/units.h"
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
+#include "hw/core/qdev-properties.h"
 #include "qom/object.h"
 
 #define TYPE_IMX95_SMMU_STUB "imx95.smmu-stub"
@@ -61,13 +78,14 @@ struct IMX95SMMUStubState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     bool announced;   /* host-side only; nothing guest-visible to migrate */
+    bool quiet;       /* opt out of the announcement (property) */
 };
 
 static uint64_t imx95_smmu_stub_read(void *opaque, hwaddr off, unsigned size)
 {
     IMX95SMMUStubState *s = opaque;
 
-    if (off == SMMU_IDR0 && !s->announced) {
+    if (off == SMMU_IDR0 && !s->announced && !s->quiet) {
         s->announced = true;
         warn_report("i.MX 95 SMMUv3 (iommu@490d0000) is not modelled: "
                     "the guest's arm-smmu-v3 probe will fail and every DMA "
@@ -123,12 +141,17 @@ static void imx95_smmu_stub_reset(DeviceState *dev)
     s->announced = false;
 }
 
+static const Property imx95_smmu_stub_properties[] = {
+    DEFINE_PROP_BOOL("quiet", IMX95SMMUStubState, quiet, false),
+};
+
 static void imx95_smmu_stub_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = imx95_smmu_stub_realize;
     device_class_set_legacy_reset(dc, imx95_smmu_stub_reset);
+    device_class_set_props(dc, imx95_smmu_stub_properties);
     dc->desc = "NXP i.MX 95 SMMU-v3 (declared stub, no translation)";
 }
 

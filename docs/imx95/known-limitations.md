@@ -403,6 +403,22 @@ recorded here so the scope is explicit rather than surprising.
   supplied dtb has had the properties stripped (such a dtb must never be
   booted on silicon, where unattached streams get ABORT stream-table entries).
 
+  The first of those two fires on *every* Linux boot, because the stock dtb
+  always carries the `arm,smmu-v3` node even when a test has stripped the
+  masters' `iommus` properties, so the driver always probes and always reads
+  IDR0. A harness that treats any stderr output as a failure can opt out:
+
+  ```
+  -global driver=imx95.smmu-stub,property=quiet,value=true
+  ```
+
+  The long form is required — `-global`'s shorthand splits on the first `.`, so
+  `-global imx95.smmu-stub.quiet=true` is rejected with "invalid class name".
+  It suppresses only the host-side announcement; the guest still prints
+  `arm-smmu-v3 490d0000.iommu: no translation support!` and DMA is identity
+  either way. The dtb audit warning is deliberately *not* gated, since it only
+  speaks when that particular dtb has actually been altered.
+
   **Why it is not simply modelled.** QEMU ships a full SMMUv3, and a re-run of
   the 2026-06 integration spike with the GIC SPI budget corrected (320 → 384,
   which was the real cause of that spike's abort — not MSI/ITS corruption as
