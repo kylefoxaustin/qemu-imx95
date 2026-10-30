@@ -39,6 +39,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
