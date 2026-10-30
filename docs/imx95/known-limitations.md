@@ -387,8 +387,8 @@ recorded here so the scope is explicit rather than surprising.
   (`hw/misc/imx95_smmu_stub.c`) that reads as zero: enough for U-Boot SPL's
   `disable_smmuv3()` to finish, and it makes Linux's `arm-smmu-v3` fail probe
   deterministically (`no translation support!`, -ENXIO). Because `iommus` and
-  `iommu-map` are *optional* fw_devlink supplier bindings, the 11 stream IDs
-  across 9 masters (eDMA3, uSDHC1-3, USB2, USB3, Neutron, pcie0/1, NETC) are
+  `iommu-map` are *optional* fw_devlink supplier bindings, the 31 stream IDs
+  across 10 masters (eDMA3, uSDHC1-3, USB2, USB3, Neutron, pcie0/1, NETC) are
   not blocked: each waits out the 10 s deferred-probe timeout, warns `deferred
   probe timeout, ignoring dependency`, and binds with direct DMA ops. Measured
   on a plain boot: `fsl_enetc4 0002:00:10.0: deferred probe timeout, ignoring
@@ -422,21 +422,23 @@ recorded here so the scope is explicit rather than surprising.
   **Why it is not simply modelled.** QEMU ships a full SMMUv3, and a re-run of
   the 2026-06 integration spike with the GIC SPI budget corrected (320 → 384,
   which was the real cause of that spike's abort — not MSI/ITS corruption as
-  first recorded) gets surprisingly far on the *stock* dtb with no patching and
-  no `iommu.passthrough`: the driver probes (`ias 44-bit, oas 44-bit, features
-  0x00008205`), 11 iommu groups form, platform masters included, zero faults,
-  boot to userspace, and devices bind at 0.8 s instead of 12.3 s. It is still
-  not shippable, for a sharper reason than before: QEMU's SMMUv3 translates
-  only its single `primary-bus`, so masters that keep their `iommus` property
-  land in a translating domain Linux programs but QEMU does not honour —
-  `tests/sd-emmc` FAILs and `tests/netc/run-2port` FAILs, while `tests/usb3`
-  and `tests/neutron` pass *only because those tests strip the property* and
-  the device bypasses the SMMU entirely. **A partially-plumbed SMMU is worse
-  than none**: identity mapping is at least self-consistent, whereas that
+  first recorded) gets surprisingly far on the *stock* dtb: the driver probes,
+  11 iommu groups form, zero faults, and devices bind at 0.8 s instead of
+  12.3 s. It is still not shippable, because QEMU's SMMUv3 translates only its
+  single `primary-bus`, so a master that *keeps* its `iommus` property lands in
+  a translating domain Linux programs and QEMU does not honour — `tests/sd-emmc`
+  and `tests/netc/run-2port` FAIL, while `tests/usb3` and `tests/neutron` pass
+  *only because those tests strip the property*. **A partially-plumbed SMMU is
+  worse than none**: identity mapping is at least self-consistent, whereas that
   configuration makes Linux believe translation is happening while QEMU does
-  not do it. Every stream ID must be routed through an SMMU address space
-  before the SMMU is enabled; there is no incremental path. The experiment is
-  preserved on branch `smmu-spike-2` (marked DO NOT MERGE).
+  not do it, and raises no fault when they disagree. The experiment is preserved
+  on an unpublished branch `smmu-spike-2` (marked DO NOT MERGE).
+
+  **The full decision record is `docs/imx95/smmu-not-modelled.md`** — the
+  hardware's stream-ID table, what both spikes measured, why a custom SMMU is
+  the wrong answer, and the four additive changes that would close the gap
+  (which also retire the earlier claim that there is "no incremental path";
+  that held for the generic device only).
 
 - **ELE `READ_FUSE` (0x97) returns fuse value 0 with a SUCCESS status for the
   S400-served fuse banks that are not modelled** (`hw/misc/imx95_ele_server.c`).

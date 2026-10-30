@@ -1005,6 +1005,7 @@ addresses and IRQ numbers.
 | `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
 | `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
 | `docs/imx95/known-limitations.md` | full limitation diagnoses |
+| `docs/imx95/smmu-not-modelled.md` | decision record: why the Arm SMMU-v3 is not modelled |
 
 ## Known limitations
 
@@ -1035,13 +1036,16 @@ SMMU are not blocked: each one waits out the 10 s deferred-probe timeout, warns
 `deferred probe timeout, ignoring dependency`, and binds with **direct DMA ops,
 where the device address equals the physical address**. The affected masters on
 a stock dtb are eDMA3, uSDHC1-3, USB2 (ChipIdea), USB3 (dwc3), the Neutron NPU,
-and every PCIe/NETC endpoint — 11 stream IDs across 9 masters. Our tests strip
+and every PCIe/NETC endpoint — 31 stream IDs across 10 masters. Our tests strip
 the property only to skip that wait; the machine warns on the first guest read
 of `SMMU_IDR0`, and warns again if a supplied dtb has had the properties
 stripped. The first warning fires on every Linux boot; a harness that treats
 stderr as a failure can silence it with
 `-global driver=imx95.smmu-stub,property=quiet,value=true` (long form required)
-without changing anything the guest sees.
+without changing anything the guest sees. The reasoning behind not modelling it
+— the stream-ID table, what two integration spikes measured, and the four
+additive changes that would close the gap — is in
+[`docs/imx95/smmu-not-modelled.md`](docs/imx95/smmu-not-modelled.md).
 
 Real i.MX 95 silicon runs those same masters in a **translated, strict-mode**
 IOMMU domain, so this is a gap in the direction that matters: DMA-addressing
