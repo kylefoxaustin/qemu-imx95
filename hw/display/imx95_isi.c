@@ -31,6 +31,7 @@
 #include "qemu/error-report.h"
 #include "migration/vmstate.h"
 #include <glob.h>
+#include "hw/misc/dma-account.h"
 
 /* Per-channel register offsets (within a channel's 0x10000 block). */
 #define CHNL_CTRL               0x0000
@@ -261,6 +262,7 @@ static void imx95_isi_frame_tick(void *opaque)
             }
             dma_memory_write(&address_space_memory, buf + (uint64_t)y * pitch,
                              line, (size_t)width * bpp, MEMTXATTRS_UNSPECIFIED);
+            dma_account("isi", "capture", true, (size_t)width * bpp);
         }
     }
 

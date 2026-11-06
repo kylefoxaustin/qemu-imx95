@@ -29,6 +29,7 @@
 #include "system/dma.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "hw/misc/dma-account.h"
 
 /* Per-channel control register offsets (struct fsl_edma3_ch_reg). */
 #define CH_CSR      0x00
@@ -226,6 +227,8 @@ static void edma_run_channel(IMX95EdmaState *s, int ch)
                                MEMTXATTRS_UNSPECIFIED, buf, esize);
             address_space_write(&address_space_memory, daddr,
                                 MEMTXATTRS_UNSPECIFIED, buf, esize);
+            dma_account("edma3", "m2m", false, esize);
+            dma_account("edma3", "m2m", true, esize);
             saddr += soff;
             daddr += doff;
         }
@@ -323,6 +326,7 @@ static void edma_run_txrx(IMX95EdmaState *s, int tx, int rx)
                            MEMTXATTRS_UNSPECIFIED, buf, tw.esize);
         address_space_write(&address_space_memory, tw.daddr,
                             MEMTXATTRS_UNSPECIFIED, buf, tw.esize);
+        dma_account("edma3", "tx", false, tw.esize);
         tw.saddr += tw.soff;
         tw.daddr += tw.doff;
         /* one RX element: device -> mem (drains the byte just produced) */
@@ -330,6 +334,7 @@ static void edma_run_txrx(IMX95EdmaState *s, int tx, int rx)
                            MEMTXATTRS_UNSPECIFIED, buf, rw.esize);
         address_space_write(&address_space_memory, rw.daddr,
                             MEMTXATTRS_UNSPECIFIED, buf, rw.esize);
+        dma_account("edma3", "rx", true, rw.esize);
         rw.saddr += rw.soff;
         rw.daddr += rw.doff;
     }
@@ -380,6 +385,12 @@ static void edma_service_minor(IMX95EdmaState *s, int ch)
                            MEMTXATTRS_UNSPECIFIED, buf, esize);
         address_space_write(&address_space_memory, daddr,
                             MEMTXATTRS_UNSPECIFIED, buf, esize);
+        /*
+         * The peripheral side is the one with a zero offset; the memory side
+         * is the one that walks. A fixed source therefore means memory is the
+         * destination, i.e. a write as the interconnect sees it.
+         */
+        dma_account("edma3", "periph", soff == 0, esize);
         saddr += soff;
         daddr += doff;
     }
@@ -422,6 +433,7 @@ static void edma_service_minor(IMX95EdmaState *s, int ch)
         unsigned tcdsz = L->a64 ? 0x30 : 0x20;
         address_space_read(&address_space_memory, next, MEMTXATTRS_UNSPECIFIED,
                            t + L->saddr, tcdsz);
+        dma_account("edma3", "tcd", false, tcdsz);
     } else {
         t[L->citer] = biter;
         t[L->citer + 1] = biter >> 8;
