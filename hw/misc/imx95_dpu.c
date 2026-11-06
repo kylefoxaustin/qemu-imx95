@@ -377,6 +377,7 @@ struct IMX95DPUState {
     uint32_t int_enable2[2];
     uint32_t frame_index;       /* HW vblank counter (FGTIMESTAMP) */
     QEMUTimer *vblank_timer;
+    int64_t vblank_next_ns;     /* next tick deadline; 0 = not scheduled */
 
     /* 2D blit engine: CmdSeq HIF decoder state + ComCtrl completion status */
     uint32_t hif_count;         /* words still to consume for a write opcode */
@@ -412,18 +413,77 @@ static void imx95_dpu_update_irq(IMX95DPUState *s)
  * reference. When DRM disables vblank on idle the tick stops, so a quiescent
  * display costs nothing (and doesn't steal guest cycles from the rest of boot).
  */
+static bool imx95_dpu_want_vblank(IMX95DPUState *s)
+{
+    return (s->int_enable & DPU_IRQ_SOURCES) ||
+           (s->int_enable2[0] & DPU_IRQ2_SOURCES0) ||
+           (s->int_enable2[1] & DPU_IRQ2_SOURCES1);
+}
+
+/*
+ * Start the tick if it is not already running, leaving an existing deadline
+ * alone. Called from the register writes that enable a source: a guest that
+ * rewrites INTERRUPTENABLE must not be able to push the next vblank out.
+ */
 static void imx95_dpu_arm_vblank(IMX95DPUState *s)
 {
-    bool want = (s->int_enable & DPU_IRQ_SOURCES) ||
-                (s->int_enable2[0] & DPU_IRQ2_SOURCES0) ||
-                (s->int_enable2[1] & DPU_IRQ2_SOURCES1);
+    int64_t now;
 
-    if (want) {
-        timer_mod(s->vblank_timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DPU_VBLANK_PERIOD_NS);
-    } else {
+    if (!imx95_dpu_want_vblank(s)) {
+        /*
+         * Stop ticking, but KEEP the phase in vblank_next_ns. Linux masks and
+         * unmasks the display interrupt once per frame inside
+         * handle_level_irq, so forgetting the deadline here restarted the
+         * frame clock on every vblank - and the restart happens after the
+         * composite has run, making the effective period PERIOD + composite.
+         * That measured 46.7 Hz against a configured 60, scaling with scene
+         * complexity, and FGTIMESTAMP advanced at the same wrong rate.
+         */
         timer_del(s->vblank_timer);
+        return;
     }
+    if (timer_pending(s->vblank_timer)) {
+        return;                 /* already ticking: do not disturb the phase */
+    }
+
+    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    if (s->vblank_next_ns == 0) {
+        s->vblank_next_ns = now + DPU_VBLANK_PERIOD_NS;      /* cold start */
+    } else if (s->vblank_next_ns <= now) {
+        /*
+         * Resume on the existing cadence, stepping over whole frames missed
+         * while the source was off. Computed rather than looped: a display
+         * left idle for an hour would be 200k iterations.
+         */
+        int64_t missed = (now - s->vblank_next_ns) / DPU_VBLANK_PERIOD_NS + 1;
+
+        s->vblank_next_ns += missed * DPU_VBLANK_PERIOD_NS;
+    }
+    timer_mod(s->vblank_timer, s->vblank_next_ns);
+}
+
+/*
+ * Re-arm after a tick, one period on from the PREVIOUS DEADLINE rather than
+ * from now. Arming from now adds the frame's own compositing time to every
+ * period: at 1080x1920 that measured 46.7 Hz against a configured 60, and the
+ * error grew with scene complexity, so FGTIMESTAMP advanced at a rate no real
+ * panel has. If we have fallen more than a period behind, resync to now
+ * instead of firing a burst of catch-up ticks.
+ */
+static void imx95_dpu_next_vblank(IMX95DPUState *s)
+{
+    int64_t now;
+
+    if (!imx95_dpu_want_vblank(s)) {
+        timer_del(s->vblank_timer);     /* keep the phase; see arm_vblank() */
+        return;
+    }
+    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->vblank_next_ns += DPU_VBLANK_PERIOD_NS;
+    if (s->vblank_next_ns <= now) {
+        s->vblank_next_ns = now + DPU_VBLANK_PERIOD_NS;
+    }
+    timer_mod(s->vblank_timer, s->vblank_next_ns);
 }
 
 /*
@@ -454,7 +514,7 @@ static void imx95_dpu_vblank_tick(void *opaque)
     if (s->int_enable2[1] & DPU_IRQ2_DISENGCFG_FRAMECOMP1) {
         qemu_console_hw_update(s->con1);
     }
-    imx95_dpu_arm_vblank(s);
+    imx95_dpu_next_vblank(s);
 }
 
 static inline uint32_t dpu_r(IMX95DPUState *s, hwaddr off)
@@ -1546,6 +1606,17 @@ static void imx95_dpu_reset(DeviceState *dev)
     s->comctrl_status1 = 0;
     imx95_dpu_update_irq(s);
     imx95_blit_update_irq(s);
+
+    /*
+     * vblank_next_ns is derived, not migrated: the timer itself is in the
+     * stream (VMSTATE_TIMER_PTR), so recover the deadline from it rather than
+     * adding a field and a version bump. timer_expire_time_ns() returns -1
+     * when the timer is not armed, which is our "not scheduled" 0.
+     */
+    s->vblank_next_ns = timer_expire_time_ns(s->vblank_timer);
+    if (s->vblank_next_ns < 0) {
+        s->vblank_next_ns = 0;
+    }
     if (s->vblank_timer) {
         timer_del(s->vblank_timer);   /* armed lazily when a source is enabled */
     }
