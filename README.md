@@ -1006,6 +1006,7 @@ addresses and IRQ numbers.
 | `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
 | `docs/imx95/known-limitations.md` | full limitation diagnoses |
 | `docs/imx95/smmu-not-modelled.md` | decision record: why the Arm SMMU-v3 is not modelled |
+| `docs/imx95/noc-activity-probe.md` | measuring per-initiator DMA for interconnect activity factors |
 
 ## Known limitations
 
