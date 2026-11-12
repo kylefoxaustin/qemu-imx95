@@ -139,6 +139,46 @@ debug monitor; it is wired to the second ``-serial`` backend
 (``null`` above), and can be redirected to a separate file or pty if
 desired.
 
+Booting from the card, as the ROM does
+'''''''''''''''''''''''''''''''''''''
+
+The ``-device loader`` lines above hand firmware straight to a core, which is
+not how a board starts. With **no** ``-kernel``, the machine instead stands in
+for the boot ROM: it walks the AHAB container set 32 KiB into the device on
+uSDHC1, loads each executable image to the address its container entry names,
+and only then starts the M33 and lets the SM release the A55. So a card
+carrying a full image set needs nothing else on the command line:
+
+.. code-block:: bash
+
+  $ qemu-system-aarch64 -M imx95-19x19-evk -m 2G -display none \\
+      -drive if=none,format=raw,file=boot.img,id=mmc0 \\
+      -device emmc,drive=mmc0 \\
+      -serial mon:stdio -serial null
+
+``tests/uboot/mkbootimg.py --sm m33_image.bin --spl u-boot-spl.bin`` builds
+such an image; ``tests/uboot/run.sh`` boots one through to a U-Boot prompt and
+a byte-exact TFTP transfer. Note that the SM goes in as the raw
+``m33_image.bin``, not the ELF: a container entry carries an explicit load
+address, which is what the ROM works from.
+
+The ROM reads only images whose container entry declares ``IMG_TYPE_EXEC`` with
+an i.MX 9 core id, so media built for the ``-device loader`` flow - where set 0
+declares no images at all - is left untouched and boots exactly as it did
+before. The walk itself can be followed with
+``-D walk.log -trace 'imx95_rom_*'``:
+
+.. code-block:: none
+
+  imx95_rom_container container at 0x8000 hdr_len 0x10 images 0
+  imx95_rom_container container at 0x8400 hdr_len 0x110 images 2
+  imx95_rom_image load core 1 from 0x9000 to 0x1ffc0000 size 0x2c750
+  imx95_rom_image load core 2 from 0x35800 to 0x20480000 size 0x2aaa1
+
+Executing the vendor's own ``flash.bin`` unmodified needs one more piece: its
+second container holds ``bl31.bin`` as well as ``u-boot.bin``, and TF-A is not
+modelled here.
+
 System Manager standalone
 '''''''''''''''''''''''''
 
