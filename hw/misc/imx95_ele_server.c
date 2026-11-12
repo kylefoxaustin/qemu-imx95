@@ -161,6 +161,38 @@ static void ele_handle_get_state(IMX95ELEServerState *s, uint8_t command)
 }
 
 /*
+ * ELE_TRNG_STATE (0xA4) handler.
+ *
+ * OP-TEE's ELE driver polls this during RNG init and only stops when both
+ * state bytes read ready:
+ *
+ *   struct rng_get_trng_state_msg_rsp { u32 rsp_code; u8 trng_state;
+ *                                       u8 ele_rng_ctx_state; } __packed;
+ *   if (rsp.trng_state != IMX_ELE_TRNG_STATUS_READY ||
+ *       rsp.ele_rng_ctx_state != IMX_ELE_RNG_CTX_STATUS_READY)
+ *           return TEE_ERROR_BUSY;
+ *
+ * (imx-optee-os core/drivers/crypto/ele/ele.c). The struct is memcpy'd from
+ * the response words after the header, so both bytes live in data[1], low
+ * byte first. A bare success status leaves them zero, and OP-TEE then retries
+ * forever at S-EL1 with nothing on the console to say so.
+ * Response: header(size 3) + status + packed states.
+ */
+#define ELE_TRNG_STATE_REQ  0xA4
+#define ELE_TRNG_READY      0x3     /* IMX_ELE_TRNG_STATUS_READY */
+#define ELE_RNG_CTX_READY   0x2     /* IMX_ELE_RNG_CTX_STATUS_READY */
+static void ele_handle_trng_state(IMX95ELEServerState *s, uint8_t command)
+{
+    uint8_t ver = ELE_HDR_VERSION(s->msg_buf[0]);
+    uint32_t resp_hdr = ele_make_header(ver, 3, command, ELE_RESP_TAG);
+
+    imx_mu_deliver_rr(s->mu, 0, resp_hdr);
+    imx_mu_deliver_rr(s->mu, 1, ELE_SUCCESS_IND);
+    imx_mu_deliver_rr(s->mu, 2,
+                      ELE_TRNG_READY | (ELE_RNG_CTX_READY << 8));
+}
+
+/*
  * ELE_READ_FUSE (0x97) handler.
  *
  * The OCOTP/efuse driver reads the fuse banks that are not in the FSB shadow
@@ -279,6 +311,9 @@ static void ele_dispatch(IMX95ELEServerState *s)
         return;
     case ELE_READ_FUSE_REQ:
         ele_handle_read_fuse(s, command);
+        return;
+    case ELE_TRNG_STATE_REQ:
+        ele_handle_trng_state(s, command);
         return;
     case ELE_GET_FW_VERSION_REQ:
         ele_handle_get_fw_version(s, command);
