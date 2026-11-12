@@ -175,9 +175,56 @@ before. The walk itself can be followed with
   imx95_rom_image load core 1 from 0x9000 to 0x1ffc0000 size 0x2c750
   imx95_rom_image load core 2 from 0x35800 to 0x20480000 size 0x2aaa1
 
-Executing the vendor's own ``flash.bin`` unmodified needs one more piece: its
-second container holds ``bl31.bin`` as well as ``u-boot.bin``, and TF-A is not
-modelled here.
+The vendor's EL3 firmware
+'''''''''''''''''''''''''
+
+The chain above is the one our own build produces, where U-Boot itself runs at
+EL3 and QEMU answers its PSCI SMCs. A board runs firmware below U-Boot, and
+that boots here too. Set 1 of an NXP ``imx-boot``/``flash_all`` image holds
+three images, not one - BL31 at 0x8a200000, U-Boot at 0x90200000 and OP-TEE at
+0x8c000000 - and SPL takes its entry point from image 0, so it enters BL31
+rather than U-Boot. Build media the same way and tell the machine that EL3 now
+belongs to the firmware:
+
+.. code-block:: bash
+
+  $ python3 tests/uboot/mkbootimg.py u-boot.bin boot.img \\
+      --sm m33_image.bin --spl u-boot-spl.bin \\
+      --bl31 bl31.bin --optee tee.bin
+  $ qemu-system-aarch64 -M imx95-19x19-evk,el3-firmware=on -m 2G \\
+      -display none \\
+      -drive if=none,format=raw,file=boot.img,id=mmc0 \\
+      -device emmc,drive=mmc0 -serial mon:stdio -serial null
+
+``el3-firmware=on`` leaves QEMU's built-in PSCI handler off the SMC conduit so
+BL31 owns EL3, as it does on silicon. Without it QEMU answers the SMCs BL31
+exists to implement. It cannot be derived: the card is attached after the CPUs
+are realized, so nothing can see that set 1 holds a BL31.
+
+The chain then runs ROM -> SM -> SPL -> BL31 (EL3) -> OP-TEE (S-EL1) ->
+U-Boot (BL33), which ``tests/uboot/run-tfa.sh`` checks stage by stage. Two
+pieces of the model exist only for it:
+
+* **The SM's second SCMI channel.** Its own configuration declares two agents
+  for the AP - ``SCMI_AGENT1 name="AP-S", secure`` on MU1 and
+  ``SCMI_AGENT2 name="AP-NS"`` on MU2 - and TF-A is the secure one. MU1 is
+  cross-connected like MU2, with one shared SMT page behind two apertures.
+* **Two more ELE services.** BL31 uses the ELE mailbox at 0x47540000, which is
+  neither of the two U-Boot uses, and OP-TEE's RNG init polls
+  ``ELE_CMD_TRNG_STATE`` until both of its state bytes report ready.
+
+BL31 and OP-TEE are NXP BSP artifacts and are not redistributable, so they are
+operator-supplied; both can be taken out of a BSP ``imx-boot`` image, which is
+a container set in the format ``mkbootimg.py`` documents.
+
+Two things this does not yet give you. A released BSP image is built for
+silicon revision 2.0 or later, so its containers are 0x4000-aligned and carry
+version-2 headers, while this machine reports rev 1.1 and both it and SPL walk
+a set with the 0x400 stride ``is_imx95_a0()`` selects - so such an image has to
+be rebuilt rather than used as it is. And Linux on top of BL31 is untested:
+PSCI secondary-core bring-up now belongs to the firmware, which releases cores
+through the SM rather than through the CPUWAIT path this machine models for
+core 0.
 
 System Manager standalone
 '''''''''''''''''''''''''

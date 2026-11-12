@@ -39,8 +39,32 @@ declares images instead of being empty:
           sit, and where both the ROM and SPL probe for one - stays zero, and
           the walk ends there for a definite reason rather than because a
           payload happened not to look like a container.
-  ...     container B (U-Boot proper) at ROUND(end of set 0, 1 KiB), exactly
-          where SPL's get_imageset_end() will look for it.
+  ...     container B (set 1) at ROUND(end of set 0, 1 KiB), exactly where
+          SPL's get_imageset_end() will look for it.
+
+--- With --bl31: TF-A below U-Boot ---
+
+Set 1 then carries two images, BL31 first. SPL loads every image in the
+container but takes its entry point from image 0 (common/spl/spl_imx_container.c:
+`if (i == 0) spl_image->entry_point = image->entry`), so BL31 runs at EL3 and
+hands off to U-Boot as BL33 - the order the vendor's own flash.bin uses.
+
+BL31's load address 0x8a200000 is below U-Boot's CFG_SYS_SDRAM_BASE
+(0x90000000), so SPL's arch_check_dst_in_secure() calls it secure and stages
+the read through the trampoline at CFG_SYS_SDRAM_BASE + PHYS_SDRAM_SIZE - 16M
+= 0xff000000 before copying it down. Both addresses are inside the RAM this
+machine maps from 0x80000000, so `-m 2G` is enough.
+
+The machine must also be told to stop emulating PSCI, or QEMU answers the SMCs
+that belong to BL31: -machine imx95-19x19-evk,el3-firmware=on.
+
+--- With --optee as well ---
+
+The BSP's BL31 is built with a secure-payload dispatcher and hands off to
+BL32 before BL33. Give it --optee too, or it enters S-EL1 at address 0 and
+loops in its own vector table (PC stuck at VBAR_EL1 + 0x200). Set 1 then
+holds the same three images, in the same order, as the vendor's flash.bin:
+BL31, U-Boot, OP-TEE.
 
 Image flags follow U-Boot's tools/imx8image.c for an i.MX 9 target:
 IMG_TYPE_EXEC (3) in bits[3:0] and the core in bits[7:4] - CORE_ULP_CM33 (1)
@@ -52,6 +76,7 @@ like.
 
 usage: mkbootimg.py <u-boot.bin> <out.img> [--text-base 0x90200000]
                     [--sm m33_image.bin] [--spl u-boot-spl.bin]
+                    [--bl31 bl31.bin]
 """
 import argparse
 import struct
@@ -84,6 +109,8 @@ IMAGE_SIZE = 64 << 20
 
 SM_LOAD = 0x1ffc0000      # M33 ITCM; the SM links and is loaded here
 SPL_LOAD = 0x20480000     # CONFIG_SPL_TEXT_BASE for imx95_19x19_evk
+BL31_LOAD = 0x8a200000    # as in uboot-imx arch/arm/mach-imx/imx9/scmi/container.cfg
+OPTEE_LOAD = 0x8c000000   # TZDRAM; where the vendor's own flash.bin puts tee.bin
 
 
 def align(x, a):
@@ -130,6 +157,16 @@ def main():
     ap.add_argument('--spl',
                     help='U-Boot SPL for the A55 (u-boot-spl.bin, raw). '
                          'Requires --sm.')
+    ap.add_argument('--bl31',
+                    help='TF-A BL31 for EL3 (bl31.bin, raw). Goes into set 1 '
+                         'ahead of U-Boot, so SPL enters BL31 and U-Boot '
+                         'becomes BL33. Needs '
+                         '-machine imx95-19x19-evk,el3-firmware=on.')
+    ap.add_argument('--optee',
+                    help='OP-TEE OS as BL32 (tee.bin, raw). TF-A BL31 in the '
+                         'NXP BSP is built with a secure-payload dispatcher, '
+                         'so without a BL32 it enters S-EL1 at address 0 and '
+                         'spins in its own vector table. Requires --bl31.')
     ap.add_argument('--uboot-elf',
                     help='u-boot ELF; if given, the OP-TEE device-tree fixup '
                          'is neutralised (see --no-optee)')
@@ -146,6 +183,8 @@ def main():
 
     if bool(args.sm) != bool(args.spl):
         sys.exit('--sm and --spl must be given together')
+    if args.optee and not args.bl31:
+        sys.exit('--optee needs --bl31: OP-TEE is BL32, loaded under BL31')
 
     text_base = int(args.text_base, 0)
     with open(args.uboot, 'rb') as f:
@@ -209,21 +248,44 @@ def main():
                  f'0x{SM_LOAD:x}, SPL ({len(spl)} B) '
                  f'@0x{SET_C_OFF + spl_off:x} -> 0x{SPL_LOAD:x}')
 
-    # Container B: one image, U-Boot proper. This is set 1, which SPL loads.
+    # Container B: set 1, which SPL loads. BL31 first when present, because
+    # SPL's entry point comes from image 0.
+    set1 = []
+    if args.bl31:
+        with open(args.bl31, 'rb') as f:
+            bl31 = f.read()
+        set1.append(('bl31', bl31, BL31_LOAD, FLAGS_A55, META_A55))
+    set1.append(('u-boot', uboot, text_base, 0, 0))
+    if args.optee:
+        with open(args.optee, 'rb') as f:
+            optee = f.read()
+        set1.append(('optee', optee, OPTEE_LOAD, FLAGS_A55, META_A55))
+
+    off = IMG_OFF_IN_B
+    entries, payloads = [], []
+    for _, blob, load, flags, meta in set1:
+        entries.append(boot_img(off, len(blob), load, load, flags, meta))
+        payloads.append((off, blob))
+        off = align(off + len(blob), BLOCK)
+
     place(img, uboot_cnt_off,
-          container_hdr(HDR_SIZE + IMG_ENTRY_SIZE, 1), 'container B')
-    place(img, uboot_cnt_off + HDR_SIZE,
-          boot_img(IMG_OFF_IN_B, len(uboot), text_base, text_base),
-          'u-boot entry')
-    data_off = uboot_cnt_off + IMG_OFF_IN_B
-    place(img, data_off, uboot, 'u-boot')
+          container_hdr(HDR_SIZE + len(entries) * IMG_ENTRY_SIZE, len(entries)),
+          'container B')
+    for i, e in enumerate(entries):
+        place(img, uboot_cnt_off + HDR_SIZE + i * IMG_ENTRY_SIZE, e,
+              'set 1 entry %d' % i)
+    for o, blob in payloads:
+        place(img, uboot_cnt_off + o, blob, 'set 1 payload')
+    data_off = uboot_cnt_off + payloads[-1][0]
 
     with open(args.out, 'wb') as f:
         f.write(img)
 
-    print(f'{args.out}: {notes}; '
-          f'u-boot container @0x{uboot_cnt_off:x}; '
-          f'u-boot ({len(uboot)} bytes) @0x{data_off:x} -> 0x{text_base:x}')
+    set1_notes = ', '.join(
+        f'{n} ({len(b)} B) @0x{uboot_cnt_off + o:x} -> 0x{l:x}'
+        for (n, b, l, _, _), (o, _) in zip(set1, payloads))
+    print(f'{args.out}: {notes}; set1 container @0x{uboot_cnt_off:x}: '
+          f'{set1_notes}')
 
 
 if __name__ == '__main__':
