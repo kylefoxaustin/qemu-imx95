@@ -33,6 +33,8 @@ struct Imx95EvkMachineState {
     MachineState parent_obj;
     /* Optional CAN buses, attached via -machine canbus0=...,canbus1=... */
     CanBusState *canbus[FSL_IMX95_NUM_FLEXCAN];
+    /* -machine el3-firmware=on: TF-A BL31 is in the boot image. */
+    bool el3_firmware;
 };
 
 /*
@@ -187,6 +189,14 @@ static void imx95_evk_init(MachineState *machine)
      */
     qdev_prop_set_bit(DEVICE(s), "rom-boot", machine->kernel_filename == NULL);
 
+    /*
+     * The boot image carries TF-A BL31, so EL3 belongs to it rather than to
+     * QEMU's PSCI emulation. This has to be a switch: the SM and SPL come off
+     * the card, but the card is attached after the CPUs are realized, so
+     * nothing here can see that set 1 holds a BL31.
+     */
+    qdev_prop_set_bit(DEVICE(s), "el3-firmware", m->el3_firmware);
+
     /* Forward any user-attached CAN buses to the SoC's FlexCAN controllers. */
     for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
         if (m->canbus[i]) {
@@ -250,6 +260,16 @@ static void imx95_19x19_evk_machine_init(MachineClass *mc)
     mc->get_default_cpu_type  = imx95_evk_get_default_cpu_type;
 }
 
+static bool imx95_evk_get_el3_firmware(Object *obj, Error **errp)
+{
+    return IMX95_EVK_MACHINE(obj)->el3_firmware;
+}
+
+static void imx95_evk_set_el3_firmware(Object *obj, bool value, Error **errp)
+{
+    IMX95_EVK_MACHINE(obj)->el3_firmware = value;
+}
+
 static void imx95_evk_machine_instance_init(Object *obj)
 {
     int i;
@@ -265,6 +285,13 @@ static void imx95_evk_machine_instance_init(Object *obj)
                                  (Object **)&IMX95_EVK_MACHINE(obj)->canbus[i],
                                  object_property_allow_set_link, 0);
     }
+
+    object_property_add_bool(obj, "el3-firmware",
+                             imx95_evk_get_el3_firmware,
+                             imx95_evk_set_el3_firmware);
+    object_property_set_description(obj, "el3-firmware",
+        "The boot image contains EL3 firmware (TF-A BL31). Leaves SMC to it "
+        "instead of emulating PSCI.");
 }
 
 static void imx95_19x19_evk_class_init(ObjectClass *oc, const void *data)

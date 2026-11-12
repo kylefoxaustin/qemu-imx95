@@ -200,6 +200,12 @@ struct FslImx95State {
     MemoryRegion            vfccu;
     /* A55 CPU wait-semaphore SRAM (A1 MU SRAM page). */
     MemoryRegion            cpu_sema;
+    /*
+     * Alias of cpu_sema into the MU1_A window, so the SM's secure AP agent
+     * channel has one shared buffer with two apertures - the same trick the
+     * MU2 channel uses for sm_shmem. See the MU1 block in fsl_imx95_realize.
+     */
+    MemoryRegion            ap_s_shmem_a;
     /* CortexA TMPSNS backing RAM (SM sensor tick; CTRL0=0 -> filter idle). */
     MemoryRegion            tmpsns_ca;
     /* More eMcem/fabric init targets backed by RAM (write-acceptors). */
@@ -247,6 +253,15 @@ struct FslImx95State {
      * NVIC, so the real SM firmware services the A55's SCMI doorbells.
      */
     IMXMUState              sm_mu_b;
+
+    /*
+     * MU1, the SM's secure AP agent channel - TF-A BL31's SCMI, distinct
+     * from the non-secure MU2 channel Linux and U-Boot use. A at
+     * 0x44220000, B at 0x44230000 (AON__MUI_A1__MU[AB]_BASE in the SM's
+     * MIMX95_MU.h).
+     */
+    IMXMUState              ap_s_mu;
+    IMXMUState              ap_s_mu_b;
     /*
      * Stub MUs for the V2X / NETC / spare instances the DT references
      * but nothing in the model talks to. Wired with a NOP tr-write
@@ -291,6 +306,16 @@ struct FslImx95State {
      * Mirror the responder so both SPL and U-Boot proper reach it.
      */
     IMX95ELEServerState     ele_server2;
+
+    /*
+     * A third mirror, on the ELE MU at 0x47540000. TF-A BL31 uses that
+     * instance rather than the two U-Boot uses: it sends ELE_GET_INFO
+     * (0xda) there during its own early init and polls RSR for the reply,
+     * so with nothing listening it spins at EL3 forever and never reaches
+     * BL33. Found by sampling the stalled PC - BL31 sat in the
+     * "ldr w2,[x1]; and w2,w2,#3; cmp w2,#3; b.ne" poll on 0x4754012c.
+     */
+    IMX95ELEServerState     ele_server3;
     SDHCIState              usdhc[FSL_IMX95_NUM_USDHCS];
     FlexCanState            flexcan[FSL_IMX95_NUM_FLEXCAN];
     /* Optional per-controller CAN bus links (set via machine canbusN=...). */
@@ -304,6 +329,13 @@ struct FslImx95State {
      * leaves the previous boot flow untouched.
      */
     bool                    rom_boot;
+
+    /*
+     * The boot image contains EL3 firmware (TF-A BL31). QEMU's built-in PSCI
+     * handler is then left off the SMC conduit so the firmware owns EL3, as
+     * it does on silicon. Set from -machine el3-firmware=on.
+     */
+    bool                    el3_firmware;
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
     USBDWC3                 usb3;   /* 0x4c100000: SuperSpeed DWC3 (xHCI) */
@@ -570,6 +602,14 @@ enum FslImx95Irqs {
  * doorbells on its side of MU2.
  */
 #define FSL_IMX95_SM_MU_B_M33_IRQ   227
+
+/*
+ * MU1, the SM's *secure* AP agent channel (SCMI_AGENT1 "AP-S" in the SM's
+ * own configs/mx95evk.cfg). TF-A BL31 is that agent. MU1_A_IRQn = 224 on the
+ * GIC, MU1_B_IRQn = 225 on the M33's NVIC (MIMX95_COMMON.h).
+ */
+#define FSL_IMX95_AP_S_MU_IRQ       224
+#define FSL_IMX95_AP_S_MU_B_M33_IRQ 225
 
 /*
  * MUI_A5 (the M7<->SM SCMI channel) interrupt numbers, from the SM's

@@ -1482,16 +1482,27 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         }
 
         /*
-         * U-Boot proper runs at EL3 (no TF-A below it in our model)
-         * and issues OPTEE/PSCI SMCs assuming firmware will service
-         * them. Without psci-conduit, those SMCs trap to U-Boot's own
-         * EL3 sync vector and crash. Wire QEMU's built-in PSCI handler
-         * to the SMC conduit so PSCI calls return cleanly and the
-         * vendor-OS calls return UNDEFINED, which U-Boot handles as
-         * "no OP-TEE present" and moves on.
+         * Who answers an SMC depends on whether there is EL3 firmware in
+         * the boot image.
+         *
+         * With none - the default - U-Boot proper itself runs at EL3 and
+         * issues OPTEE/PSCI SMCs assuming firmware below it will service
+         * them. Without psci-conduit those trap to U-Boot's own EL3 sync
+         * vector and crash, so QEMU's built-in PSCI handler is wired to the
+         * SMC conduit: PSCI calls return cleanly and the vendor-OS calls
+         * return UNDEFINED, which U-Boot reads as "no OP-TEE present".
+         *
+         * With TF-A BL31 in the image, that handler is in the way - every
+         * SMC it answers is one BL31 never sees, including the PSCI calls
+         * BL31 exists to implement. Leave the conduit disabled and let the
+         * firmware own EL3, which is what it does on silicon. The board sets
+         * this from -machine el3-firmware=on; it cannot be derived, because
+         * the card is attached after the CPUs are realized.
          */
         object_property_set_int(OBJECT(&s->cpu[i]), "psci-conduit",
-                                QEMU_PSCI_CONDUIT_SMC, &error_abort);
+                                s->el3_firmware ? QEMU_PSCI_CONDUIT_DISABLED
+                                                : QEMU_PSCI_CONDUIT_SMC,
+                                &error_abort);
 
         /*
          * All A55 cores come out of SoC reset held in CPUWAIT. Core 0 is
@@ -2061,6 +2072,21 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     object_property_set_link(OBJECT(&s->ele_server2), "mu",
                              OBJECT(&s->stub_mu[3]), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server2), errp)) {
+        return;
+    }
+
+    /*
+     * And a third, on the ELE MU at 0x47540000 (stub_mu[2]). That is the
+     * instance TF-A BL31 uses, which is neither of U-Boot's two: it sends
+     * ELE_GET_INFO there from its own early init and polls RSR.RF0|RF1 for
+     * the two-word reply. With only the NOP stub handler listening the reply
+     * never arrives and BL31 spins at EL3 instead of entering BL33 - a
+     * silent hang, with no fault and no unimplemented-access log, since the
+     * MU register file itself is modelled.
+     */
+    object_property_set_link(OBJECT(&s->ele_server3), "mu",
+                             OBJECT(&s->stub_mu[2]), &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server3), errp)) {
         return;
     }
     /*
@@ -3093,6 +3119,59 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * MU1 SCMI: the SM's *secure* AP agent. Its own configuration declares
+     * two agents for the AP logical machine (configs/mx95evk.cfg):
+     *
+     *   SCMI_AGENT1  name="AP-S", secure   MAILBOX type=mu, mu=1
+     *   SCMI_AGENT2  name="AP-NS"          MAILBOX type=mu, mu=3
+     *
+     * so the firmware we already run serves a second channel, on MU1, that
+     * nothing in this model used to reach. TF-A BL31 is that agent: running
+     * at EL3 it polls the SMT channel_status word at MU1_A + 0x1004 for the
+     * channel to go free, and with MU1 left as a logging stub it spins there
+     * forever - no fault, no unimplemented access, just a silent hang before
+     * BL33. (Found by sampling the stalled PC: BL31 sat in
+     * "ldr w2,[x1]; and w2,w2,#3; cmp w2,#3; b.ne" on the MU1_A RSR.)
+     *
+     * Same shape as the MU2 channel above, with the apertures the other way
+     * round: the shared page already exists on the B side as cpu_sema, the
+     * A1 MU SRAM page the SM keeps the A55 wait-semaphore in, so the alias
+     * goes at MU1_A + 0x1000 and both ends exchange messages through that
+     * one buffer. The real MUs override the low-priority stub windows at
+     * both bases, as cpu_sema already does inside 0x44230000.
+     */
+    {
+        hwaddr mua_base = 0x44220000;
+        hwaddr mub_base = 0x44230000;
+        hwaddr shmem_a = mua_base + 0x1000;
+
+        object_initialize_child(OBJECT(s), "ap_s_mu", &s->ap_s_mu,
+                                TYPE_IMX_MU);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_s_mu), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_s_mu), 0, mua_base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->ap_s_mu), 0,
+            qdev_get_gpio_in(gicdev, FSL_IMX95_AP_S_MU_IRQ));
+
+        object_initialize_child(OBJECT(s), "ap_s_mu_b", &s->ap_s_mu_b,
+                                TYPE_IMX_MU);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_s_mu_b), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_s_mu_b), 0, mub_base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->ap_s_mu_b), 0,
+            qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_AP_S_MU_B_M33_IRQ));
+        imx_mu_set_peer(&s->ap_s_mu, &s->ap_s_mu_b);
+
+        memory_region_init_alias(&s->ap_s_shmem_a, OBJECT(s),
+                                 "imx95-ap-s-shmem-a", &s->cpu_sema, 0,
+                                 fsl_imx95_memmap[FSL_IMX95_CPU_SEMA].size);
+        memory_region_add_subregion(get_system_memory(), shmem_a,
+                                    &s->ap_s_shmem_a);
+    }
+
+    /*
      * Cortex-M7 real-time core (v1.x). Mirror of the M33 setup above with
      * M7-specific addresses: ITCM at M7-view 0x00000000 (the M7 boots
      * here, so its reset VTOR is 0 - the ARMv7-M default), DTCM at
@@ -3329,6 +3408,8 @@ static void fsl_imx95_init(Object *obj)
                             TYPE_IMX95_ELE_SERVER);
     object_initialize_child(obj, "ele-server2", &s->ele_server2,
                             TYPE_IMX95_ELE_SERVER);
+    object_initialize_child(obj, "ele-server3", &s->ele_server3,
+                            TYPE_IMX95_ELE_SERVER);
 
     for (i = 0; i < FSL_IMX95_NUM_USDHCS; i++) {
         g_autofree char *name = g_strdup_printf("usdhc%d", i + 1);
@@ -3374,6 +3455,11 @@ static const Property fsl_imx95_properties[] = {
      * when no -kernel was given (hw/arm/imx95-evk.c).
      */
     DEFINE_PROP_BOOL("rom-boot", FslImx95State, rom_boot, false),
+    /*
+     * The boot image carries EL3 firmware (TF-A BL31), so QEMU must not
+     * emulate PSCI behind its back. See the psci-conduit choice above.
+     */
+    DEFINE_PROP_BOOL("el3-firmware", FslImx95State, el3_firmware, false),
 };
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
