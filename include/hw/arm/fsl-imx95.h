@@ -295,6 +295,15 @@ struct FslImx95State {
     FlexCanState            flexcan[FSL_IMX95_NUM_FLEXCAN];
     /* Optional per-controller CAN bus links (set via machine canbusN=...). */
     CanBusState            *canbus[FSL_IMX95_NUM_FLEXCAN];
+
+    /*
+     * Stand in for the boot ROM's image loader: walk the AHAB container set
+     * on uSDHC1 and load the images it declares, instead of relying on
+     * "-device loader" to deposit the SM and SPL. Set by the board when no
+     * -kernel was given; a card with nothing that parses as an image set
+     * leaves the previous boot flow untouched.
+     */
+    bool                    rom_boot;
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
     USBDWC3                 usb3;   /* 0x4c100000: SuperSpeed DWC3 (xHCI) */

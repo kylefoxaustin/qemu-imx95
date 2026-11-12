@@ -177,6 +177,16 @@ static void imx95_evk_init(MachineState *machine)
     s = FSL_IMX95(object_new(TYPE_FSL_IMX95));
     object_property_add_child(OBJECT(machine), "soc", OBJECT(s));
 
+    /*
+     * With no -kernel, the machine is standing in for the boot ROM, so let
+     * it do the ROM's read: walk the image set on uSDHC1 and load the SM and
+     * SPL from it, rather than requiring a "-device loader" for each. This is
+     * the same policy hw/arm/orangepi.c applies to the Allwinner boot ROM. A
+     * card holding nothing that parses as an image set is a no-op, so the
+     * loader-based flows keep working unchanged.
+     */
+    qdev_prop_set_bit(DEVICE(s), "rom-boot", machine->kernel_filename == NULL);
+
     /* Forward any user-attached CAN buses to the SoC's FlexCAN controllers. */
     for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
         if (m->canbus[i]) {

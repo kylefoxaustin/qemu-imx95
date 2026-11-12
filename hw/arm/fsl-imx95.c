@@ -42,6 +42,7 @@
 #include "hw/core/clock.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/boards.h"
+#include "hw/core/qdev.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/i2c/i2c.h"
@@ -66,12 +67,15 @@
 #include "hw/misc/imx95_ddr_pmu.h"
 #include "hw/misc/imx95_ccm.h"
 #include "system/blockdev.h"
+#include "system/block-backend.h"
 #include "system/kvm.h"
 #include "target/arm/cpu.h"
 #include "target/arm/cpu-qom.h"
 #include "target/arm/kvm_arm.h"
+#include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qobject/qlist.h"
+#include "trace.h"
 
 /*
  * Single source of truth for the SoC memory map. Each entry maps a region
@@ -857,6 +861,262 @@ static void fsl_imx95_write_rom_passover(FslImx95State *s)
 }
 
 /*
+ * Stand in for the boot ROM's image loader.
+ *
+ * The two tables above are what the ROM leaves behind; this is what it does
+ * before leaving them. On silicon the ROM reads the image set off the boot
+ * device, loads each executable image to the address its container entry
+ * names, and only then starts the M33 and releases the A55 from CPUWAIT.
+ * This machine used to skip that step: the SM and SPL arrived through
+ * "-device loader" and the passover above described a layout nothing had
+ * read. Doing the read for real retires both loader lines, and is also what
+ * lets an image set built the way the vendor builds one boot as it is.
+ *
+ * Container format: i.MX AHAB v0 - a 16-byte header followed by 128-byte
+ * image entries (U-Boot include/imx_container.h). In the header,
+ * version[0x00], length[0x01:0x02] little-endian, tag[0x03], num_images[0x0b];
+ * in an entry, offset[0x00], size[0x04], dst[0x08], entry[0x10],
+ * hab_flags[0x18]. An image's offset is relative to its own container header.
+ */
+#define ROM_CNT_TAG         0x87
+#define ROM_CNT_VERSION     0x00
+#define ROM_CNT_HDR_SIZE    0x10
+#define ROM_CNT_IMG_SIZE    0x80
+
+/*
+ * Stride from one container header to the next within a set: the ROM and SPL
+ * both step by ALIGN(header_length, this), so the headers sit at the front of
+ * the set and the payloads follow. U-Boot's container_hdr_alignment() returns
+ * 0x400 on i.MX 95 A0, which is the revision this machine reports.
+ */
+#define ROM_CNT_HDR_ALIGN   0x400
+
+/* Containers in one set: ELE, V2X, then the one carrying the boot images. */
+#define ROM_CNT_PER_SET     3
+
+/*
+ * hab_flags: bits[3:0] are the image type, bits[7:4] the core the image is
+ * for. IMG_TYPE_EXEC and the i.MX 9 core ids CORE_ULP_CM33 / CORE_ULP_CA35
+ * are from U-Boot tools/imx8image.c, which is what builds these containers.
+ */
+#define ROM_IMG_TYPE(f)     ((f) & 0xf)
+#define ROM_IMG_CORE(f)     (((f) >> 4) & 0xf)
+#define ROM_IMG_TYPE_EXEC   0x3
+#define ROM_IMG_CORE_M33    0x1
+#define ROM_IMG_CORE_A55    0x2
+
+#define ROM_MAX_IMAGES      8
+/* Nothing the ROM loads is remotely this big; a larger size is a bad image. */
+#define ROM_IMG_MAX_SIZE    (64 * MiB)
+
+typedef struct {
+    uint64_t src;           /* byte offset on the boot device */
+    uint64_t dst;           /* load address */
+    uint64_t entry;         /* entry point */
+    uint32_t size;
+    uint32_t flags;         /* raw hab_flags */
+} Imx95RomImage;
+
+/*
+ * The card the emulated ROM boots from: whatever is on uSDHC1, the EVK's
+ * soldered eMMC and the device the passover above advertises.
+ */
+static BlockBackend *fsl_imx95_rom_boot_blk(FslImx95State *s)
+{
+    BusState *sdbus = qdev_get_child_bus(DEVICE(&s->usdhc[0]), "sd-bus");
+    BusChild *kid;
+
+    if (!sdbus) {
+        return NULL;
+    }
+
+    QTAILQ_FOREACH(kid, &sdbus->children, sibling) {
+        BlockBackend *blk = blk_by_dev(kid->child);
+
+        if (blk && blk_is_available(blk)) {
+            return blk;
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Place one image. The M33's TCMs are private to its own address space
+ * (s->m33_view), so an image bound for them is written into the backing RAM
+ * directly, the way the handover and passover tables above are. Everything
+ * else goes through the system address space, which is where the generic
+ * loader would have put it.
+ */
+static bool fsl_imx95_rom_place(FslImx95State *s, uint64_t dst,
+                                const void *buf, uint32_t size)
+{
+    MemoryRegion *tcm = NULL;
+    uint64_t base = 0;
+
+    if (dst - FSL_IMX95_M33_ITCM_BASE < FSL_IMX95_M33_TCM_SIZE) {
+        tcm = &s->m33_itcm;
+        base = FSL_IMX95_M33_ITCM_BASE;
+    } else if (dst - FSL_IMX95_M33_DTCM_BASE < FSL_IMX95_M33_TCM_SIZE) {
+        tcm = &s->m33_dtcm;
+        base = FSL_IMX95_M33_DTCM_BASE;
+    }
+
+    if (tcm) {
+        if (dst - base + size > FSL_IMX95_M33_TCM_SIZE) {
+            return false;
+        }
+        memcpy((uint8_t *)memory_region_get_ram_ptr(tcm) + (dst - base),
+               buf, size);
+        return true;
+    }
+
+    return address_space_write(&address_space_memory, dst,
+                               MEMTXATTRS_UNSPECIFIED, buf, size) == MEMTX_OK;
+}
+
+/*
+ * Parse the container header at @off, appending its executable images to
+ * @imgs. Returns the header length, so the caller can step to the next
+ * header, or zero when there is no container here - which is how the walk
+ * ends, exactly as it does in SPL's get_imageset_end().
+ */
+static uint16_t fsl_imx95_rom_container(BlockBackend *blk, uint64_t off,
+                                        Imx95RomImage *imgs, int *n)
+{
+    uint8_t hdr[ROM_CNT_HDR_SIZE];
+    uint16_t hdr_len;
+    unsigned num, i;
+
+    if (blk_pread(blk, off, sizeof(hdr), hdr, 0) < 0) {
+        return 0;
+    }
+    if (hdr[0x03] != ROM_CNT_TAG || hdr[0x00] != ROM_CNT_VERSION) {
+        return 0;
+    }
+
+    hdr_len = lduw_le_p(hdr + 0x01);
+    num = hdr[0x0b];
+    if (hdr_len < ROM_CNT_HDR_SIZE + num * ROM_CNT_IMG_SIZE) {
+        /* The header does not cover the entries it claims to have. */
+        return 0;
+    }
+    trace_imx95_rom_container(off, hdr_len, num);
+
+    for (i = 0; i < num; i++) {
+        uint8_t e[ROM_CNT_IMG_SIZE];
+        uint32_t flags, size;
+
+        if (blk_pread(blk, off + ROM_CNT_HDR_SIZE + i * ROM_CNT_IMG_SIZE,
+                      sizeof(e), e, 0) < 0) {
+            return hdr_len;
+        }
+
+        flags = ldl_le_p(e + 0x18);
+        size = ldl_le_p(e + 0x04);
+        if (ROM_IMG_TYPE(flags) != ROM_IMG_TYPE_EXEC || size == 0) {
+            continue;
+        }
+        if (size > ROM_IMG_MAX_SIZE) {
+            warn_report("imx95 boot ROM: image %u claims 0x%" PRIx32 " bytes",
+                        i, size);
+            continue;
+        }
+        if (*n == ROM_MAX_IMAGES) {
+            warn_report("imx95 boot ROM: more than %d executable images",
+                        ROM_MAX_IMAGES);
+            return hdr_len;
+        }
+
+        imgs[*n].src = off + ldl_le_p(e + 0x00);
+        imgs[*n].size = size;
+        imgs[*n].dst = ldq_le_p(e + 0x08);
+        imgs[*n].entry = ldq_le_p(e + 0x10);
+        imgs[*n].flags = flags;
+        (*n)++;
+    }
+
+    return hdr_len;
+}
+
+/*
+ * Walk the image set on the boot device and load it. Returns the number of
+ * images loaded; zero means there was no image set there, in which case the
+ * machine boots exactly as it did before - the "-kernel" and "-device loader"
+ * paths are untouched by construction.
+ */
+static int fsl_imx95_rom_boot(FslImx95State *s)
+{
+    Imx95RomImage imgs[ROM_MAX_IMAGES];
+    BlockBackend *blk;
+    uint64_t off = PASSOVER_IMG_OFS;
+    int n = 0, i, loaded = 0;
+    bool m33 = false;
+
+    if (!s->rom_boot) {
+        return 0;
+    }
+
+    blk = fsl_imx95_rom_boot_blk(s);
+    if (!blk) {
+        return 0;
+    }
+
+    for (i = 0; i < ROM_CNT_PER_SET; i++) {
+        uint16_t hdr_len = fsl_imx95_rom_container(blk, off, imgs, &n);
+
+        if (!hdr_len) {
+            break;
+        }
+        off += QEMU_ALIGN_UP(hdr_len, ROM_CNT_HDR_ALIGN);
+    }
+
+    for (i = 0; i < n; i++) {
+        g_autofree uint8_t *buf = g_malloc(imgs[i].size);
+
+        if (blk_pread(blk, imgs[i].src, imgs[i].size, buf, 0) < 0) {
+            warn_report("imx95 boot ROM: cannot read 0x%" PRIx32
+                        " bytes at 0x%" PRIx64, imgs[i].size, imgs[i].src);
+            continue;
+        }
+        if (!fsl_imx95_rom_place(s, imgs[i].dst, buf, imgs[i].size)) {
+            warn_report("imx95 boot ROM: image does not fit at 0x%" PRIx64,
+                        imgs[i].dst);
+            continue;
+        }
+        trace_imx95_rom_image(ROM_IMG_CORE(imgs[i].flags), imgs[i].src,
+                              imgs[i].dst, imgs[i].size);
+
+        /*
+         * The A55's reset vector now comes from the image set, which is also
+         * what the handover table below advertises to the SM. With
+         * "-device loader" the generic loader set the PC instead.
+         */
+        if (ROM_IMG_CORE(imgs[i].flags) == ROM_IMG_CORE_A55) {
+            cpu_set_pc(CPU(&s->cpu[0]), imgs[i].entry);
+        }
+        if (ROM_IMG_CORE(imgs[i].flags) == ROM_IMG_CORE_M33) {
+            m33 = true;
+        }
+        loaded++;
+    }
+
+    /*
+     * The M33 took its reset while ITCM was still zeroed - this read happens
+     * at machine-init-done, long after - so it latched SP and PC from an
+     * empty vector table. Reset it again now that the image is there, which
+     * for ARMv7-M reloads both from the vector table, the same thing the M7
+     * release path does on a managed restart. cpu_reset re-applies
+     * start-powered-off, and the caller releases it.
+     */
+    if (m33 && s->m33.cpu) {
+        cpu_reset(CPU(s->m33.cpu));
+    }
+
+    return loaded;
+}
+
+/*
  * Start/stop an M-core (M33 SM, M7), keeping its PSCI power_state and
  * halt_reason consistent with cs->halted. The SM/boot drives the M33/M7
  * lifecycle directly (not via the PSCI powerctl path), so we must maintain
@@ -893,8 +1153,18 @@ static void fsl_imx95_a55c0_release(FslImx95State *s)
 static void fsl_imx95_m33_start_bh(void *opaque)
 {
     FslImx95State *s = opaque;
-    const void *itcm = memory_region_get_ram_ptr(&s->m33_itcm);
-    uint32_t initial_sp = ldl_le_p(itcm);
+    const void *itcm;
+    uint32_t initial_sp;
+
+    /*
+     * Do the boot ROM's job first, if there is an image set to do it with.
+     * It can put the SM in ITCM, which is what the test below is reading, so
+     * the rest of this function needs no special case for a ROM boot.
+     */
+    fsl_imx95_rom_boot(s);
+
+    itcm = memory_region_get_ram_ptr(&s->m33_itcm);
+    initial_sp = ldl_le_p(itcm);
 
     if (initial_sp != 0 && s->m33.cpu) {
         CPUState *cs = CPU(s->m33.cpu);
@@ -3098,6 +3368,12 @@ static const Property fsl_imx95_properties[] = {
                      CanBusState *),
     DEFINE_PROP_LINK("canbus4", FslImx95State, canbus[4], TYPE_CAN_BUS,
                      CanBusState *),
+    /*
+     * Stand in for the boot ROM: read the image set off uSDHC1 instead of
+     * taking the SM and SPL from "-device loader". The board turns this on
+     * when no -kernel was given (hw/arm/imx95-evk.c).
+     */
+    DEFINE_PROP_BOOL("rom-boot", FslImx95State, rom_boot, false),
 };
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)
