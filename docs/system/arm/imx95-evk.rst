@@ -140,7 +140,7 @@ debug monitor; it is wired to the second ``-serial`` backend
 desired.
 
 Booting from the card, as the ROM does
-'''''''''''''''''''''''''''''''''''''
+''''''''''''''''''''''''''''''''''''''
 
 The ``-device loader`` lines above hand firmware straight to a core, which is
 not how a board starts. With **no** ``-kernel``, the machine instead stands in
