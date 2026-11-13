@@ -217,14 +217,40 @@ BL31 and OP-TEE are NXP BSP artifacts and are not redistributable, so they are
 operator-supplied; both can be taken out of a BSP ``imx-boot`` image, which is
 a container set in the format ``mkbootimg.py`` documents.
 
-Two things this does not yet give you. A released BSP image is built for
+One thing this does not yet give you: a released BSP image is built for
 silicon revision 2.0 or later, so its containers are 0x4000-aligned and carry
 version-2 headers, while this machine reports rev 1.1 and both it and SPL walk
 a set with the 0x400 stride ``is_imx95_a0()`` selects - so such an image has to
-be rebuilt rather than used as it is. And Linux on top of BL31 is untested:
-PSCI secondary-core bring-up now belongs to the firmware, which releases cores
-through the SM rather than through the CPUWAIT path this machine models for
-core 0.
+be rebuilt rather than used as it is.
+
+Linux SMP on the secure chain
+'''''''''''''''''''''''''''''
+
+``tests/uboot/run-tfa-linux.sh`` carries that same image set up into Linux and
+checks that every A55 comes online. Nothing in QEMU starts them: Linux issues a
+PSCI CPU_ON, BL31 answers it, BL31 asks the SM over the secure channel, and the
+SM programs ``CA55_RVBARADDR<n>`` and clears that core's ``CA55_CPUWAIT`` bit.
+The machine turns the released bit into a reset of that core at the vector it
+was handed, which is both where it starts and how it comes up at EL3, where
+BL31's warm-boot path expects to be entered.
+
+Two details of the model are load-bearing for this, and both were silent until
+real firmware asked:
+
+* **All six CPUWAIT bits.** Only core 0's gate was wired, because on the
+  non-secure path QEMU's own PSCI starts the secondaries and the register is
+  never read.
+* **MPIDR.MT.** The six A55s are one DynamIQ cluster, so the core number is in
+  Aff1 and Aff0 is a thread level - and MPIDR.MT is what tells a reader so.
+  The affinity fields here matched the DTS while that bit stayed clear, which
+  none of Linux, U-Boot or TF-A objects to, because each numbers cores its own
+  way. OP-TEE's generic ``get_core_pos_mpidr()`` does object: with MT clear it
+  re-normalises the MPIDR as though Aff0 held the core, derives core positions
+  0, 4, 8, ..., and parks every core whose position lands past
+  ``CFG_TEE_CORE_NB_CORE`` in its ``unhandled_cpu`` loop. What that looked like
+  from the console was five cores timing out in Linux with "failed to come
+  online", with the first parked core still holding a BL31 spinlock the rest
+  were waiting on.
 
 System Manager standalone
 '''''''''''''''''''''''''

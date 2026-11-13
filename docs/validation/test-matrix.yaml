@@ -24,7 +24,7 @@ present:
   - { block: "Cortex-M33 System Manager (real SM fw)", tier: A, test: boot,                  evidence: "Runs real NXP SM firmware; Linux's sole SCMI provider over MU" }
   - { block: "Cortex-M7 (real-time domain)",       tier: A, test: "harness:m7-rpmsg",        evidence: "SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip" }
   - { block: "GICv3 + ITS",                        tier: A, test: boot,                       evidence: "Underpins boot + MSI-X for NETC/PCIe" }
-  - { block: "U-Boot boot chain + network boot",   tier: A, test: "harness:uboot",             evidence: "emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace" }
+  - { block: "U-Boot boot chain + network boot",   tier: A, test: "harness:uboot",             evidence: "emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI" }
   - { block: "MU mailbox cross-connect",           tier: A, test: boot,                       evidence: "SCMI + rpmsg + ELE transports" }
   - { block: "eDMA v3/v5",                         tier: A, test: "qtest:imx95-edma-test",    evidence: "Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave" }
   # --- Networking (Tier A) ---
