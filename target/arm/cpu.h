@@ -1092,6 +1092,14 @@ struct ArchCPU {
     /* Uniprocessor system with MP extensions */
     bool mp_is_up;
 
+    /*
+     * MPIDR.MT: the lowest affinity level consists of logical PEs implemented
+     * with a multi-threading-like approach, so a reader must take the core
+     * number from Aff1 rather than Aff0. DynamIQ (DSU) clusters are numbered
+     * that way.
+     */
+    bool mp_mt;
+
     /* True if we tried kvm_arm_host_cpu_features() during CPU instance_init
      * and the probe failed (so we need to report the error in realize)
      */
