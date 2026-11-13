@@ -43,6 +43,7 @@
 #include "hw/core/qdev-clock.h"
 #include "hw/core/boards.h"
 #include "hw/core/qdev.h"
+#include "hw/misc/imx95_aonmix.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/i2c/i2c.h"
@@ -1135,19 +1136,67 @@ static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
 }
 
 /*
- * Release A55 core 0. Driven either by the SM clearing CA55_CPUWAIT.CPU0_WAIT
- * (the silicon path) or directly by the machine when no SM firmware is staged.
+ * Release an A55 core, driven by the SM clearing that core's CA55_CPUWAIT bit
+ * - or, for core 0 with no SM firmware staged, directly by the machine.
  * Idempotent: the SM writes CPUWAIT more than once during CpuStart.
+ *
+ * A secondary has no loader to set its PC: its entry point is whatever the SM
+ * wrote to CA55_RVBARADDR<n> just before opening the gate, which on silicon
+ * is wired to that core's RVBAR input. Applying it means a reset, because
+ * RVBAR is sampled at reset - which is also how the core comes up at EL3,
+ * where the firmware that asked for it expects to be entered.
  */
-static void fsl_imx95_a55c0_release(FslImx95State *s)
+static void fsl_imx95_a55_release_work(CPUState *cs, run_on_cpu_data data)
 {
-    CPUState *cs = CPU(&s->cpu[0]);
+    uint64_t rvbar = data.target_ptr;
 
     if (!cs->halted) {
         return;
     }
+
+    if (rvbar) {
+        ARM_CPU(cs)->rvbar_prop = rvbar;
+        cpu_reset(cs);
+    }
     fsl_imx95_set_cpu_run(cs, true);
-    cpu_resume(cs);
+}
+
+static void fsl_imx95_a55_release(FslImx95State *s, unsigned core)
+{
+    CPUState *cs = CPU(&s->cpu[core]);
+    uint64_t rvbar = 0;
+
+    if (!cs->halted) {
+        return;
+    }
+
+    /*
+     * Core 0 is the boot CPU, and whatever loaded it has already set its PC:
+     * fsl_imx95_rom_boot() from the image set's A55 entry, or arm_load_kernel()
+     * for -kernel. The SM does program CA55_RVBARADDR0 too - with that same
+     * entry, in the chain this was traced on - but a -kernel boot has no
+     * container for it to agree with, and there the loader's PC is the one
+     * that is right. So the boot CPU keeps the release it has always had.
+     */
+    if (core > 0 && s->aonmix) {
+        rvbar = imx95_aonmix_a55_rvbar(IMX95_AONMIX(s->aonmix), core);
+    }
+
+    trace_imx95_a55_release(core, rvbar);
+
+    if (!rvbar) {
+        fsl_imx95_set_cpu_run(cs, true);
+        cpu_resume(cs);
+        return;
+    }
+
+    /*
+     * Reset has to land with the core stopped, and the write that got us here
+     * happened in the M33's TCG block - a different CPU. Same shape as the M7
+     * run gate.
+     */
+    async_run_on_cpu(cs, fsl_imx95_a55_release_work,
+                     RUN_ON_CPU_TARGET_PTR(rvbar));
 }
 
 static void fsl_imx95_m33_start_bh(void *opaque)
@@ -1182,7 +1231,7 @@ static void fsl_imx95_m33_start_bh(void *opaque)
      * and release core 0 directly, preserving the plain "-kernel with no SM"
      * boot. (Such a guest has no SCMI provider anyway.)
      */
-    fsl_imx95_a55c0_release(s);
+    fsl_imx95_a55_release(s, 0);
 }
 
 /*
@@ -1312,22 +1361,44 @@ static void fsl_imx95_m7_sysresetreq_handler(void *opaque, int n, int level)
                                   FSL_IMX95_M7_SYSRESETREQ_M33_IRQ), level);
 }
 
-static void fsl_imx95_a55c0_run_bh(void *opaque)
+typedef struct {
+    FslImx95State *s;
+    unsigned core;
+} Imx95A55Release;
+
+static void fsl_imx95_a55_run_bh(void *opaque)
 {
-    fsl_imx95_a55c0_release(opaque);
+    Imx95A55Release *r = opaque;
+
+    fsl_imx95_a55_release(r->s, r->core);
+    g_free(r);
 }
 
-static void fsl_imx95_a55c0_run_handler(void *opaque, int n, int level)
+static void fsl_imx95_a55_run_handler(void *opaque, int n, int level)
 {
+    Imx95A55Release *r;
+
     /*
-     * Only the release edge matters: the SM never re-asserts CPU0_WAIT once
-     * Linux is running, and a "hold" here would stop the boot CPU from inside
-     * the M33's own TCG block. Defer like the M7 path does.
+     * Only the release edge is acted on. The SM does re-assert these bits -
+     * it sets every one of them, core 0's included, when it tears the AP
+     * logical machine down - and honouring that would stop the boot CPU from
+     * inside the M33's own TCG block, during a shutdown that is already
+     * underway. Note the consequence: a core that has been stopped stays
+     * running here, so a PSCI CPU_OFF leaves it parked wherever the firmware
+     * left it rather than halted. Nothing we boot cares, because the SM's
+     * single-core stop works through the SRC per-core reset line rather than
+     * this register, which the model does not act on either.
+     *
+     * Defer like the M7 path does.
      */
-    if (level) {
-        aio_bh_schedule_oneshot(qemu_get_aio_context(),
-                                fsl_imx95_a55c0_run_bh, opaque);
+    if (!level) {
+        return;
     }
+
+    r = g_new(Imx95A55Release, 1);
+    r->s = opaque;
+    r->core = n;
+    aio_bh_schedule_oneshot(qemu_get_aio_context(), fsl_imx95_a55_run_bh, r);
 }
 
 static void fsl_imx95_m7_run_handler(void *opaque, int n, int level)
@@ -2316,8 +2387,10 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                     fsl_imx95_memmap[FSL_IMX95_BLK_CTRL_S_AONMIX].addr);
     qdev_connect_gpio_out_named(s->aonmix, "m7-run", 0,
         qemu_allocate_irq(fsl_imx95_m7_run_handler, s, 0));
-    qdev_connect_gpio_out_named(s->aonmix, "a55c0-run", 0,
-        qemu_allocate_irq(fsl_imx95_a55c0_run_handler, s, 0));
+    for (i = 0; i < FSL_IMX95_NUM_A55_CPUS; i++) {
+        qdev_connect_gpio_out_named(s->aonmix, "a55-run", i,
+            qemu_allocate_irq(fsl_imx95_a55_run_handler, s, i));
+    }
 
     /*
      * ANATOP/PLL: the SM's DVFS path powers a PLL up and polls
