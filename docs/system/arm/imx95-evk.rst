@@ -252,6 +252,17 @@ real firmware asked:
   online", with the first parked core still holding a BL31 spinlock the rest
   were waiting on.
 
+Taking a core back out again does not work, though. Offlining one from Linux
+(``echo 0 > /sys/devices/system/cpu/cpu1/online``) reports it down but warns
+that it "may not have shut down cleanly (AFFINITY_INFO reports 0)", and
+bringing it back fails with ``psci: failed to boot CPU1 (-22)``. The gate
+model is the reason: only the release edge of a CPUWAIT bit is acted on, so a
+stopped core keeps running in the model and the firmware's view of it never
+reaches off. Modelling the stop properly means the SRC per-core reset line
+rather than this register, since that is what the SM's single-core stop
+drives - CPUWAIT is only asserted for the cluster-wide reset. Nothing on a
+boot path needs it, so it is not modelled.
+
 System Manager standalone
 '''''''''''''''''''''''''
 
