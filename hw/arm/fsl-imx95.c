@@ -1461,14 +1461,29 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
                                 &error_abort);
 
         /*
-         * MPIDR per-CPU. The Linux DTS (imx95.dtsi cpu@0..cpu@500)
-         * puts each A55 in its own cluster: Aff1 = CPU index, Aff0 = 0.
-         * So cpu[i] gets mp-affinity = i << 8. PSCI CPU_ON from Linux
-         * uses these MPIDR values to identify the target CPU; without
-         * the override QEMU would default to Aff0=i which doesn't match
-         * the DT and PSCI CPU_ON fails for every secondary.
+         * MPIDR per-CPU. The six A55s are one DynamIQ (DSU) cluster, and a
+         * DSU numbers its cores in Aff1 with Aff0 left for threads: the Linux
+         * DTS has cpu@0..cpu@500 under a single cpu-map cluster0, so cpu[i]
+         * gets mp-affinity = i << 8. PSCI CPU_ON from Linux uses these MPIDR
+         * values to identify the target CPU; without the override QEMU would
+         * default to Aff0 = i, which doesn't match the DT and PSCI CPU_ON
+         * fails for every secondary.
+         *
+         * That numbering is only half the story, and the missing half is not
+         * cosmetic: a reader has to be told that Aff0 is a thread level, or
+         * it will take the core number from Aff0 (always 0 here) and the
+         * cluster from Aff1. MPIDR.MT says so, and a DSU sets it. OP-TEE's
+         * generic get_core_pos_mpidr() is exactly such a reader - with MT
+         * clear it normalises the MPIDR by shifting it, lands on core
+         * position i * (1 << CFG_CORE_CLUSTER_SHIFT), and parks every core
+         * whose position lands past CFG_TEE_CORE_NB_CORE in its
+         * "unhandled_cpu" loop. The vendor's own OP-TEE build has no aarch64
+         * override of that function, so this bit is load-bearing for the
+         * secure-firmware boot.
          * Source: references/linux-imx/arch/arm64/boot/dts/freescale/imx95.dtsi
          */
+        object_property_set_bool(OBJECT(&s->cpu[i]), "mpidr-mt", true,
+                                 &error_abort);
         object_property_set_uint(OBJECT(&s->cpu[i]), "mp-affinity",
                                  (uint64_t)i << 8, &error_abort);
 
