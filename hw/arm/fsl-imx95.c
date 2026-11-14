@@ -797,10 +797,12 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
  * and the SM must release its CPUWAIT), plus the M7 when its firmware was
  * staged.
  *
- * The A55 vector we advertise is core 0's reset PC, which QEMU has already
- * programmed from -kernel or a -device loader. The SM latches it into
- * CA55_RVBARADDR0, which our aonmix model stores but does not act on - the
- * CPU resumes at the PC QEMU set, and the two agree by construction.
+ * The A55 vector we advertise is core 0's reset PC, which has already been
+ * programmed - by fsl_imx95_rom_boot() from the image set, by -kernel, or by
+ * a -device loader. The SM latches it into CA55_RVBARADDR0, which the aonmix
+ * model stores but does not act on for core 0: that CPU resumes at the PC
+ * already set, and the two agree by construction. Cores 1-5 have no such PC,
+ * so for them the stored vector is applied (fsl_imx95_a55_release).
  */
 static void fsl_imx95_write_rom_handover(FslImx95State *s)
 {
@@ -3261,9 +3263,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * nothing in this model used to reach. TF-A BL31 is that agent: running
      * at EL3 it polls the SMT channel_status word at MU1_A + 0x1004 for the
      * channel to go free, and with MU1 left as a logging stub it spins there
-     * forever - no fault, no unimplemented access, just a silent hang before
-     * BL33. (Found by sampling the stalled PC: BL31 sat in
-     * "ldr w2,[x1]; and w2,w2,#3; cmp w2,#3; b.ne" on the MU1_A RSR.)
+     * forever - no fault, and no progress to BL33. (Found from the stub's own
+     * complaint: over a million "mu1: unimplemented device read (size 4,
+     * offset 0x1004)" lines, one per spin of that poll.)
      *
      * Same shape as the MU2 channel above, with the apertures the other way
      * round: the shared page already exists on the B side as cpu_sema, the
