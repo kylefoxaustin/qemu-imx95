@@ -880,6 +880,7 @@ static void fsl_imx95_write_rom_passover(FslImx95State *s)
  * hab_flags[0x18]. An image's offset is relative to its own container header.
  */
 #define ROM_CNT_TAG         0x87
+#define ROM_CNT_TAG_V2X     0x82
 #define ROM_CNT_VERSION     0x00
 #define ROM_CNT_HDR_SIZE    0x10
 #define ROM_CNT_IMG_SIZE    0x80
@@ -888,11 +889,18 @@ static void fsl_imx95_write_rom_passover(FslImx95State *s)
  * Stride from one container header to the next within a set: the ROM and SPL
  * both step by ALIGN(header_length, this), so the headers sit at the front of
  * the set and the payloads follow. U-Boot's container_hdr_alignment() returns
- * 0x400 on i.MX 95 A0, which is the revision this machine reports.
+ * 0x400 for every i.MX 95 below rev 2.0 - its is_imx95_a0() is a misnomer
+ * covering that whole range - and this machine's ELE reports rev 0xA1.
  */
 #define ROM_CNT_HDR_ALIGN   0x400
 
-/* Containers in one set: ELE, V2X, then the one carrying the boot images. */
+/*
+ * Containers in one set: ELE, then either a V2X container followed by the one
+ * carrying the boot images, or the boot images in the second container
+ * itself. Which of the two shapes it is decides where the set ends, so the
+ * walk below follows SPL's get_imageset_end() rather than probing a fixed
+ * number of slots.
+ */
 #define ROM_CNT_PER_SET     3
 
 /*
@@ -979,11 +987,12 @@ static bool fsl_imx95_rom_place(FslImx95State *s, uint64_t dst,
 /*
  * Parse the container header at @off, appending its executable images to
  * @imgs. Returns the header length, so the caller can step to the next
- * header, or zero when there is no container here - which is how the walk
- * ends, exactly as it does in SPL's get_imageset_end().
+ * header, or zero when there is no container here. Sets @v2x when this is a
+ * V2X container, which is what tells the caller the set continues past it.
  */
 static uint16_t fsl_imx95_rom_container(BlockBackend *blk, uint64_t off,
-                                        Imx95RomImage *imgs, int *n)
+                                        Imx95RomImage *imgs, int *n,
+                                        bool *v2x)
 {
     uint8_t hdr[ROM_CNT_HDR_SIZE];
     uint16_t hdr_len;
@@ -992,7 +1001,20 @@ static uint16_t fsl_imx95_rom_container(BlockBackend *blk, uint64_t off,
     if (blk_pread(blk, off, sizeof(hdr), hdr, 0) < 0) {
         return 0;
     }
-    if (hdr[0x03] != ROM_CNT_TAG || hdr[0x00] != ROM_CNT_VERSION) {
+    if (hdr[0x00] != ROM_CNT_VERSION) {
+        return 0;
+    }
+    if (hdr[0x03] == ROM_CNT_TAG_V2X) {
+        /*
+         * A V2X container. Its images are for the V2X cores, which this
+         * machine does not model, so there is nothing here to load - but the
+         * set continues past it, and that is the only shape in which a third
+         * container is looked at.
+         */
+        *v2x = true;
+        return lduw_le_p(hdr + 0x01);
+    }
+    if (hdr[0x03] != ROM_CNT_TAG) {
         return 0;
     }
 
@@ -1064,12 +1086,24 @@ static int fsl_imx95_rom_boot(FslImx95State *s)
     }
 
     for (i = 0; i < ROM_CNT_PER_SET; i++) {
-        uint16_t hdr_len = fsl_imx95_rom_container(blk, off, imgs, &n);
+        bool v2x = false;
+        uint16_t hdr_len = fsl_imx95_rom_container(blk, off, imgs, &n, &v2x);
 
         if (!hdr_len) {
             break;
         }
         off += QEMU_ALIGN_UP(hdr_len, ROM_CNT_HDR_ALIGN);
+        /*
+         * get_imageset_end() steps to a third container only when the second
+         * one is a V2X container; without one, offset[2] = offset[1] and the
+         * set ends at the second. Stepping on regardless would walk into set
+         * 1 and take its first executable image for a boot image - which,
+         * with a BL31 there, is core 0 starting at BL31 with no SPL beneath
+         * it and no diagnostic to say so.
+         */
+        if (i == 1 && !v2x) {
+            break;
+        }
     }
 
     for (i = 0; i < n; i++) {

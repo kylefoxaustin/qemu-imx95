@@ -34,11 +34,11 @@ declares images instead of being empty:
   0x8000  container A - header only, standing in for the ELE container.
   0x8400  container 0 - two image entries: the SM for the M33 and SPL for the
           A55. Header length 0x10 + 2 * 0x80 = 0x110.
-  0x9000  payloads, at offset 0xc00 within that container. 0xc00 rather than
-          0x400 so the byte at 0x8800 - where a third container header would
-          sit, and where both the ROM and SPL probe for one - stays zero, and
-          the walk ends there for a definite reason rather than because a
-          payload happened not to look like a container.
+  0x9000  payloads, at offset 0xc00 within that container, leaving the
+          third container-header slot at 0x8800 zero. Neither the model nor
+          SPL looks there - a set without a V2X container ends at its second
+          container, which is this one - but keeping the slot empty costs
+          nothing and keeps the layout readable.
   ...     container B (set 1) at ROUND(end of set 0, 1 KiB), exactly where
           SPL's get_imageset_end() will look for it.
 
