@@ -32,7 +32,8 @@ The ``imx95-19x19-evk`` machine implements the following devices:
  * NXP Messaging Unit v2 (MU2) with the dual-aperture A55-MUA <->
    M33-MUB cross-connect that carries SCMI; plus MUI_A5 (M7 <-> SM
    SCMI) and MU7 (A55 <-> M7 rpmsg) cross-connects
- * BLK_CTRL_S_AONMIX M7 CPU-WAIT gate (the SM's M7 hold/run control)
+ * BLK_CTRL_S_AONMIX CPU-WAIT gates (the SM's M7 and A55 hold/run control)
+   and the A55 reset-vector registers
  * System Counter (24 MHz live up-counter with compare-match IRQ; the
    Linux broadcast clockevent on this machine)
  * uSDHC storage controller (SDMA, used by U-Boot SD boot)

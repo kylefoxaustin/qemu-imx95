@@ -992,7 +992,7 @@ addresses and IRQ numbers.
 | `hw/net/fsl_enetc.c`        | NETC ENETC v4 Ethernet PF (PCIe endpoint; BD-ring DMA, MSI-X via ITS) |
 | `hw/timer/imx95_sysctr.c`   | system-counter clockevent timer |
 | `hw/misc/imx95_{src,anatop,gpc,pmic,dpu,ele_server,wdog}.c` | SM/Linux bring-up device models |
-| `hw/misc/imx95_aonmix.c`    | AONMIX M7 CPU-WAIT gate (v1.x Step 5 — the SM's M7 run/hold control) |
+| `hw/misc/imx95_aonmix.c`    | AONMIX CPU-WAIT gates (the SM's M7 and A55 run/hold control) + A55 reset vectors |
 | `tests/swap-boot/run.sh`    | full Linux-on-real-SM boot |
 | `tests/sm-banner/run.sh`    | SM standalone to its debug monitor |
 | `tests/cm7-hello/`, `tests/m7-boot/` | in-tree M7 firmware + standalone M7 boot test |

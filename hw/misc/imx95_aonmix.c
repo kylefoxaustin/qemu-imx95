@@ -1,5 +1,5 @@
 /*
- * NXP i.MX 95 BLK_CTRL_S_AONMIX - minimal model for the M7 CPU-WAIT gate
+ * NXP i.MX 95 BLK_CTRL_S_AONMIX - minimal model for the CPU-WAIT gates
  *
  * Copyright (c) 2026, Kyle Fox
  *

@@ -292,7 +292,7 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
         /* FSL_IMX95_CCM is a real clock-root register model (imx95.ccm). */
         FSL_IMX95_IOMUXC,
         FSL_IMX95_TRDC_AON,
-        /* BLK_CTRL_S_AONMIX has a real model (M7 CPU-WAIT gate) below. */
+        /* BLK_CTRL_S_AONMIX has a real model (the CPU-WAIT gates) below. */
         FSL_IMX95_BLK_CTRL_NS_ANOMIX,
         FSL_IMX95_BLK_CTRL_WAKEUPMIX, FSL_IMX95_BLK_CTRL_NETCMIX,
         FSL_IMX95_WDOG4, FSL_IMX95_WDOG5,
@@ -2416,7 +2416,7 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         qemu_allocate_irq(fsl_imx95_src_m7_release_handler, s, 0));
 
     /*
-     * BLK_CTRL_S_AONMIX: real model for the M7 CPU-WAIT gate. Its M7_CFG.WAIT
+     * BLK_CTRL_S_AONMIX: real model for the CPU-WAIT gates. Its M7_CFG.WAIT
      * bit reads as held at reset, so the SM's CPU_RunModeGet sees the M7 in
      * HOLD and runs the full DEV_SM_CpuStart (releasing CPUWAIT and enabling
      * the M7 fault IRQ). The m7-run gpio carries the released state (1 = run,

@@ -379,7 +379,7 @@ struct FslImx95State {
     DeviceState            *gpc;
     /* SRC (System Reset Controller) - SM mix-slice power-down/up control. */
     DeviceState            *src;
-    /* BLK_CTRL_S_AONMIX - M7 CPU-WAIT gate (SM-managed M7 lifecycle). */
+    /* BLK_CTRL_S_AONMIX - the CPU-WAIT gates (SM-managed M7/A55 lifecycle). */
     DeviceState            *aonmix;
     /* ANATOP/PLL - SM DVFS PLL lock + DFS status (A55 perf level). */
     DeviceState            *anatop;
