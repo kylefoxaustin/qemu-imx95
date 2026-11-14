@@ -101,7 +101,7 @@ readme_groups:
       evidence: "Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong)",
       blocks: ["6x Cortex-A55 (application cluster)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
   - { label: "U-Boot boot chain + network boot", tier: A,
-      evidence: "The full sequence a board runs: ROM handover/passover tables -> SM -> SPL -> U-Boot proper off eMMC -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell",
+      evidence: "The full sequence a board runs: the emulated boot ROM reads the AHAB image set off eMMC with no -device loader -> SM -> SPL -> U-Boot proper -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell. With the vendor's EL3 firmware in the set the same chain runs through TF-A BL31 and OP-TEE to Linux with all six A55s started by the firmware",
       blocks: ["U-Boot boot chain + network boot"] }
   - { label: "Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC", tier: A,
       evidence: "BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time",

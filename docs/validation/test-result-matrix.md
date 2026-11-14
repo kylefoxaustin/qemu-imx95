@@ -16,7 +16,7 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | Cortex-M33 System Manager (real SM fw) | A | PASS (boot) | Runs real NXP SM firmware; Linux's sole SCMI provider over MU |
 | Cortex-M7 (real-time domain) | A | HARNESS | SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip |
 | GICv3 + ITS | A | PASS (boot) | Underpins boot + MSI-X for NETC/PCIe |
-| U-Boot boot chain + network boot | A | HARNESS | ROM tables -> SM -> SPL -> U-Boot off eMMC; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace |
+| U-Boot boot chain + network boot | A | HARNESS | emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI |
 | MU mailbox cross-connect | A | PASS (boot) | SCMI + rpmsg + ELE transports |
 | eDMA v3/v5 | A | PASS (qtest) | Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave |
 | ENETC x3 (2x1G + 10G) | A | PASS (qtest) | BD-ring DMA + MSI-X via ITS; links + traffic; board-to-board |
