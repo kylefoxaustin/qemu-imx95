@@ -38,6 +38,15 @@ struct IMX95ELEServerState {
     /* Link to the MU used as ELE transport (elemu1 in v0.1 SPL). */
     IMXMUState     *mu;
 
+    /*
+     * SoC revision byte reported in ele_get_info_data.soc[31:24]. U-Boot's
+     * get_cpu_rev() turns it into CHIP_REV_1_0 + (this - 0xa0), so 0xA1 is
+     * rev 1.1 and 0xB0 is rev 2.0. It is not cosmetic: the container header
+     * stride and whether U-Boot leaves the SMMU node enabled both key off it
+     * (see hw/arm/fsl-imx95.c).
+     */
+    uint8_t         soc_rev;
+
     /* Accumulator for incoming command words. */
     uint32_t        msg_buf[IMX95_ELE_MAX_WORDS];
     uint32_t        msg_count;

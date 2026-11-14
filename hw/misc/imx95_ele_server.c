@@ -97,9 +97,9 @@ static inline uint32_t ele_make_header(uint8_t version, uint8_t size,
  *   [3] size of ele_get_info_data
  *
  * Real ELE writes a struct ele_get_info_data to the guest address.
- * We fake plausible values: rev 0xA1 i.MX 95, OEM-open lifecycle,
- * UID zero-filled. The Linux/U-Boot drivers do not validate beyond
- * memcpy into gd->arch.
+ * We fake plausible values: i.MX 95 at the revision the "soc-rev"
+ * property names, OEM-open lifecycle, UID zero-filled. The Linux/U-Boot
+ * drivers do not validate beyond memcpy into gd->arch.
  *
  * Response: 2 words. Status word ELE_SUCCESS_IND in data[0].
  */
@@ -125,7 +125,8 @@ static void ele_handle_get_info(IMX95ELEServerState *s)
     uint32_t info_data[ELE_INFO_SIZE_WORDS] = {0};
     QEMU_BUILD_BUG_ON(sizeof(info_data) != ELE_INFO_SIZE_BYTES);
 
-    info_data[ELE_INFO_OFFSET_SOC] = 0xA1009500;  /* SoC rev 0xA1, type 0x95 */
+    /* soc[31:24] = revision, soc[15:8] = SoC type (0x95). */
+    info_data[ELE_INFO_OFFSET_SOC] = ((uint32_t)s->soc_rev << 24) | 0x9500;
     info_data[ELE_INFO_OFFSET_LC]  = 0x00000080;  /* lifecycle = OEM open */
 
     dma_memory_write(&address_space_memory, info_addr,
@@ -397,6 +398,12 @@ static void imx95_ele_server_realize(DeviceState *dev, Error **errp)
 static const Property imx95_ele_server_properties[] = {
     DEFINE_PROP_LINK("mu", IMX95ELEServerState, mu,
                      TYPE_IMX_MU, IMXMUState *),
+    /*
+     * 0xA1 keeps the revision every release so far has reported. The SoC
+     * sets this from its own "soc-rev" property so all four responders and
+     * the boot ROM cannot disagree about it.
+     */
+    DEFINE_PROP_UINT8("soc-rev", IMX95ELEServerState, soc_rev, 0xA1),
 };
 
 static const VMStateDescription vmstate_imx95_ele_server = {
