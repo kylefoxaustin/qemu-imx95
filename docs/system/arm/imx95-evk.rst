@@ -163,10 +163,13 @@ a byte-exact TFTP transfer. Note that the SM goes in as the raw
 ``m33_image.bin``, not the ELF: a container entry carries an explicit load
 address, which is what the ROM works from.
 
-The ROM reads only images whose container entry declares ``IMG_TYPE_EXEC`` with
-an i.MX 9 core id, so media built for the ``-device loader`` flow - where set 0
-declares no images at all - is left untouched and boots exactly as it did
-before. The walk itself can be followed with
+The ROM reads every image whose container entry declares ``IMG_TYPE_EXEC``,
+to the address that entry names, whatever core it is for; the core id only
+decides whether the A55's reset vector is taken from it or the M33 is
+re-reset. Media built for the ``-device loader`` flow is left untouched and
+boots exactly as it did before, because the set it describes ends at its
+second container and the one image in reach carries no ``IMG_TYPE_EXEC``.
+The walk itself can be followed with
 ``-D walk.log -trace 'imx95_rom_*'``:
 
 .. code-block:: none
@@ -203,8 +206,13 @@ exists to implement. It cannot be derived: the card is attached after the CPUs
 are realized, so nothing can see that set 1 holds a BL31.
 
 The chain then runs ROM -> SM -> SPL -> BL31 (EL3) -> OP-TEE (S-EL1) ->
-U-Boot (BL33), which ``tests/uboot/run-tfa.sh`` checks stage by stage. Two
-pieces of the model exist only for it:
+U-Boot (BL33). ``tests/uboot/run-tfa.sh`` checks the stages that announce
+themselves on the console - SPL, the passover, BL31's banner, U-Boot as BL33,
+an interactive prompt - and fails on U-Boot's ``api uid mismatch``, which is
+the only thing this console says about OP-TEE and it only says it when OP-TEE
+is absent. For positive evidence that BL32 is live, ``run-tfa-linux.sh``
+checks ``optee: revision``, which is a real round trip through BL31 into
+OP-TEE. Two pieces of the model exist only for this chain:
 
 * **The SM's second SCMI channel.** Its own configuration declares two agents
   for the AP - ``SCMI_AGENT1 name="AP-S", secure`` on MU1 and
@@ -219,21 +227,36 @@ operator-supplied; both can be taken out of a BSP ``imx-boot`` image, which is
 a container set in the format ``mkbootimg.py`` documents.
 
 One thing this does not yet give you: a released BSP image is built for
-silicon revision 2.0 or later, so its containers are 0x4000-aligned and carry
-version-2 headers, while this machine reports rev 1.1 and both it and SPL walk
-a set with the 0x400 stride ``is_imx95_a0()`` selects - so such an image has to
+silicon revision 2.0 or later, so its containers carry version-2 headers and
+are 0x4000-aligned, while this machine reports rev 1.1 and both it and SPL
+walk a set with the 0x400 stride ``is_imx95_a0()`` selects. The version is
+what bites first - the walk ends on the vendor set's very first header - so
+both have to be supported before the stride matters, and such an image has to
 be rebuilt rather than used as it is.
 
 Linux SMP on the secure chain
 '''''''''''''''''''''''''''''
 
 ``tests/uboot/run-tfa-linux.sh`` carries that same image set up into Linux and
-checks that every A55 comes online. Nothing in QEMU starts them: Linux issues a
-PSCI CPU_ON, BL31 answers it, BL31 asks the SM over the secure channel, and the
-SM programs ``CA55_RVBARADDR<n>`` and clears that core's ``CA55_CPUWAIT`` bit.
-The machine turns the released bit into a reset of that core at the vector it
-was handed, which is both where it starts and how it comes up at EL3, where
-BL31's warm-boot path expects to be entered.
+checks that every A55 comes online. Nothing in QEMU starts them: each core's
+``CA55_RVBARADDR<n>`` is programmed with BL31's warm entry and its
+``CA55_CPUWAIT`` bit is cleared, and the machine turns that released bit into
+a reset of the core at the vector it was handed - which is both where it
+starts and how it comes up at EL3, where BL31's warm-boot path expects to be
+entered.
+
+Worth knowing before you read a trace of it: the five secondaries are
+released back to back early in the boot, long before Linux asks for any of
+them, each pointed at the same warm entry, and no further gate traffic
+happens when Linux does issue its PSCI CPU_ONs - so they are waiting inside
+BL31 by then rather than being started one at a time. Traced with
+``-trace imx95_a55_release -trace imx95_aonmix_cpuwait -trace
+imx_mu_scmi_request``, that boot carries no SCMI ``CPU_START`` (the SM's own
+``COMMAND_CPU_START``, protocol 0x82 message 0x4) at all. Which agent
+performs the AONMIX writes is not attributed by that trace - the model does
+not record the writing CPU - so while the SM owns this block on silicon and
+implements exactly this sequence, reading the releases as the SM's own work
+is a derivation rather than something measured here.
 
 Two details of the model are load-bearing for this, and both were silent until
 real firmware asked:
@@ -248,21 +271,36 @@ real firmware asked:
   way. OP-TEE's generic ``get_core_pos_mpidr()`` does object: with MT clear it
   re-normalises the MPIDR as though Aff0 held the core, derives core positions
   0, 4, 8, ..., and parks every core whose position lands past
-  ``CFG_TEE_CORE_NB_CORE`` in its ``unhandled_cpu`` loop. What that looked like
-  from the console was five cores timing out in Linux with "failed to come
-  online", with the first parked core still holding a BL31 spinlock the rest
-  were waiting on.
+  ``CFG_TEE_CORE_NB_CORE`` in its ``unhandled_cpu`` loop. With
+  ``CFG_CORE_CLUSTER_SHIFT`` 2 and six cores that admits core 1, at position
+  4, and parks core 2 onward - which is exactly what the console showed:
+  CPU1 up, CPUs 2 to 5 timing out with "failed to come online", and
+  ``SMP: Total of 2``. Sampling each core's PC found CPU2 in OP-TEE's
+  ``unhandled_cpu`` loop with its derived position, 8, still in X0, and
+  CPUs 3 to 5 queued on a BL31 lock behind it. One parked core looked like
+  four broken ones.
+
+  That this bit is set on silicon is a derivation, not a measurement: the
+  vendor's own OP-TEE binary could not boot a six-core board with MT clear,
+  and it does boot real boards. Reading ``MPIDR_EL1`` on an FRDM board would
+  settle it.
 
 Taking a core back out again does not work, though. Offlining one from Linux
 (``echo 0 > /sys/devices/system/cpu/cpu1/online``) reports it down but warns
 that it "may not have shut down cleanly (AFFINITY_INFO reports 0)", and
-bringing it back fails with ``psci: failed to boot CPU1 (-22)``. The gate
-model is the reason: only the release edge of a CPUWAIT bit is acted on, so a
-stopped core keeps running in the model and the firmware's view of it never
-reaches off. Modelling the stop properly means the SRC per-core reset line
-rather than this register, since that is what the SM's single-core stop
-drives - CPUWAIT is only asserted for the cluster-wide reset. Nothing on a
-boot path needs it, so it is not modelled.
+bringing it back fails with ``psci: failed to boot CPU1 (-22)`` - BL31
+refusing a core it still believes is on.
+
+The model is not asked to do anything for it. Traced with
+``-trace imx_mu_scmi_request -trace imx95_aonmix_cpuwait``, the offline
+produces exactly one request to the SM, ``COMMAND_CPU_INFO_GET``
+(protocol 0x82 message 0xc) for CPU 1, and no ``CA55_CPUWAIT`` write at all;
+``COMMAND_CPU_STOP`` is never sent. Nor could the SM act on one if it were:
+its ``CPU_ResetSet()`` has cases for the M7 and for the A55 cluster as a
+whole, and an individual A55 index falls through to a ``default`` that
+returns false, so ``DEV_SM_CpuStop()`` would answer ``SM_ERR_NOT_FOUND``.
+Whatever stalls is inside BL31's own CPU_OFF path, which cannot be read from
+here. Nothing on a boot path needs it, so none of it is modelled.
 
 System Manager standalone
 '''''''''''''''''''''''''
