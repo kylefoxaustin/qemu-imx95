@@ -18,7 +18,17 @@
 #     -> OP-TEE initialises (including its ELE RNG) and returns to BL31
 #     -> BL31 enters U-Boot as BL33, which reaches its prompt
 #
-# PASS = every stage announces itself in order AND the prompt is reached.
+# PASS = every stage that announces itself on this console has done so and
+# the prompt is reached. The checks are independent greps, not an order check.
+# OP-TEE prints nothing here on a good boot. With the vendor's BL31 a missing
+# BL32 does not reach U-Boot at all - BL31 enters S-EL1 at address 0 and spins
+# there - so the stage checks below already catch that case. The "api uid
+# mismatch" anomaly covers the other one, a BL31 built with no SPD that goes
+# straight to BL33: U-Boot's OP-TEE driver prints it when the OP-TEE it
+# expects is absent. Note that string is only verified to reach a console at
+# the Linux stage (run-linux.sh's log carries it), not at this one. The
+# positive check lives in run-tfa-linux.sh ("optee: revision"), which is a
+# real round trip through BL31 into OP-TEE.
 # QEMU's PSCI emulation is off for this run (-machine el3-firmware=on), so
 # every SMC is answered by BL31 rather than by us.
 #
@@ -87,12 +97,12 @@ check 'TFA-CHAIN-ALIVE'             "prompt is interactive"
 # emulation were still wired, BL31's own services would be shadowed and these
 # stages would not all have reported.
 for a in 'Synchronous Abort' 'Unhandled fault' 'ERROR ### Please RESET' \
-         'Kernel panic'; do
+         'Kernel panic' 'api uid mismatch'; do
     grep -qa "$a" "$LOG" && { echo "  MISS anomaly: $a"; pass=0; }
 done
 
 [ "$pass" = 1 ] && {
-    echo "PASS: ROM -> SM -> SPL -> BL31 -> OP-TEE -> U-Boot prompt"
+    echo "PASS: ROM -> SM -> SPL -> BL31 -> U-Boot prompt (BL32 live)"
     exit 0
 }
 echo "FAIL"; exit 1

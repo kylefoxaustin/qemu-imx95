@@ -17,8 +17,9 @@
 # where they are used:
 #   - mkbootimg --no-optee: the vendor U-Boot fabricates an optee reserved-
 #     memory node from rom_pointer[], which SPL only fills when it loads OP-TEE
-#     as BL32. This machine models no OP-TEE, so the fixup is neutralised (what
-#     CONFIG_OPTEE=n does).
+#     as BL32. This image carries no OP-TEE, so the fixup is neutralised
+#     (what CONFIG_OPTEE=n does). The EL3-firmware chain, which does carry
+#     one, needs no such patch - see run-tfa-linux.sh.
 #   - mem= in bootargs: this U-Boot build asks the SM for the DRAM size over
 #     SCMI; the prebuilt SM does not answer (it would, on silicon, from real DDR
 #     training), so U-Boot falls back to a compile-time size far larger than the

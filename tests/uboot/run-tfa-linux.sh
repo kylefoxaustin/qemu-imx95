@@ -24,7 +24,7 @@
 # of a BSP imx-boot/flash_all image - it is a container set, and
 # tests/uboot/mkbootimg.py documents the format.
 #
-# Required (override via env): QEMU, SM_BIN, SPL_BIN, UBOOT_BIN, UBOOT_ELF,
+# Required (override via env): QEMU, SM_BIN, SPL_BIN, UBOOT_BIN,
 # BL31_BIN, OPTEE_BIN, IMAGE, DTB, INITRD.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd)
@@ -32,7 +32,6 @@ QEMU=${QEMU:-$ROOT/build/qemu-system-aarch64}
 SM_BIN=${SM_BIN:-$HOME/Documents/nxp/sources/imx-sm/build/mx95evk/m33_image.bin}
 SPL_BIN=${SPL_BIN:-$ROOT/tests/spl-banner/uboot-build/spl/u-boot-spl.bin}
 UBOOT_BIN=${UBOOT_BIN:-$ROOT/tests/spl-banner/uboot-build/u-boot.bin}
-UBOOT_ELF=${UBOOT_ELF:-$ROOT/tests/spl-banner/uboot-build/u-boot}
 BL31_BIN=${BL31_BIN:-}
 OPTEE_BIN=${OPTEE_BIN:-}
 KBUILD=${KBUILD:-$HOME/Documents/linux-imx95-build}
@@ -48,7 +47,6 @@ need() { [ -n "$2" ] || skip "set $1= (operator-supplied BSP artifact)"
          [ -e "$2" ] || skip "missing $1: $2"; }
 need QEMU "$QEMU"; need SM_BIN "$SM_BIN"
 need SPL_BIN "$SPL_BIN"; need UBOOT_BIN "$UBOOT_BIN"
-need UBOOT_ELF "$UBOOT_ELF"
 need BL31_BIN "$BL31_BIN"; need OPTEE_BIN "$OPTEE_BIN"
 need IMAGE "$IMAGE"; need DTB "$DTB"; need INITRD "$INITRD"
 
@@ -83,7 +81,7 @@ KVER=$(strings "$IMAGE" | grep -m1 -oE 'Linux version [0-9][^ ]*' |
 python3 "$HERE/mkbootimg.py" "$UBOOT_BIN" "$WORK/boot.img" \
     --sm "$SM_BIN" --spl "$SPL_BIN" \
     --bl31 "$BL31_BIN" --optee "$OPTEE_BIN" \
-    --uboot-elf "$UBOOT_ELF" >/dev/null
+    >/dev/null
 
 BOOTARGS="earlycon=lpuart32,mmio32,0x44380010 console=ttyLP0,115200"
 BOOTARGS="$BOOTARGS cpuidle.off=1 rdinit=/init mem=$KMEM"

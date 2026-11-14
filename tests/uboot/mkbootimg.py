@@ -168,16 +168,16 @@ def main():
                          'so without a BL32 it enters S-EL1 at address 0 and '
                          'spins in its own vector table. Requires --bl31.')
     ap.add_argument('--uboot-elf',
-                    help='u-boot ELF; if given, the OP-TEE device-tree fixup '
-                         'is neutralised (see --no-optee)')
+                    help='u-boot ELF, used only to locate a symbol for '
+                         '--no-optee; on its own it does nothing')
     ap.add_argument('--no-optee', action='store_true',
                     help='Build boot media for a U-Boot with no OP-TEE. The '
                          'vendor imx95_evk U-Boot fabricates an optee '
                          'reserved-memory node from rom_pointer[], which SPL '
                          'only fills when it loads OP-TEE as BL32. With no '
                          'OP-TEE those registers are garbage and the node '
-                         'reserves nonsense, panicking Linux. This machine '
-                         'does not model OP-TEE, so patch ft_add_optee_node to '
+                         'reserves nonsense, panicking Linux. For an image '
+                         'with no OP-TEE in it, patch ft_add_optee_node to '
                          'return early - exactly what CONFIG_OPTEE=n does.')
     args = ap.parse_args()
 
@@ -276,7 +276,6 @@ def main():
               'set 1 entry %d' % i)
     for o, blob in payloads:
         place(img, uboot_cnt_off + o, blob, 'set 1 payload')
-    data_off = uboot_cnt_off + payloads[-1][0]
 
     with open(args.out, 'wb') as f:
         f.write(img)
