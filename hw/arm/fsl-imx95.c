@@ -883,18 +883,29 @@ static void fsl_imx95_write_rom_passover(FslImx95State *s)
  */
 #define ROM_CNT_TAG         0x87
 #define ROM_CNT_TAG_V2X     0x82
+/*
+ * Header versions the ROM accepts. 0 is the plain AHAB header; 2 appears on
+ * images built with post-quantum signature support, which is what NXP's
+ * released imx-boot carries. U-Boot's valid_container_hdr() accepts both
+ * under CONFIG_IMX_PQC_SUPPORT and the fields this parser reads are in the
+ * same places in either, so the version is a gate and nothing more.
+ */
 #define ROM_CNT_VERSION     0x00
+#define ROM_CNT_VERSION_PQC 0x02
 #define ROM_CNT_HDR_SIZE    0x10
 #define ROM_CNT_IMG_SIZE    0x80
 
 /*
  * Stride from one container header to the next within a set: the ROM and SPL
  * both step by ALIGN(header_length, this), so the headers sit at the front of
- * the set and the payloads follow. U-Boot's container_hdr_alignment() returns
- * 0x400 for every i.MX 95 below rev 2.0 - its is_imx95_a0() is a misnomer
- * covering that whole range - and this machine's ELE reports rev 0xA1.
+ * the set and the payloads follow. U-Boot's container_hdr_alignment() picks
+ * it from the SoC revision - 0x400 below rev 2.0, 0x4000 from rev 2.0 up -
+ * so the ROM has to pick it the same way or the SPL it loads will look for
+ * the next header somewhere the ROM did not put it. is_imx95_a0() is a
+ * misnomer for that whole sub-2.0 range, not just A0.
  */
-#define ROM_CNT_HDR_ALIGN   0x400
+#define ROM_CNT_HDR_ALIGN       0x400
+#define ROM_CNT_HDR_ALIGN_V2    0x4000
 
 /*
  * Containers in one set: ELE, then either a V2X container followed by the one
@@ -987,6 +998,17 @@ static bool fsl_imx95_rom_place(FslImx95State *s, uint64_t dst,
 }
 
 /*
+ * U-Boot's get_cpu_rev() maps the ELE revision byte to CHIP_REV_1_0 +
+ * (byte - 0xa0) and container_hdr_alignment() then tests it against
+ * CHIP_REV_2_0, so the break lands at an ELE byte of 0xB0. Doing the same
+ * arithmetic here keeps the two in step through the one soc-rev property.
+ */
+static uint32_t fsl_imx95_rom_hdr_align(FslImx95State *s)
+{
+    return s->soc_rev < 0xB0 ? ROM_CNT_HDR_ALIGN : ROM_CNT_HDR_ALIGN_V2;
+}
+
+/*
  * Parse the container header at @off, appending its executable images to
  * @imgs. Returns the header length, so the caller can step to the next
  * header, or zero when there is no container here. Sets @v2x when this is a
@@ -1003,7 +1025,7 @@ static uint16_t fsl_imx95_rom_container(BlockBackend *blk, uint64_t off,
     if (blk_pread(blk, off, sizeof(hdr), hdr, 0) < 0) {
         return 0;
     }
-    if (hdr[0x00] != ROM_CNT_VERSION) {
+    if (hdr[0x00] != ROM_CNT_VERSION && hdr[0x00] != ROM_CNT_VERSION_PQC) {
         return 0;
     }
     if (hdr[0x03] == ROM_CNT_TAG_V2X) {
@@ -1094,7 +1116,7 @@ static int fsl_imx95_rom_boot(FslImx95State *s)
         if (!hdr_len) {
             break;
         }
-        off += QEMU_ALIGN_UP(hdr_len, ROM_CNT_HDR_ALIGN);
+        off += QEMU_ALIGN_UP(hdr_len, fsl_imx95_rom_hdr_align(s));
         /*
          * get_imageset_end() steps to a third container only when the second
          * one is a V2X container; without one, offset[2] = offset[1] and the
@@ -2120,6 +2142,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * lines, the responder will register its handler on a still-zeroed
      * MU state and SPL's first ELE TR write will silently no-op.
      */
+    object_property_set_uint(OBJECT(&s->ele_server), "soc-rev",
+                             s->soc_rev, &error_abort);
     object_property_set_link(OBJECT(&s->ele_server), "mu",
                              OBJECT(&s->ele_mu1), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server), errp)) {
@@ -2142,6 +2166,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_mmio_map(mu_sbd, 0,
                         fsl_imx95_memmap[FSL_IMX95_ELE_MU].addr);
     }
+    object_property_set_uint(OBJECT(&s->ele_server0), "soc-rev",
+                             s->soc_rev, &error_abort);
     object_property_set_link(OBJECT(&s->ele_server0), "mu",
                              OBJECT(&s->ele_mu0), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server0), errp)) {
@@ -2201,6 +2227,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * ordering above; the QEMU_BUILD_BUG_ON in the loop body anchors
      * the count but not the order).
      */
+    object_property_set_uint(OBJECT(&s->ele_server2), "soc-rev",
+                             s->soc_rev, &error_abort);
     object_property_set_link(OBJECT(&s->ele_server2), "mu",
                              OBJECT(&s->stub_mu[3]), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server2), errp)) {
@@ -2216,6 +2244,8 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * silent hang, with no fault and no unimplemented-access log, since the
      * MU register file itself is modelled.
      */
+    object_property_set_uint(OBJECT(&s->ele_server3), "soc-rev",
+                             s->soc_rev, &error_abort);
     object_property_set_link(OBJECT(&s->ele_server3), "mu",
                              OBJECT(&s->stub_mu[2]), &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ele_server3), errp)) {
@@ -3594,6 +3624,21 @@ static const Property fsl_imx95_properties[] = {
      * emulate PSCI behind its back. See the psci-conduit choice above.
      */
     DEFINE_PROP_BOOL("el3-firmware", FslImx95State, el3_firmware, false),
+    /*
+     * SoC revision as ele_get_info() reports it: 0xA1 is rev 1.1, 0xB0 is
+     * rev 2.0. Two guest behaviours key off it, which is why it is one
+     * property and not a constant in two files:
+     *
+     *  - the container header stride. U-Boot's container_hdr_alignment()
+     *    returns 0x400 below rev 2.0 and 0x4000 from rev 2.0 up, and the
+     *    emulated ROM below follows the same rule, so an image set and the
+     *    SPL inside it agree about where the next header is.
+     *  - U-Boot's disable_smmu_node() disables the iommu@490d0000 node for
+     *    any revision whose top nibble is 0xa. Raising this to 0xB0 leaves
+     *    that node enabled, and Linux would then probe arm-smmu-v3 against
+     *    a device this machine does not model.
+     */
+    DEFINE_PROP_UINT8("soc-rev", FslImx95State, soc_rev, 0xA1),
 };
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)

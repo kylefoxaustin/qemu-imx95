@@ -336,6 +336,13 @@ struct FslImx95State {
      * it does on silicon. Set from -machine el3-firmware=on.
      */
     bool                    el3_firmware;
+
+    /*
+     * SoC revision, as the ELE responders report it and as the emulated ROM
+     * reads it back to pick the container header stride. One field so the
+     * ROM and the firmware that re-walks the same containers cannot disagree.
+     */
+    uint8_t                 soc_rev;
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
     USBDWC3                 usb3;   /* 0x4c100000: SuperSpeed DWC3 (xHCI) */
