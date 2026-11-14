@@ -226,13 +226,65 @@ BL31 and OP-TEE are NXP BSP artifacts and are not redistributable, so they are
 operator-supplied; both can be taken out of a BSP ``imx-boot`` image, which is
 a container set in the format ``mkbootimg.py`` documents.
 
-One thing this does not yet give you: a released BSP image is built for
-silicon revision 2.0 or later, so its containers carry version-2 headers and
-are 0x4000-aligned, while this machine reports rev 1.1 and both it and SPL
-walk a set with the 0x400 stride ``is_imx95_a0()`` selects. The version is
-what bites first - the walk ends on the vendor set's very first header - so
-both have to be supported before the stride matters, and such an image has to
-be rebuilt rather than used as it is.
+NXP's released image, unmodified
+''''''''''''''''''''''''''''''''
+
+``tests/uboot/run-vendor-image.sh`` puts a BSP ``imx-boot``/``flash_all`` on
+the card exactly as NXP ships it - nothing extracted, repacked or rebuilt -
+and boots it. A released image differs from the one ``mkbootimg.py`` builds in
+three ways, all of which the emulated ROM now handles: its container headers
+are version 2, the stride between them is 0x4000 rather than 0x400, and its
+set has three containers because the second one is a V2X container, which is
+the only shape in which a third is looked at at all.
+
+The stride is a function of the SoC revision, not a constant. U-Boot's
+``container_hdr_alignment()`` returns 0x400 below rev 2.0 and 0x4000 from rev
+2.0 up, and the ROM follows the same rule off the same place, the machine's
+``soc-rev`` property (the byte ``ele_get_info()`` reports; 0xA1 is rev 1.1,
+0xB0 is rev 2.0). One property, because a ROM and the SPL it loads disagreeing
+about where the next header is would be a silent misboot. The default stays
+0xA1; a released image needs that revision, and the EL3 firmware it carries
+needs EL3 left to the guest::
+
+  -machine imx95-19x19-evk,el3-firmware=on -global fsl-imx95.soc-rev=0xb0
+
+With that, the chain measured on a ``LF6.18.20`` EVK image runs end to end:
+the ROM walks the set and loads NXP's SM to M33 ITCM and NXP's SPL to OCRAM,
+the SM announces itself on the M33 console, SPL reads the ROM passover, works
+out the second image set at 0xf5800 by its own arithmetic and loads all three
+images in it - TF-A BL31 v2.14.1 to 0x8a200000, OP-TEE to 0x8c000000 and
+U-Boot proper to 0x90200000 - BL31 runs at EL3, enters OP-TEE in secure EL1,
+and U-Boot proper comes up as BL33 and offers a prompt. That U-Boot prints
+``i.MX95 Rev2.0``, which is the guest reading back the revision the
+``soc-rev`` property set rather than this document asserting it.
+
+``el3-firmware=on`` is required, for the same reason the TF-A tests need it:
+EL3 belongs to the guest here, so QEMU's own PSCI has to be off. Without it
+the SMC OP-TEE issues to tell BL31 its init is done gets answered by QEMU
+instead, OP-TEE never hands back, and the chain stops after BL31's banner
+with all three images correctly loaded and CPU 0 parked in secure EL1 - a
+failure that prints nothing at all.
+
+Two things are worth knowing about this path:
+
+* SPL and U-Boot both report ``Failed to get ddr cfg, scmi_err = -131``, and
+  NXP's own SM is the one answering, so whatever it reads is not in this
+  machine's model of the parts it reads. U-Boot copes -
+  ``board_phys_sdram_size()`` falls back to the compile-time size when the
+  call fails - but the size it then reports is the EVK's 15.8 GiB rather
+  than whatever ``-m`` gave it. At ``-m 2G`` the first bank it derives is
+  still entirely inside real memory, so it relocates and runs; a smaller
+  ``-m`` would not be safe.
+* Linux on top of this is the one stage still missing, and the revision is
+  why. U-Boot's ``disable_smmu_node()`` strips ``iommu@490d0000`` out of the
+  dtb only when the revision's top nibble is 0xa or the SM's config name is
+  ``mx95alt``; this image's SM reports ``mx95evk``, so at 0xB0 neither
+  applies and Linux is handed a dtb that still has the SMMU node in it -
+  which this machine does not model. The machine's own SMMU gap never showed
+  through U-Boot before, because every release so far reported an A revision.
+
+Which revision real EVK or FRDM silicon reports is not measured here; the
+measurement is ``/sys/devices/soc0/revision`` on a board.
 
 Linux SMP on the secure chain
 '''''''''''''''''''''''''''''
