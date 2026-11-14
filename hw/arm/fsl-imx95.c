@@ -1174,6 +1174,11 @@ static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
  * - or, for core 0 with no SM firmware staged, directly by the machine.
  * Idempotent: the SM writes CPUWAIT more than once during CpuStart.
  *
+ * The test for "is this core off" is power_state, as in arm_set_cpu_on(),
+ * not cs->halted: halted is also set for a core sitting in WFI, which is
+ * running as far as the guest and the firmware are concerned, and resetting
+ * one of those to RVBAR would yank an idle Linux CPU to EL3.
+ *
  * A secondary has no loader to set its PC: its entry point is whatever the SM
  * wrote to CA55_RVBARADDR<n> just before opening the gate, which on silicon
  * is wired to that core's RVBAR input. Applying it means a reset, because
@@ -1184,12 +1189,17 @@ static void fsl_imx95_a55_release_work(CPUState *cs, run_on_cpu_data data)
 {
     uint64_t rvbar = data.target_ptr;
 
-    if (!cs->halted) {
+    if (ARM_CPU(cs)->power_state != PSCI_OFF) {
         return;
     }
 
     if (rvbar) {
-        ARM_CPU(cs)->rvbar_prop = rvbar;
+        /*
+         * Through the property, as hw/misc/xlnx-zynqmp-apu-ctrl.c does from
+         * its own RVBARADDR write: "rvbar" is added with
+         * object_property_add_uint64_ptr(), so it is settable after realize.
+         */
+        object_property_set_int(OBJECT(cs), "rvbar", rvbar, &error_abort);
         cpu_reset(cs);
     }
     fsl_imx95_set_cpu_run(cs, true);
@@ -1200,7 +1210,7 @@ static void fsl_imx95_a55_release(FslImx95State *s, unsigned core)
     CPUState *cs = CPU(&s->cpu[core]);
     uint64_t rvbar = 0;
 
-    if (!cs->halted) {
+    if (ARM_CPU(cs)->power_state != PSCI_OFF) {
         return;
     }
 
