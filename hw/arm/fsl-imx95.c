@@ -926,6 +926,14 @@ static void fsl_imx95_write_rom_passover(FslImx95State *s)
 #define ROM_IMG_TYPE_EXEC   0x3
 #define ROM_IMG_CORE_M33    0x1
 #define ROM_IMG_CORE_A55    0x2
+/*
+ * The two images a V2X firmware container carries, which is how SPL's
+ * is_v2x_fw_container() recognises one - the 0x82 tag alone is not its test.
+ */
+#define ROM_IMG_TYPE_V2X_PRI 0x0b
+#define ROM_IMG_TYPE_V2X_SND 0x0c
+#define ROM_IMG_CORE_V2X_PRI 9
+#define ROM_IMG_CORE_V2X_SND 10
 
 #define ROM_MAX_IMAGES      8
 /* Nothing the ROM loads is remotely this big; a larger size is a bad image. */
@@ -1009,6 +1017,52 @@ static uint32_t fsl_imx95_rom_hdr_align(FslImx95State *s)
 }
 
 /*
+ * SPL's is_v2x_fw_container(), which is what decides whether the set has a
+ * third container. Its test is not the 0x82 tag: a container qualifies only
+ * if it is version 0, carries two to four images, and the first two are the
+ * primary and secondary V2X firmware for the two V2X cores. Keeping the ROM
+ * on the same test is the point - a container the ROM calls V2X and SPL does
+ * not (or the reverse) is a set whose end the two disagree about, which is a
+ * misboot with no diagnostic rather than an error.
+ */
+static bool fsl_imx95_rom_is_v2x(BlockBackend *blk, uint64_t off,
+                                 const uint8_t *hdr)
+{
+    static const struct {
+        uint8_t type, core;
+    } want[2] = {
+        { ROM_IMG_TYPE_V2X_PRI, ROM_IMG_CORE_V2X_PRI },
+        { ROM_IMG_TYPE_V2X_SND, ROM_IMG_CORE_V2X_SND },
+    };
+    unsigned i;
+
+    if (hdr[0x03] != ROM_CNT_TAG && hdr[0x03] != ROM_CNT_TAG_V2X) {
+        return false;
+    }
+    if (hdr[0x00] != ROM_CNT_VERSION) {
+        return false;
+    }
+    if (hdr[0x0b] < 2 || hdr[0x0b] > 4) {
+        return false;
+    }
+    for (i = 0; i < ARRAY_SIZE(want); i++) {
+        uint8_t e[ROM_CNT_IMG_SIZE];
+        uint32_t flags;
+
+        if (blk_pread(blk, off + ROM_CNT_HDR_SIZE + i * ROM_CNT_IMG_SIZE,
+                      sizeof(e), e, 0) < 0) {
+            return false;
+        }
+        flags = ldl_le_p(e + 0x18);
+        if (ROM_IMG_TYPE(flags) != want[i].type ||
+            ROM_IMG_CORE(flags) != want[i].core) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
  * Parse the container header at @off, appending its executable images to
  * @imgs. Returns the header length, so the caller can step to the next
  * header, or zero when there is no container here. Sets @v2x when this is a
@@ -1028,12 +1082,12 @@ static uint16_t fsl_imx95_rom_container(BlockBackend *blk, uint64_t off,
     if (hdr[0x00] != ROM_CNT_VERSION && hdr[0x00] != ROM_CNT_VERSION_PQC) {
         return 0;
     }
-    if (hdr[0x03] == ROM_CNT_TAG_V2X) {
+    if (fsl_imx95_rom_is_v2x(blk, off, hdr)) {
         /*
-         * A V2X container. Its images are for the V2X cores, which this
-         * machine does not model, so there is nothing here to load - but the
-         * set continues past it, and that is the only shape in which a third
-         * container is looked at.
+         * A V2X firmware container. Its images are for the V2X cores, which
+         * this machine does not model, so there is nothing here to load - but
+         * the set continues past it, and that is the only shape in which a
+         * third container is looked at.
          */
         *v2x = true;
         return lduw_le_p(hdr + 0x01);
