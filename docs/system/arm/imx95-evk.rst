@@ -418,6 +418,21 @@ Two SM-managed behaviours are modelled:
   debug monitor. The ``Cortex-M7 fault recovery`` functional test below
   exercises this end to end.
 
+Storage and networking
+----------------------
+
+Both uSDHC controllers carry a card Linux can read and write. The soldered
+eMMC on uSDHC1 is attached with ``-drive if=none,...,id=mmc0 -device
+emmc,drive=mmc0``; the removable SD slot on uSDHC2 with ``-drive ...,if=sd``,
+whose card-detect (``cd-gpios = <&gpio3 0>``) the board drives, so it is
+detected on the stock EVK dtb with no override. Both appear as ``/dev/mmcblk*``
+and survive an ext4 mkfs, mount and sync; ``tests/sd-emmc/run.sh`` writes a
+2 MiB pattern to each raw device through the stock ``sdhci-esdhc-imx`` driver,
+reads it back after dropping caches, and confirms it reached the backing image.
+
+The three NETC ENETC ports bring up ``eth0`` / ``eth1`` (1G) and ``eth2``
+(10G); attach a host backend with ``-nic`` / ``-netdev``.
+
 Reset
 -----
 
@@ -442,31 +457,42 @@ Caveats
   v1.0 recommendation; the deeper fix needs upstream QEMU work in
   ``hw/intc/arm_gicv3_cpuif.c``.
 
-* **No hardware-accelerated rendering, codec, or inference.** Mali-G310,
-  Wave6 VPU, and Neutron NPU are logging stubs. The Mali kernel
-  driver in particular fails probe with ``-22`` at the product-ID
-  check (``Unknown GPU Product ID 0``), so no Mali Vulkan ICD is
-  installed and ``vulkaninfo`` reports
+* **No hardware-accelerated rendering, codec, or inference.** The Mali-G310
+  GPU, Wave6 VPU and Neutron NPU are modelled far enough to be seen and
+  identified, not to compute. ``kbase`` reads the real Mali-G310 GPU_ID,
+  identifies the GPU (``GPU identified as 0x4 arch 10.12.7``) and reads its
+  property registers, then fails the CSF bring-up cleanly with ``-EIO``
+  (``Miscellaneous device initialization failed``) when the un-modelled
+  reset/power/firmware handshake times out. The boot still reaches userspace.
+  No Mali Vulkan ICD is installed - the userspace is Arm's proprietary
+  libmali, not Mesa - so ``vulkaninfo`` reports
   ``ERROR_INCOMPATIBLE_DRIVER``.
 
-* **Display is scanout-only.** The DPU models the primary-plane
-  FetchLayer + FrameGen, so ``dpu95`` binds and the kernel boot logo
-  renders to a QEMU console (the FrameGen vblank is driven through a
-  modelled ``fsl,imx-irqsteer``, so atomic commits complete on
-  interrupt instead of timing out). Multi-plane compositing, the
-  DSI / LVDS-LDB bridge timing, and the camera ISI/ISP are not
-  modelled. The HW JPEG codecs register as V4L2 m2m devices and the
-  three audio cards register, but the JPEG/VPU codec engines and the
-  SAI/MICFIL playback-capture datapath are not driven, so a
-  ``STREAMON`` binds but no frames / samples move.
+* **Some datapaths bring up without carrying data all the way.** The parts
+  that are partial, rather than absent:
 
-* **Networking works; no Linux block storage.** The three NETC ENETC
-  ports bring up ``eth0`` / ``eth1`` (1G) and ``eth2`` (10G) (attach a
-  host backend with ``-nic`` / ``-netdev``). Linux's ``sdhci-esdhc-imx``
-  driver, however,
-  still defers probe on an unmet dependency, so ``/dev/mmcblk*`` is
-  empty even with an SD-card image attached via ``-drive ...,if=sd``
-  (the uSDHC model itself works — U-Boot SPL boots from SD).
+  - The NeoISP applies bilinear debayer and OB_WB0 black level / white
+    balance. Gamma, colour matrix, denoise and tone mapping are accepted
+    and announced, but not applied.
+  - Audio playback moves real samples - a square wave reaches the QEMU audio
+    backend through eDMA and the SAI3 TX FIFO - but **the requested sample
+    rate does not reach the SAI**, which runs on a hardcoded 48 kHz fallback.
+    At 48 kHz that fallback happens to be the right answer, so playback there
+    looks correct; any other rate plays at the wrong speed rather than
+    failing. ``tests/audio/run-playback.sh`` asserts this across two rates and
+    currently fails at 16 kHz. Audio *capture* over BT-SCO and SAI RX
+    registers its cards but has no codec-driven ADC-DAPM route, so no samples
+    move on those two paths.
+  - The Wave6 VPU binds and offers ``/dev/video*`` with no codec firmware
+    behind it, so no frames are decoded or encoded.
+
+  For what *is* carried end to end - DPU scanout and LayerBlend compositing,
+  LVDS and MIPI-DSI output, CSI-2 to ISI capture, the camera-to-ISP chain,
+  MICFIL PDM capture, the JPEG codecs - see
+  ``docs/validation/test-result-matrix.md``, which is generated from the
+  capability matrix and names the test behind each claim. Capability
+  statements belong there rather than here, so that they cannot drift out of
+  step with the tests.
 
 * **icount is not the default boot mode.** ``-icount shift=auto``
   delays interrupt/timer delivery to idle CPUs on this heterogeneous
