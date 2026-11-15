@@ -269,6 +269,7 @@ qtests_aarch64 = \
   (config_all_devices.has_key('CONFIG_IMX95_NEUTRON') ? ['imx95-neutron-test', 'imx95-neutron-realize-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_MALI') ? ['imx95-mali-test'] : []) + \
   (config_all_devices.has_key('CONFIG_FSL_IMX95') ? ['imx95-romboot-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_IMX95_DDRC') ? ['imx95-ddrc-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_EDMA') ? ['imx95-edma-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX95_LPSPI') ? ['imx95-lpspi-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IMX_FSPI') ? ['imx95-flexspi-test'] : []) + \

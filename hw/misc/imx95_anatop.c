@@ -151,11 +151,24 @@ static const MemoryRegionOps imx95_anatop_ops = {
  * (buses, ENET, most peripherals) to Linux as 0 over SCMI. The SM computes the
  * rate from these registers: VCO = 24MHz*(MFI + MFN/MFD)/RDIV and
  * PFD = VCO*5/(DFS_MFI*5 + DFS_MFN). ARM_PLL and HSIO_PLL are programmed at
- * runtime by the SM (DVFS / PCIe) so they need no seed; DRAM/AUDIO/VIDEO/LDB
- * PLLs have board- and
- * use-case-specific rates and are left unprogrammed (honest 0 until sourced).
+ * runtime by the SM (DVFS / PCIe) so they need no seed; AUDIO/VIDEO/LDB PLLs
+ * have board- and use-case-specific rates and are left unprogrammed (honest 0
+ * until sourced).
+ *
+ * DRAM_PLL is seeded too, but for a different reason and only one bit of it.
+ * The SM decides whether DDR was initialised by the OEI - the DDR-init image
+ * the ROM runs on the M33 before the SM - by reading DRAM_PLL's CTRL.POWERUP
+ * (DEV_SM_SystemPostBoot), and powers the DDRMIX domain down if it is clear.
+ * QEMU's DRAM needs no training and the emulated ROM does not execute that
+ * image, so the machine presents the state it leaves behind: the PLL powered
+ * up. Measured with NXP's released SM firmware, seeding this bit removes that
+ * power-down. The rate is deliberately left at 0, like the other unprogrammed
+ * PLLs: the SM reads it and gets 0, and seeding a non-zero one was measured to
+ * change nothing. The DRAM geometry the SM reports comes from the DDRC
+ * (hw/misc/imx95_ddrc.c), not from here.
  */
 #define ANATOP_SYS_PLL1         0x1000
+#define ANATOP_DRAM_PLL         0x1700
 static void anatop_seed_sys_pll1(IMX95AnatopState *s)
 {
 #define PLL_SEED(off, val) (s->regs[(ANATOP_SYS_PLL1 + (off)) / 4] = (val))
@@ -170,6 +183,9 @@ static void anatop_seed_sys_pll1(IMX95AnatopState *s)
     PLL_SEED(0xb0, 0x80000000u);            /* DFS2 CTRL: ENABLE              */
     PLL_SEED(0xc0, (6u << 8) | 2u);         /* DFS2 DIV: MFI=6 MFN=2 -> 625M  */
 #undef PLL_SEED
+
+    /* DRAM_PLL: CTRL.POWERUP only - see the note above. */
+    s->regs[(ANATOP_DRAM_PLL + PLL_CTRL_OFF) / 4] = PLL_CTRL_POWERUP;
 }
 
 static void imx95_anatop_reset(DeviceState *dev)

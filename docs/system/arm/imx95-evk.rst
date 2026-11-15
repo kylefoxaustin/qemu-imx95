@@ -268,13 +268,23 @@ failure that prints nothing at all.
 Two things are worth knowing about this path:
 
 * SPL and U-Boot both report ``Failed to get ddr cfg, scmi_err = -131``, and
-  NXP's own SM is the one answering, so whatever it reads is not in this
-  machine's model of the parts it reads. U-Boot copes -
-  ``board_phys_sdram_size()`` falls back to the compile-time size when the
-  call fails - but the size it then reports is the EVK's 15.8 GiB rather
-  than whatever ``-m`` gave it. At ``-m 2G`` the first bank it derives is
-  still entirely inside real memory, so it relocates and runs; a smaller
-  ``-m`` would not be safe.
+  the consequence is a wrong number rather than a failure: U-Boot's
+  ``board_phys_sdram_size()`` falls back to its compile-time size when the
+  call fails, so **it prints the EVK's 15.8 GiB whatever ``-m`` said**. At
+  ``-m 2G`` the first bank it derives still ends exactly at the top of real
+  memory, so it relocates and runs; a smaller ``-m`` would not be safe.
+
+  -131 is ``SM_ERR_POWER``. NXP's own SM is the one answering, and it answers
+  that way because it powers the DDR power domain off early in its own init
+  and never powers it back on, so it has no DDR regions to report. Two causes
+  have been ruled out by measurement: it is not the SM's "was DDR initialised
+  by the OEI" test, which reads the DRAM PLL's ``CTRL.POWERUP`` and which this
+  machine now satisfies (that power-down no longer happens), and it is not the
+  DRAM PLL rate. What is left is a ``DEV_SM_PowerStateSet(DDR, OFF)`` whose
+  caller is inside the released SM binary, which is a different build from the
+  ``imx-sm`` source. The half of it this tree owns is in place: the DDRC at
+  0x4e080000 is modelled and reports this machine's own geometry, which the SM
+  does read - its DRAM type comes back as LPDDR5 rather than unknown.
 * Linux on top of this is the one stage still missing, and the revision is
   why. U-Boot's ``disable_smmu_node()`` strips ``iommu@490d0000`` out of the
   dtb only when the revision's top nibble is 0xa or the SM's config name is

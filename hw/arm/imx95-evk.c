@@ -197,6 +197,14 @@ static void imx95_evk_init(MachineState *machine)
      */
     qdev_prop_set_bit(DEVICE(s), "el3-firmware", m->el3_firmware);
 
+    /*
+     * The DDRC reports this to the System Manager, which is where U-Boot's
+     * DRAM size comes from on this SoC. It has to be handed over before
+     * realize: machine->ram is only mapped afterwards, so the SoC cannot
+     * find the size by looking.
+     */
+    qdev_prop_set_uint64(DEVICE(s), "ram-size", machine->ram_size);
+
     /* Forward any user-attached CAN buses to the SoC's FlexCAN controllers. */
     for (i = 0; i < FSL_IMX95_NUM_FLEXCAN; i++) {
         if (m->canbus[i]) {

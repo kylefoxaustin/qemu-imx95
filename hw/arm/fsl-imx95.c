@@ -66,6 +66,7 @@
 #include "hw/ssi/ssi.h"
 #include "hw/ssi/imx95_lpspi.h"
 #include "hw/misc/imx95_ddr_pmu.h"
+#include "hw/misc/imx95_ddrc.h"
 #include "hw/misc/imx95_ccm.h"
 #include "system/blockdev.h"
 #include "system/block-backend.h"
@@ -2381,6 +2382,23 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
+     * DDR controller (0x4e080000). Not a memory-controller model - it exists
+     * because the System Manager reads the DRAM geometry and type out of these
+     * registers, and the window was otherwise unmapped, so a read of it with
+     * the DDRMIX domain powered was an external abort on the M33. See
+     * hw/misc/imx95_ddrc.c for what it does and does not fix.
+     */
+    {
+        DeviceState *ddrc = qdev_new(TYPE_IMX95_DDRC);
+
+        qdev_prop_set_uint64(ddrc, "ram-size", s->ram_size);
+        if (!sysbus_realize_and_unref(SYS_BUS_DEVICE(ddrc), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(ddrc), 0, 0x4e080000);
+    }
+
+    /*
      * CCM clock-root register model. The SM programs the clock roots here and
      * reads them back to answer SCMI CLOCK_RATE_GET (rate = source/(DIV+1));
      * a plain unimplemented stub returned 0, so every rate was reported
@@ -3693,6 +3711,12 @@ static const Property fsl_imx95_properties[] = {
      *    a device this machine does not model.
      */
     DEFINE_PROP_UINT8("soc-rev", FslImx95State, soc_rev, 0xA1),
+    /*
+     * The machine's DRAM size, which the board sets before realize because
+     * the DDRC reports the geometry from it and the SoC is realized before
+     * the RAM region is mapped. 0 means "no DRAM described", not "unknown".
+     */
+    DEFINE_PROP_UINT64("ram-size", FslImx95State, ram_size, 0),
 };
 
 static void fsl_imx95_class_init(ObjectClass *oc, const void *data)

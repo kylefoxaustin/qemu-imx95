@@ -343,6 +343,12 @@ struct FslImx95State {
      * ROM and the firmware that re-walks the same containers cannot disagree.
      */
     uint8_t                 soc_rev;
+
+    /*
+     * DRAM size as the board sees it, forwarded to the DDRC so the System
+     * Manager reports this machine's memory rather than the EVK's.
+     */
+    uint64_t                ram_size;
     /* USB2 ChipIdea controller (usb@4c200000, host mode on the EVK). */
     ChipideaState           usb2;
     USBDWC3                 usb3;   /* 0x4c100000: SuperSpeed DWC3 (xHCI) */
