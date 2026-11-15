@@ -56,6 +56,7 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | Clocks/power/reset (CCM/ANATOP/SRC via SM) | B | PASS (boot) | programmed by the SM; Linux reads real rates over SCMI |
 | Audio capture bring-up (BT-SCO + SAI RX) | B | PASS (boot) | cards register; no codec ADC-DAPM route (documented, known-limitations sec.7) |
 | VM save/restore (device migration state) | A | PASS (qtest) | ⚑ covers the DPU and the Neutron NPU, the two devices that had no vmsd at all; the other 21 i.MX 95 devices each carry one but their field-level completeness is unaudited, and no Linux-booted TCG save/restore has been run; Machine saved to a file and restored into a second QEMU: the DPU's 4 MiB register file, both streams' interrupt blocks and a 2D blit command burst left mid-stream all read back identical, and the blit burst completes correctly on the restored machine; the Neutron NPU's settled state (RESETCTRL, mailbox window, FSM phase) likewise. Negative control: both halves fail with dc->vmsd removed |
+| Machine reset + guest reboot | A | PASS (qtest) | A reset re-runs the whole boot sequence instead of leaving the machine dead: the emulated ROM walks the image set again, re-places the images and re-releases the cores. MEASURED on three paths - a QMP system_reset on the ROM chain comes back through SPL and the SM to a U-Boot prompt, the same on a -kernel boot re-boots Linux with all six A55s executing, and a guest-requested PSCI SYSTEM_RESET (Linux panic=1) was honoured 13 times in one run (14 kernel boots). Negative controls: before the fix all three gave one boot and then silence - zero output, every register frozen 2s apart, all six cores halted at PC=0 - and the qtest subtest fails with the reset handler removed. tests/reset/run.sh re-runs the guest and monitor halves as a gate |
 | Mali-G310 GPU (Valhall CSF) | C | PASS (qtest) | ⚑ compute needs proprietary libmali; kbase identifies GPU arch 10.12.7, then fails CSF bring-up cleanly (-EIO) |
 | VPU (Wave6 / cnm633c) | C | PASS (boot) | ⚑ decode/encode is proprietary firmware; wave6-vpu binds, /dev/video* present; no codec firmware -> no frames |
 | Neutron NPU | C | PASS (qtest) | ⚑ compute is NXP-proprietary; flagged, do not trust NPU output; driver binds e2e; default-on guest honest-fault via MBOX1 error_code (qom-set 0 to opt out) |
@@ -70,5 +71,5 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 47 present (27 PASS / 0 FAIL observed this run), 5 N/A-absent.
+Summary: 48 present (28 PASS / 0 FAIL observed this run), 5 N/A-absent.
 

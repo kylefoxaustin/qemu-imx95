@@ -34,6 +34,7 @@
 #include "system/cpus.h"
 #include "system/system.h"
 #include "system/rtc.h"
+#include "system/reset.h"
 #include "qemu/cutils.h"
 #include "hw/arm/bsa.h"
 #include "hw/arm/boot.h"
@@ -741,11 +742,11 @@ static bool fsl_imx95_install_unimplemented(FslImx95State *s, Error **errp)
  * zeroed ITCM (no -device loader) leaves the M33 powered off, so a plain
  * A55-only Linux boot does not run the M33 into a HardFault lockup.
  *
- * Run from a bottom half scheduled at machine-init-done: by the time the
- * BH executes, the initial system reset has already committed the loaded
- * image into ITCM, side-stepping the reset-handler ordering problem (the
- * generic -device loader commits its ROM blob during the reset, after any
- * reset hook a device could register).
+ * Run from a bottom half scheduled by the machine's reset handler: by the
+ * time the BH executes, the reset has already committed the loaded image
+ * into ITCM, side-stepping the reset-handler ordering problem (the generic
+ * -device loader commits its ROM blob during the reset, after any reset hook
+ * a device could register). See fsl_imx95_reset().
  */
 /*
  * Boot-ROM handover (v1.x Step 5). On silicon the boot ROM loads each LM's
@@ -1217,7 +1218,7 @@ static int fsl_imx95_rom_boot(FslImx95State *s)
 
     /*
      * The M33 took its reset while ITCM was still zeroed - this read happens
-     * at machine-init-done, long after - so it latched SP and PC from an
+     * in a BH after that reset, long after - so it latched SP and PC from an
      * empty vector table. Reset it again now that the image is there, which
      * for ARMv7-M reloads both from the vector table, the same thing the M7
      * release path does on a managed restart. cpu_reset re-applies
@@ -1392,9 +1393,36 @@ static void fsl_imx95_m7_start_bh(void *opaque)
     }
 }
 
-static void fsl_imx95_machine_done(Notifier *notifier, void *data)
+/*
+ * The whole boot sequence, run from a reset handler so it happens on every
+ * reset and not just the first one.
+ *
+ * Both bottom halves have to run after the reset they belong to has finished:
+ * fsl_imx95_rom_boot() writes the SM into ITCM and both gates read vector[0]
+ * back out of it, and a reset re-commits every "-device loader" blob (through
+ * rom_reset, registered after this handler) and re-applies start-powered-off
+ * to every core. Scheduling them rather than calling them here is what puts
+ * them after all of that, so neither has to care what order the reset
+ * handlers ran in.
+ *
+ * This is also the only thing that releases a core, which is why it must run
+ * again: a reset leaves every A55 powered off, with the boot CPU's PC
+ * correctly re-set by whatever loaded it (arm_load_kernel()'s own hook, or
+ * fsl_imx95_rom_boot() above) and nothing to start it. Without this the
+ * machine comes back from system_reset - or from a guest "reboot", which
+ * arrives by the same path - with six halted cores and no output at all.
+ *
+ * Registered nosnapshotload: the reset that precedes a snapshot load must not
+ * schedule these, because the bottom half would run after the load and undo
+ * it - re-placing ITCM, resetting the M33 out from under the restored SM and
+ * re-releasing cores the snapshot already has in their proper state. Incoming
+ * migration keeps the handler (it is the machine's own initial reset) and is
+ * covered by tests/qtest/imx95-vmstate-test.c, which restores through
+ * "-incoming".
+ */
+static void fsl_imx95_reset(void *opaque)
 {
-    FslImx95State *s = container_of(notifier, FslImx95State, m33_machine_done);
+    FslImx95State *s = opaque;
 
     aio_bh_schedule_oneshot(qemu_get_aio_context(),
                             fsl_imx95_m33_start_bh, s);
@@ -2512,9 +2540,9 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
      * release path. This is the silicon-faithful M7 lifecycle handle:
      * the SM's CpuStart(M7_cpu_id) writes the bit, our SRC model raises
      * the named gpio-out, the handler schedules fsl_imx95_m7_start_bh.
-     * Complements the existing machine-init-done BH (which serves the
-     * M7-only test boots that have no SM running); fsl_imx95_m7_start_bh
-     * is idempotent so both paths firing for the same M7 boot is safe.
+     * Complements the reset-handler BH (which serves the M7-only test boots
+     * that have no SM running); fsl_imx95_m7_start_bh is idempotent so both
+     * paths firing for the same M7 boot is safe.
      */
     qdev_connect_gpio_out_named(s->src, "m7mix-release", 0,
         qemu_allocate_irq(fsl_imx95_src_m7_release_handler, s, 0));
@@ -3557,13 +3585,11 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * Register the M33 and M7 auto-start checks from a machine-done
-     * notifier so their reset hooks are installed AFTER the generic
-     * -device loader's, and therefore run after the firmware images
-     * have been written into the respective ITCMs.
+     * The boot ROM and the core-release gates. A reset handler rather than a
+     * machine-done notifier, because the initial reset is not the only one -
+     * see fsl_imx95_reset().
      */
-    s->m33_machine_done.notify = fsl_imx95_machine_done;
-    qemu_add_machine_init_done_notifier(&s->m33_machine_done);
+    qemu_register_reset_nosnapshotload(fsl_imx95_reset, s);
 
     /*
      * PCIe Root Complexes 0 and 1 ("fsl,imx95-pcie"). A from-scratch

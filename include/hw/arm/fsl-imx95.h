@@ -42,7 +42,6 @@
 #include "hw/i3c/svc_i3c.h"
 #include "hw/core/sysbus.h"
 #include "qom/object.h"
-#include "qemu/notify.h"
 #include "qemu/units.h"
 
 #define TYPE_FSL_IMX95 "fsl-imx95"
@@ -157,15 +156,6 @@ struct FslImx95State {
     MemoryRegion            m33_itcm;
     MemoryRegion            m33_dtcm;
     Clock                  *m33_cpuclk;
-    /*
-     * The M33 starts powered-off and is released only if SM firmware was
-     * actually loaded into its ITCM (checked at reset via this hook,
-     * registered late so it runs after the -device loader populates the
-     * ITCM). Without firmware the M33 stays halted, so a plain A55 Linux
-     * boot is unaffected. The same notifier also releases the M7 by the
-     * same vector[0]-is-non-zero check.
-     */
-    Notifier                m33_machine_done;
 
     /*
      * Cortex-M7 real-time core (v1.x). Same structural pattern as the
@@ -176,7 +166,7 @@ struct FslImx95State {
      * an A55-side loader can deposit M7 firmware into TCM from there;
      * the standalone "-device loader,file=cm7_image.elf,cpu-num=7" path
      * writes through the M7's own address space and does not need them.
-     * The M7 starts powered-off and is released by the same machine-done
+     * The M7 starts powered-off and is released by the same reset-handler
      * BH that releases the M33, gated on a non-zero vector[0] in its
      * ITCM (i.e. firmware was actually loaded).
      */

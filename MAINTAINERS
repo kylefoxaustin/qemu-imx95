@@ -992,6 +992,7 @@ F: tests/m7-first/
 F: tests/m7-fault-recovery/
 F: tests/m7-rpmsg/
 F: tests/uboot/
+F: tests/reset/
 F: tests/flexcan/
 F: tests/netc/
 F: tests/audio/

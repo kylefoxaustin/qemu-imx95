@@ -16,6 +16,12 @@
  *              left alone. That is exactly the shape of the media our older
  *              tests build, where SPL and the SM arrive via -device loader,
  *              so the ROM read must be a no-op on it.
+ *   on-reset   it all happens again on a system_reset, not just the first
+ *              time. A reset powers every core off and re-applies its reset
+ *              vector, so whatever re-releases them has to re-run too; when
+ *              that work was tied to machine-init-done instead, the machine
+ *              came back from a reset - or a guest reboot - with six halted
+ *              cores and no output at all.
  */
 
 #include "qemu/osdep.h"
@@ -137,6 +143,42 @@ static void test_rom_ignores_non_exec_image(void)
     unlink(path);
 }
 
+/*
+ * The ROM read is part of reset, not of machine construction. Clobber what it
+ * loaded, reset, and it must be back - which can only happen if the walk ran
+ * a second time.
+ */
+static void test_rom_reloads_on_reset(void)
+{
+    uint8_t payload[PAYLOAD_LEN], clobber[PAYLOAD_LEN], got[PAYLOAD_LEN];
+    g_autofree char *path = NULL;
+    QTestState *qts;
+    int i;
+
+    for (i = 0; i < PAYLOAD_LEN; i++) {
+        payload[i] = 0x40 + (i & 0x3f);
+        clobber[i] = ~payload[i];
+    }
+    path = make_image(FLAGS_A55_EXEC, payload);
+
+    qts = boot_with(path);
+    qtest_memread(qts, LOAD_ADDR, got, sizeof(got));
+    g_assert_cmpmem(got, sizeof(got), payload, sizeof(payload));
+
+    /* Prove the window really changed, so the check below cannot pass by. */
+    qtest_memwrite(qts, LOAD_ADDR, clobber, sizeof(clobber));
+    qtest_memread(qts, LOAD_ADDR, got, sizeof(got));
+    g_assert_cmpmem(got, sizeof(got), clobber, sizeof(clobber));
+
+    qtest_system_reset(qts);
+
+    qtest_memread(qts, LOAD_ADDR, got, sizeof(got));
+    g_assert_cmpmem(got, sizeof(got), payload, sizeof(payload));
+    qtest_quit(qts);
+
+    unlink(path);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -144,5 +186,7 @@ int main(int argc, char **argv)
                    test_rom_loads_exec_image);
     qtest_add_func("imx95/romboot/ignores-non-exec-image",
                    test_rom_ignores_non_exec_image);
+    qtest_add_func("imx95/romboot/reloads-on-reset",
+                   test_rom_reloads_on_reset);
     return g_test_run();
 }

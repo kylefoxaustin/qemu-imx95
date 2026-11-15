@@ -399,8 +399,8 @@ When the SM firmware is present it boots the M7 itself: the machine fabricates
 the boot-ROM image handover the SM reads at startup to learn it owns the M7
 (real hardware gets this from the boot ROM; the direct ``-device loader`` path
 bypasses it), so the SM runs its full ``DEV_SM_CpuStart`` for the M7. With no SM
-loaded, the M7 is released directly at machine-init-done if its reset vector was
-populated. The M7's console is LPUART3.
+loaded, the M7 is released directly by the machine's reset handler if its reset
+vector was populated. The M7's console is LPUART3.
 
 Two SM-managed behaviours are modelled:
 
@@ -417,6 +417,19 @@ Two SM-managed behaviours are modelled:
   ``LMM_SystemLmReset`` (stop then start the M7), printing ``Reset LM 1`` on its
   debug monitor. The ``Cortex-M7 fault recovery`` functional test below
   exercises this end to end.
+
+Reset
+-----
+
+A reset re-runs the whole boot sequence, so the machine comes back the same way
+it came up: the emulated boot ROM walks the image set on uSDHC1 again, places
+the SM, SPL and any BL31 / OP-TEE / U-Boot images, and releases the cores. This
+holds for ``system_reset`` from the monitor or QMP, and for a reset the guest
+asks for itself - a Linux ``reboot``, or any other PSCI ``SYSTEM_RESET`` -
+since both arrive by the same request path.
+
+The ``-kernel`` boot path resets the same way; there ``arm_load_kernel()``
+re-applies the kernel's entry point and the machine re-releases the boot CPU.
 
 Caveats
 -------
