@@ -137,6 +137,19 @@ tests/vmstate/run.sh
 
 echo
 echo "============================================="
+echo "=== known-broken watch                     ==="
+echo "===   each recorded defect must still      ==="
+echo "===   reproduce, with its own symptom      ==="
+echo "============================================="
+# Fails if a capability recorded broken in test-matrix.yaml now PASSES (the
+# record is the stale thing), or fails without the symptom it claims (the
+# record is no longer evidence). Records whose artifacts are absent skip, and
+# it says so rather than reporting green; --strict turns that into an error on
+# a host that is supposed to have them.
+python3 tests/gen-test-matrix.py --check-broken
+
+echo
+echo "============================================="
 echo "All tests passed:"
 echo "  - v1.0 regression (A55 + M33 + Linux to userspace)"
 echo "  - v1.x Step 2 unit (M7 hello firmware)"
@@ -147,4 +160,5 @@ echo "  - U-Boot interactive prompt (SD/eMMC boot chain)"
 echo "  - interconnect legs: ENETC / LPUART / LPSPI / FlexCAN"
 echo "    (two guests, byte-exact over a socket bridge)"
 echo "  - migration: whole-machine VMState round-trip (tests/vmstate)"
+echo "  - known-broken watch (recorded defects still reproduce)"
 echo "============================================="

@@ -6,13 +6,21 @@
 # render from ONE source of truth, docs/validation/test-matrix.yaml. This fails
 # the build if:
 #   * verify_groups() finds a block un-grouped, double-grouped, or mis-tiered
-#     (a group's tier disagreeing with the block's) -- itself a silent fail, and
+#     (a group's tier disagreeing with the block's) -- itself a silent fail,
+#   * verify_broken() finds a known-broken record that is incomplete, owned by
+#     nobody in the closed set, or pointing at a measurement that no longer
+#     exists -- a dangling defect record still reads as evidence, and
 #   * the committed README capability table is stale vs a fresh regeneration.
 # Fast + boot-free: run it first in CI.
+#
+# The RUNTIME half of the known-broken gate needs a built QEMU (and, for the
+# harnesses, the operator's artifacts), so it is deliberately not here:
+#     tests/gen-test-matrix.py --check-broken
+# fails if a capability recorded as broken now passes its own test.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/.." && pwd); cd "$ROOT"
 
-# --inject-readme runs verify_groups() and rewrites the table between the markers.
+# --inject-readme runs verify_groups() + verify_broken() and rewrites the table.
 python3 tests/gen-test-matrix.py --inject-readme
 
 if ! git diff --quiet -- README.md; then
@@ -22,4 +30,11 @@ if ! git diff --quiet -- README.md; then
     git --no-pager diff -- README.md | sed -n '1,40p'
     exit 1
 fi
-echo "PASS: README capability table is in sync with docs/validation/test-matrix.yaml"
+# The detailed matrix is generated too, but regenerating all of it runs the
+# qtests; its Known-broken section renders from the YAML alone, so that part
+# can be gated here. Without this, deleting a record regenerates the README
+# and leaves the row sitting in the detailed matrix.
+python3 tests/gen-test-matrix.py --check-doc-section
+
+echo "PASS: README capability table + Known-broken section are in sync with"
+echo "      docs/validation/test-matrix.yaml"
