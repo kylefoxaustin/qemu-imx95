@@ -26,6 +26,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_SRC "imx95.src"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95SRCState, IMX95_SRC)
@@ -97,8 +98,11 @@ static uint64_t imx95_src_read(void *opaque, hwaddr offset, unsigned size)
         hwaddr slice = offset & ~(hwaddr)(SRC_SLICE_STRIDE - 1);
         uint32_t ctrl = s->regs[(slice + SRC_SLICE_SW_CTRL) / 4];
 
-        return (ctrl & SRC_SLICE_SW_CTRL_PDN_SOFT) ? SRC_FUNC_STAT_PDN
-                                                   : SRC_FUNC_STAT_PUP;
+        uint32_t v = (ctrl & SRC_SLICE_SW_CTRL_PDN_SOFT) ? SRC_FUNC_STAT_PDN
+                                                        : SRC_FUNC_STAT_PUP;
+
+        trace_imx95_src_read(slice / SRC_SLICE_STRIDE, SRC_FUNC_STAT, v);
+        return v;
     }
 
     /*
@@ -113,8 +117,14 @@ static uint64_t imx95_src_read(void *opaque, hwaddr offset, unsigned size)
         hwaddr slice = offset & ~(hwaddr)(SRC_SLICE_STRIDE - 1);
         uint32_t ctrl = s->regs[(slice + SRC_SLICE_SW_CTRL) / 4];
 
-        return (ctrl >> SRC_SLICE_SW_CTRL_RST_RSTR_SHIFT) & 0xf;
+        uint32_t v = (ctrl >> SRC_SLICE_SW_CTRL_RST_RSTR_SHIFT) & 0xf;
+
+        trace_imx95_src_read(slice / SRC_SLICE_STRIDE, SRC_RSTR_STAT, v);
+        return v;
     }
+    trace_imx95_src_read(offset / SRC_SLICE_STRIDE,
+                         (uint32_t)(offset & (SRC_SLICE_STRIDE - 1)),
+                         s->regs[offset / 4]);
     return s->regs[offset / 4];
 }
 
@@ -122,6 +132,10 @@ static void imx95_src_write(void *opaque, hwaddr offset,
                             uint64_t value, unsigned size)
 {
     IMX95SRCState *s = opaque;
+
+    trace_imx95_src_write(offset / SRC_SLICE_STRIDE,
+                          (uint32_t)(offset & (SRC_SLICE_STRIDE - 1)),
+                          s->regs[offset / 4], (uint32_t)value);
 
     /*
      * SRC_GEN.SCR: bit 12 (M7MIX release) is sticky/locked once set per

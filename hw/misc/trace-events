@@ -424,3 +424,11 @@ iommu_testdev_dma_armed(bool armed) "armed=%d"
 # imx95_aonmix.c
 imx95_aonmix_cpuwait(uint32_t old, uint32_t new) "CA55_CPUWAIT 0x%02x -> 0x%02x"
 imx95_aonmix_rvbar(unsigned core, uint64_t vector) "CA55 core %u reset vector 0x%" PRIx64
+
+# imx95_src.c
+imx95_src_write(unsigned slice, uint32_t reg, uint32_t old, uint32_t value) "slice %u reg 0x%03x 0x%08x -> 0x%08x"
+
+# imx95_gpc.c
+imx95_gpc_write(unsigned blk, uint32_t reg, uint32_t old, uint32_t value) "cpu_ctrl %u reg 0x%03x 0x%08x -> 0x%08x"
+imx95_src_read(unsigned slice, uint32_t reg, uint32_t value) "slice %u reg 0x%03x => 0x%08x"
+imx95_gpc_read(unsigned blk, uint32_t reg, uint32_t value) "cpu_ctrl %u reg 0x%03x => 0x%08x"

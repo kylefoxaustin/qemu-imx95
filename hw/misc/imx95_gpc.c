@@ -27,6 +27,7 @@
 #include "qemu/module.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define TYPE_IMX95_GPC "imx95.gpc"
 OBJECT_DECLARE_SIMPLE_TYPE(IMX95GPCState, IMX95_GPC)
@@ -72,9 +73,15 @@ static uint64_t imx95_gpc_read(void *opaque, hwaddr offset, unsigned size)
         uint32_t reg = offset & (CPU_CTRL_BLOCK_SIZE - 1);
         if (gpc_is_mirror_stat(reg)) {
             /* Status mirrors the paired control (transition is instant). */
-            return s->regs[(offset - 4) / 4];
+            uint32_t v = s->regs[(offset - 4) / 4];
+
+            trace_imx95_gpc_read(offset / CPU_CTRL_BLOCK_SIZE, reg, v);
+            return v;
         }
     }
+    trace_imx95_gpc_read(offset / CPU_CTRL_BLOCK_SIZE,
+                         (uint32_t)(offset & (CPU_CTRL_BLOCK_SIZE - 1)),
+                         s->regs[offset / 4]);
     return s->regs[offset / 4];
 }
 
@@ -82,6 +89,10 @@ static void imx95_gpc_write(void *opaque, hwaddr offset,
                             uint64_t value, unsigned size)
 {
     IMX95GPCState *s = opaque;
+
+    trace_imx95_gpc_write(offset / CPU_CTRL_BLOCK_SIZE,
+                          (uint32_t)(offset & (CPU_CTRL_BLOCK_SIZE - 1)),
+                          s->regs[offset / 4], (uint32_t)value);
 
     s->regs[offset / 4] = value;
 }
