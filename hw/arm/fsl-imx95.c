@@ -1534,11 +1534,20 @@ static void fsl_imx95_a55_run_handler(void *opaque, int n, int level)
      * it sets every one of them, core 0's included, when it tears the AP
      * logical machine down - and honouring that would stop the boot CPU from
      * inside the M33's own TCG block, during a shutdown that is already
-     * underway. Note the consequence: a core that has been stopped stays
-     * running here, so a PSCI CPU_OFF leaves it parked wherever the firmware
-     * left it rather than halted. Nothing we boot cares, because the SM's
-     * single-core stop works through the SRC per-core reset line rather than
-     * this register, which the model does not act on either.
+     * underway.
+     *
+     * This used to say that the consequence was a PSCI CPU_OFF leaving its
+     * core running, because the SM's single-core stop went through the SRC
+     * per-core reset line instead, which the model does not act on. Both
+     * halves of that are wrong, and traced: across a CPU_OFF (and a later
+     * CPU_ON) on the EL3 chain, nothing writes a CORTEXMIX_COREn reset line,
+     * nothing writes CA55_CPUWAIT, nothing writes the GPC, and no CPU_STOP
+     * reaches the SM on either SCMI channel - BL31 does not ask the hardware
+     * at all. It parks the core itself, in its own "wfi; b ." loop at EL3,
+     * which QEMU halts on exactly as silicon would. So this register is not
+     * how an A55 stops, and no reset line needs wiring here. See
+     * tests/hotplug/README.md for the measurement and for what IS still broken
+     * (BL31 never publishes AFF_STATE_OFF, so the later CPU_ON is refused).
      *
      * Defer like the M7 path does.
      */
@@ -3427,6 +3436,16 @@ static void fsl_imx95_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->ap_s_mu_b), 0,
             qdev_get_gpio_in(DEVICE(&s->m33), FSL_IMX95_AP_S_MU_B_M33_IRQ));
         imx_mu_set_peer(&s->ap_s_mu, &s->ap_s_mu_b);
+
+        /*
+         * Decode this channel's SCMI requests too, when the trace event is
+         * on. This is the EL3 firmware's own agent - BL31 asking the SM for
+         * CPU and power operations on Linux's behalf - and it is a different
+         * channel from Linux's (sm_mu, above). Without it the trace shows
+         * only what Linux asked for, which reads as "the firmware did
+         * nothing" for every operation BL31 handles itself.
+         */
+        s->ap_s_mu.scmi_trace_buf = shmem_a;
 
         memory_region_init_alias(&s->ap_s_shmem_a, OBJECT(s),
                                  "imx95-ap-s-shmem-a", &s->cpu_sema, 0,
