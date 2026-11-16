@@ -21,10 +21,27 @@ qemu_machine: "imx95-19x19-evk"
 present:
   # --- CPU complex + interconnect (Tier A) ---
   - { block: "6x Cortex-A55 (application cluster)", tier: A, test: boot,                     evidence: "Boots stock NXP + mainline Linux to userspace on all six cores" }
+  - { block: "A55 CPU hotplug (offline + online a secondary)", tier: A, test: "harness:hotplug",
+      evidence: "all five secondaries go offline and come back, 12/12, on QEMU's own PSCI (EL3=off): 'psci: CPUn killed (polled 0 ms)', and userspace still sees 6 CPUs afterwards. That arm doubles as the control showing the model's own core start/stop machinery is sound",
+      broken: { when: "under the vendor EL3 firmware chain (el3-firmware=on) - uniform across cpu1-cpu5",
+                owner: unattributed,
+                why: "the core really stops - it halts at EL3 inside BL31's own 'wfi; b .' loop - but BL31 never publishes AFF_STATE_OFF for it, so Linux's AFFINITY_INFO poll times out (-110) and the later CPU_ON is refused ALREADY_ON (-22); offlining all five leaves the board on one CPU with no way back. Traced across the CPU_OFF window: no CORTEXMIX_COREn reset-line write, no CA55_CPUWAIT write, nothing in the GPC and no SCMI CPU_STOP on either channel - BL31 parks the core itself rather than asking the hardware. Whether silicon behaves the same is NOT measured, which is why this is unattributed: it needs TF-A's imx95 pwr_domain_off, or ten seconds on a real board",
+                script: "tests/hotplug/run.sh",
+                expect: "FAIL: A55 hotplug is broken under the EL3 chain",
+                env: { EL3: "on" },
+                ref: "tests/hotplug/README.md",
+                since: "2026-11-15" } }
   - { block: "Cortex-M33 System Manager (real SM fw)", tier: A, test: boot,                  evidence: "Runs real NXP SM firmware; Linux's sole SCMI provider over MU" }
   - { block: "Cortex-M7 (real-time domain)",       tier: A, test: "harness:m7-rpmsg",        evidence: "SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip" }
   - { block: "GICv3 + ITS",                        tier: A, test: boot,                       evidence: "Underpins boot + MSI-X for NETC/PCIe" }
-  - { block: "U-Boot boot chain + network boot",   tier: A, test: "harness:uboot",             evidence: "emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI. A BSP imx-boot image also boots unmodified at soc-rev=0xb0 with el3-firmware=on - version-2 container headers, the 0x4000 stride and the V2X three-container shape - all the way to a vendor U-Boot prompt on NXP's own SM, SPL, TF-A BL31 and OP-TEE" }
+  - { block: "U-Boot boot chain + network boot",   tier: A, test: "harness:uboot",             evidence: "emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI. A BSP imx-boot image also boots unmodified at soc-rev=0xb0 with el3-firmware=on - version-2 container headers, the 0x4000 stride and the V2X three-container shape - all the way to a vendor U-Boot prompt on NXP's own SM, SPL, TF-A BL31 and OP-TEE",
+      broken: { when: "the DRAM size U-Boot reports, on the released-image path (BSP imx-boot, soc-rev=0xb0, el3-firmware=on, vendor SM)",
+                owner: model,
+                why: "SPL and U-Boot both get 'Failed to get ddr cfg, scmi_err = -131' (SM_ERR_POWER) from the vendor SM, so board_phys_sdram_size() falls back to its compile-time size and U-Boot prints the EVK's 15.8 GiB whatever -m said - a confident wrong number, not a failure. The SM powers the DDR domain off early in its own init and never powers it back on; the SM's own OEI test and the DRAM PLL rate are both ruled out by measurement, and the remaining caller is inside the released SM binary. At -m 2G the first bank still ends at the top of real memory so U-Boot relocates and runs; a smaller -m would not be safe",
+                silent_wrong: true,
+                script: "tests/uboot/run-vendor-image.sh",
+                expect: "scmi_err = -131",
+                ref: "docs/system/arm/imx95-evk.rst" } }
   - { block: "MU mailbox cross-connect",           tier: A, test: boot,                       evidence: "SCMI + rpmsg + ELE transports" }
   - { block: "eDMA v3/v5",                         tier: A, test: "qtest:imx95-edma-test",    evidence: "Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave" }
   # --- Networking (Tier A) ---
@@ -41,7 +58,15 @@ present:
   - { block: "DPU 2D blit engine",                 tier: A, test: "qtest:imx95-blit-test",    evidence: "copy/fill/Porter-Duff blend/scale/rotate/CSC compute to guest memory" }
   - { block: "LVDS (LDB) display output",          tier: A, test: "harness:dpu-display",      evidence: "dpu95 binds LVDS-1, panel scanout" }
   # --- Audio (Tier A) ---
-  - { block: "SAI3 + WM8962 playback",             tier: A, test: "harness:audio-playback",   evidence: "square wave -> eDMA -> SAI FIFO -> wav byte-checked" }
+  - { block: "SAI3 + WM8962 playback",             tier: A, test: "harness:audio-playback",
+      evidence: "square wave -> eDMA -> SAI FIFO -> wav byte-checked at 48 kHz",
+      broken: { when: "any rate other than 48 kHz - run-playback.sh fails its 16 kHz leg",
+                owner: model,
+                why: "a non-default rate never reaches the SAI: the guest opens the PCM at an exact 16000 (ALSA rejects an inexact rate, and the frame count is delivered) and the codec still announces ADDITIONAL_CONTROL_3=0x0010 -> 48000, so TX is enabled on a rate no codec ever announced and the 2 s stream does not take 2 s to drain. At 48 kHz the SAI's hardcoded fallback EQUALS the right answer, so the passing leg proves less than it looks",
+                script: "tests/audio/run-playback.sh",
+                expect: "FAIL(rate=16000)",
+                ref: "tests/audio/README.md#a-non-default-rate-never-reaches-the-sai",
+                since: "2026-11-15" } }
   - { block: "MICFIL PDM capture",                 tier: A, test: "harness:audio-capture",    evidence: "real PDM samples to userspace" }
   - { block: "SPDIF / XCVR (playback)",            tier: A, test: boot,                       evidence: "audio transceiver playback datapath" }
   # --- Camera (Tier A) ---
@@ -101,7 +126,7 @@ absent:
 readme_groups:
   - { label: "CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7", tier: A,
       evidence: "Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong)",
-      blocks: ["6x Cortex-A55 (application cluster)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
+      blocks: ["6x Cortex-A55 (application cluster)", "A55 CPU hotplug (offline + online a secondary)", "Cortex-M33 System Manager (real SM fw)", "Cortex-M7 (real-time domain)", "GICv3 + ITS", "MU mailbox cross-connect"] }
   - { label: "U-Boot boot chain + network boot", tier: A,
       evidence: "The full sequence a board runs: the emulated boot ROM reads the AHAB image set off eMMC with no -device loader -> SM -> SPL -> U-Boot proper -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell. With the vendor's EL3 firmware in the set the same chain runs through TF-A BL31 and OP-TEE to Linux with all six A55s started by the firmware. A BSP imx-boot image boots unmodified (version-2 containers, 0x4000 stride, soc-rev=0xb0, el3-firmware=on) on NXP's own SM, SPL, TF-A BL31 and OP-TEE through to a vendor U-Boot prompt",
       blocks: ["U-Boot boot chain + network boot"] }

@@ -250,17 +250,26 @@ if the table and the matrix disagree (fleet anti-drift guard). Tiers: **A** =
 data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 **C** = registration only (Linux sees + names it, compute is proprietary).
 
+A tier says how much of a subsystem is verified; it cannot say "this part of it
+is broken". A capability that is modelled, has a test, and does not pass it
+therefore carries a **✗ known-broken** record instead — scoped to the
+configuration it fails in and attributed to an owner (`model` = works on
+silicon, broken here; `vendor-fw` = the shipped firmware is broken the same way
+on real hardware; `qemu-core` = the gap is outside this machine). They are
+listed in full under the table, and `tests/gen-test-matrix.py --check-broken`
+fails if one of them starts passing, so a record cannot outlive its defect.
+
 <!-- BEGIN capability-table (generated from test-matrix.yaml) -->
 | Subsystem | Tier | Evidence |
 |---|:--:|---|
-| CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7 | A | Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong) |
-| U-Boot boot chain + network boot | A | The full sequence a board runs: the emulated boot ROM reads the AHAB image set off eMMC with no -device loader -> SM -> SPL -> U-Boot proper -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell. With the vendor's EL3 firmware in the set the same chain runs through TF-A BL31 and OP-TEE to Linux with all six A55s started by the firmware. A BSP imx-boot image boots unmodified (version-2 containers, 0x4000 stride, soc-rev=0xb0, el3-firmware=on) on NXP's own SM, SPL, TF-A BL31 and OP-TEE through to a vendor U-Boot prompt |
+| CPU complex — 6x Cortex-A55 + Cortex-M33 System Manager (real SM firmware, SCMI) + Cortex-M7 | A | ✗ **known broken:** A55 CPU hotplug (offline + online a secondary) — see Known broken below. Boots real Linux to userspace on all six A55; the M33 runs the real NXP SM as Linux's sole SCMI provider; the SM boots/manages/fault-recovers the M7 (rpmsg pingpong) |
+| U-Boot boot chain + network boot | A | ✗ **known broken** — see Known broken below. The full sequence a board runs: the emulated boot ROM reads the AHAB image set off eMMC with no -device loader -> SM -> SPL -> U-Boot proper -> prompt. From the prompt it writes+reads eMMC (byte-verified) and TFTPs a kernel+dtb+initramfs over ENETC and booti's it to a Linux userspace shell. With the vendor's EL3 firmware in the set the same chain runs through TF-A BL31 and OP-TEE to Linux with all six A55s started by the firmware. A BSP imx-boot image boots unmodified (version-2 containers, 0x4000 stride, soc-rev=0xb0, el3-firmware=on) on NXP's own SM, SPL, TF-A BL31 and OP-TEE through to a vendor U-Boot prompt |
 | Networking — 3x ENETC (two 1G + one 10G through the real PHY chain) + NETC 1588 PHC | A | BD-ring DMA + MSI-X via ITS; all three ports link + pass traffic; the 10G port links @10Gbps through the real EMDIO -> AQR113C -> xPCS chain (v2.4.0); ptp_netc registers a PHC that keeps time |
 | Storage — uSDHC (SD + eMMC) + FlexSPI NOR | A | SDHCI/ADMA block r/w, ext4 mmcblk r/w/sync (Weston off eMMC rootfs); FlexSPI boots from real flash contents |
 | eDMA v3/v5 | A | Real TCD execution — audio FIFO drains, SPI/I2C, full-duplex byte-locked interleave |
 | Serial console — LPUART x8 | A | Console I/O on ttyLP0; LPUART3 RX-DMA drives the UART interconnect |
 | Display — DPU scanout + compositing, 2D blit engine, LVDS (Weston desktop) | A | FetchLayer/FrameGen scanout + LayerBlend compositing (six-Tux logo); the 2D blit computes copy/blend/scale/rotate/CSC; a stock imx-image-full rootfs brings up Weston on the DPU/LVDS output |
-| Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
+| Audio — WM8962/SAI3 playback + MICFIL PDM capture + SPDIF/XCVR | A | ✗ **known broken:** SAI3 + WM8962 playback — see Known broken below. square wave -> eDMA -> SAI FIFO byte-checked; MICFIL real PDM samples to userspace |
 | Camera — MIPI CSI-2 -> ISI capture + virtual (host-frame) camera | A | 5 byte-checked frames off /dev/video0; ISI scans real host frames into V4L2 buffers |
 | Camera ISP (NeoISP) — raw Bayer developed to colour | A | stock V4L2 mem2mem: Bayer in, developed image out, per-channel r = 0.995/0.998/1.000; and in batch, many distinct frames in one boot with a receipt of distinct input AND output hashes over a read-only input share |
 | Camera -> ISP chain — the vision pipeline end to end | A | raw Bayer over CSI-2 -> ISI DMA to DRAM -> the NeoISP develops THAT buffer, shared as a dmabuf rather than copied: weakest-channel r = 0.9970/0.9969 and each developed frame matched to its own source by captured-mosaic hash |
@@ -288,6 +297,18 @@ data-path verified (data moves) · **B** = driver bring-up / registration bar ·
 | FEC / ENET · EQOS (DWMAC) | i.MX 95 networking is ENETC (NETC), not the FEC/EQOS pair (i.MX 91/93 have those) |
 | LCDIFv3 (parallel-RGB) · PXP 2D engine | i.MX 95 display + 2D are the DPU (scanout, compositing, blit) + LVDS/DSI, not LCDIF/PXP |
 | Ethos-U65 NPU | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
+
+### Known broken — modelled, tested, and failing
+
+Not gaps: each of these is a capability this model carries, with a reproducer that runs and does not pass. **`owner`** says whether real hardware has the same defect — `model` means it works on silicon and not here, and `unattributed` means that has not been measured yet and must not be assumed either way.
+
+| Capability | Broken when | Owner | Defect | Reproducer | Measurement |
+|---|---|---|---|---|---|
+| A55 CPU hotplug (offline + online a secondary) | under the vendor EL3 firmware chain (el3-firmware=on) - uniform across cpu1-cpu5 `EL3=on` | `unattributed` — located, but NOT yet measured on silicon - do not read this as either a hardware or a model defect | the core really stops - it halts at EL3 inside BL31's own 'wfi; b .' loop - but BL31 never publishes AFF_STATE_OFF for it, so Linux's AFFINITY_INFO poll times out (-110) and the later CPU_ON is refused ALREADY_ON (-22); offlining all five leaves the board on one CPU with no way back. Traced across the CPU_OFF window: no CORTEXMIX_COREn reset-line write, no CA55_CPUWAIT write, nothing in the GPC and no SCMI CPU_STOP on either channel - BL31 parks the core itself rather than asking the hardware. Whether silicon behaves the same is NOT measured, which is why this is unattributed: it needs TF-A's imx95 pwr_domain_off, or ten seconds on a real board | `tests/hotplug/run.sh` must fail with `FAIL: A55 hotplug is broken under the EL3 chain` | [`tests/hotplug/README.md`](tests/hotplug/README.md) _(measured 2026-11-15)_ |
+| U-Boot boot chain + network boot | the DRAM size U-Boot reports, on the released-image path (BSP imx-boot, soc-rev=0xb0, el3-firmware=on, vendor SM) | `model` — ours: works on silicon, broken here | SPL and U-Boot both get 'Failed to get ddr cfg, scmi_err = -131' (SM_ERR_POWER) from the vendor SM, so board_phys_sdram_size() falls back to its compile-time size and U-Boot prints the EVK's 15.8 GiB whatever -m said - a confident wrong number, not a failure. The SM powers the DDR domain off early in its own init and never powers it back on; the SM's own OEI test and the DRAM PLL rate are both ruled out by measurement, and the remaining caller is inside the released SM binary. At -m 2G the first bank still ends at the top of real memory so U-Boot relocates and runs; a smaller -m would not be safe ☠ **silent-wrong** | `tests/uboot/run-vendor-image.sh` must fail with `scmi_err = -131` | [`docs/system/arm/imx95-evk.rst`](docs/system/arm/imx95-evk.rst) |
+| SAI3 + WM8962 playback | any rate other than 48 kHz - run-playback.sh fails its 16 kHz leg | `model` — ours: works on silicon, broken here | a non-default rate never reaches the SAI: the guest opens the PCM at an exact 16000 (ALSA rejects an inexact rate, and the frame count is delivered) and the codec still announces ADDITIONAL_CONTROL_3=0x0010 -> 48000, so TX is enabled on a rate no codec ever announced and the 2 s stream does not take 2 s to drain. At 48 kHz the SAI's hardcoded fallback EQUALS the right answer, so the passing leg proves less than it looks | `tests/audio/run-playback.sh` must fail with `FAIL(rate=16000)` | [`tests/audio/README.md#a-non-default-rate-never-reaches-the-sai`](tests/audio/README.md#a-non-default-rate-never-reaches-the-sai) _(measured 2026-11-15)_ |
+
+A record here is gated both ways: the drift check rejects an incomplete record, a dangling `ref`, or a reproducer that cannot run, and `tests/gen-test-matrix.py --check-broken` **fails if one of these reproducers passes, or fails for a reason other than its own `expect` string** — so a record can outlive neither the defect nor the evidence for it.
 <!-- END capability-table (generated from test-matrix.yaml) -->
 
 **Display, input, audio & media.** The EVK's output and HMI peripherals run
@@ -794,7 +815,11 @@ Correctness rests on **several independent gates**, not one:
    [`docs/validation/test-matrix.yaml`](docs/validation/test-matrix.yaml) and
    fills the result from the run; a companion anti-drift gate
    (`tests/check-matrix-drift.sh`) fails the build if the README capability table
-   and the matrix disagree.
+   and the matrix disagree. The same matrix records capabilities that are
+   **known broken**, and `tests/gen-test-matrix.py --check-broken` runs each
+   one's reproducer and fails if it *passes*, or fails without the symptom the
+   record claims — so a defect record cannot outlive the defect or the evidence
+   for it.
 2. **MMIO + eDMA descriptor fuzzers** (ASan+UBSan) that found and fixed two real
    model bugs (an XCVR 8-byte-read UB and an unbounded eDMA transfer).
 3. **24-hour everything-soak** exercising every modelled datapath concurrently

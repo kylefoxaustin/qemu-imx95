@@ -6,49 +6,52 @@
 
 Board `imx95-19x19-evk` · machine `imx95-19x19-evk` · qtest binary `build/qemu-system-aarch64`.
 
-Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration · **N/A** absent (never a failure). ⚑ = fidelity caveat, see [`fidelity-audit.md`](fidelity-audit.md).
+Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration · **N/A** absent (never a failure). ⚑ = fidelity caveat, see [`fidelity-audit.md`](fidelity-audit.md). ✗ = **known broken** — a capability with a test that runs and does not pass; the tier describes what IS verified, the ✗ row says what is not.
+
+What a result cell is worth, since they are not alike: a `PASS (qtest)` was observed by this run; a `PASS (boot)` is the declared CI boot-smoke result, not something this assembler watched; a `HARNESS (operator-run)` was not run here at all. A tier is never inferred from a green test.
 
 ## Present IP
 
 | IP block | Tier | Test result | Evidence |
 |----------|:----:|-------------|----------|
 | 6x Cortex-A55 (application cluster) | A | PASS (boot) | Boots stock NXP + mainline Linux to userspace on all six cores |
+| A55 CPU hotplug (offline + online a secondary) | A | ✗ BROKEN (unattributed) · HARNESS (operator-run) | ✗ **under the vendor EL3 firmware chain (el3-firmware=on) - uniform across cpu1-cpu5:** the core really stops - it halts at EL3 inside BL31's own 'wfi; b .' loop - but BL31 never publishes AFF_STATE_OFF for it, so Linux's AFFINITY_INFO poll times out (-110) and the later CPU_ON is refused ALREADY_ON (-22); offlining all five leaves the board on one CPU with no way back. Traced across the CPU_OFF window: no CORTEXMIX_COREn reset-line write, no CA55_CPUWAIT write, nothing in the GPC and no SCMI CPU_STOP on either channel - BL31 parks the core itself rather than asking the hardware. Whether silicon behaves the same is NOT measured, which is why this is unattributed: it needs TF-A's imx95 pwr_domain_off, or ten seconds on a real board (see Known broken, `tests/hotplug/README.md`); otherwise: all five secondaries go offline and come back, 12/12, on QEMU's own PSCI (EL3=off): 'psci: CPUn killed (polled 0 ms)', and userspace still sees 6 CPUs afterwards. That arm doubles as the control showing the model's own core start/stop machinery is sound |
 | Cortex-M33 System Manager (real SM fw) | A | PASS (boot) | Runs real NXP SM firmware; Linux's sole SCMI provider over MU |
-| Cortex-M7 (real-time domain) | A | HARNESS | SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip |
+| Cortex-M7 (real-time domain) | A | HARNESS (operator-run) | SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip |
 | GICv3 + ITS | A | PASS (boot) | Underpins boot + MSI-X for NETC/PCIe |
-| U-Boot boot chain + network boot | A | HARNESS | emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI. A BSP imx-boot image also boots unmodified at soc-rev=0xb0 with el3-firmware=on - version-2 container headers, the 0x4000 stride and the V2X three-container shape - all the way to a vendor U-Boot prompt on NXP's own SM, SPL, TF-A BL31 and OP-TEE |
+| U-Boot boot chain + network boot | A | ✗ BROKEN / SILENT-WRONG (model) · HARNESS (operator-run) | ✗ **the DRAM size U-Boot reports, on the released-image path (BSP imx-boot, soc-rev=0xb0, el3-firmware=on, vendor SM):** SPL and U-Boot both get 'Failed to get ddr cfg, scmi_err = -131' (SM_ERR_POWER) from the vendor SM, so board_phys_sdram_size() falls back to its compile-time size and U-Boot prints the EVK's 15.8 GiB whatever -m said - a confident wrong number, not a failure. The SM powers the DDR domain off early in its own init and never powers it back on; the SM's own OEI test and the DRAM PLL rate are both ruled out by measurement, and the remaining caller is inside the released SM binary. At -m 2G the first bank still ends at the top of real memory so U-Boot relocates and runs; a smaller -m would not be safe (see Known broken, `docs/system/arm/imx95-evk.rst`); otherwise: emulated ROM reads the AHAB image set off eMMC (no -device loader) -> SM -> SPL -> U-Boot; prompt writes eMMC + TFTPs a kernel over ENETC and booti's it to Linux userspace. With the vendor's EL3 firmware in the set (el3-firmware=on) the same chain runs ROM -> SM -> SPL -> TF-A BL31 -> OP-TEE -> U-Boot -> Linux with all six A55s brought online by the firmware, not by QEMU's PSCI. A BSP imx-boot image also boots unmodified at soc-rev=0xb0 with el3-firmware=on - version-2 container headers, the 0x4000 stride and the V2X three-container shape - all the way to a vendor U-Boot prompt on NXP's own SM, SPL, TF-A BL31 and OP-TEE |
 | MU mailbox cross-connect | A | PASS (boot) | SCMI + rpmsg + ELE transports |
 | eDMA v3/v5 | A | PASS (qtest) | Real TCD src->dst moves; audio FIFO drain, SPI/I2C, full-duplex interleave |
 | ENETC x3 (2x1G + 10G) | A | PASS (qtest) | BD-ring DMA + MSI-X via ITS; links + traffic; board-to-board |
-| NETC EMDIO + AQR113C + xPCS (10G real chain) | A | HARNESS | Stock 10G node links @10Gbps through the real PHY chain (v2.4.0) |
-| NETC Timer (IEEE 1588 PHC) | A | HARNESS | ⚑ PPS/periodic-output/external-timestamp capture not modelled; ptp_netc binds at 0002:00:18.0; PHC registers and TMR_CUR_TIME advances |
-| uSDHC (SD + eMMC) | A | HARNESS | SDHCI/ADMA block r/w; ext4 mmcblk r/w/sync; Weston off eMMC rootfs |
+| NETC EMDIO + AQR113C + xPCS (10G real chain) | A | HARNESS (operator-run) | Stock 10G node links @10Gbps through the real PHY chain (v2.4.0) |
+| NETC Timer (IEEE 1588 PHC) | A | HARNESS (operator-run) | ⚑ PPS/periodic-output/external-timestamp capture not modelled; ptp_netc binds at 0002:00:18.0; PHC registers and TMR_CUR_TIME advances |
+| uSDHC (SD + eMMC) | A | HARNESS (operator-run) | SDHCI/ADMA block r/w; ext4 mmcblk r/w/sync; Weston off eMMC rootfs |
 | FlexSPI + serial NOR | A | PASS (boot) | JEDEC + read; boots from real flash contents |
 | LPUART x8 | A | PASS (boot) | Console on ttyLP0; LPUART3 RX-DMA drives the UART interconnect |
-| DPU display + compositing | A | HARNESS | FetchLayer/FrameGen scanout, LayerBlend compositing, six-Tux boot logo |
+| DPU display + compositing | A | HARNESS (operator-run) | FetchLayer/FrameGen scanout, LayerBlend compositing, six-Tux boot logo |
 | DPU 2D blit engine | A | PASS (qtest) | copy/fill/Porter-Duff blend/scale/rotate/CSC compute to guest memory |
-| LVDS (LDB) display output | A | HARNESS | dpu95 binds LVDS-1, panel scanout |
-| SAI3 + WM8962 playback | A | HARNESS | square wave -> eDMA -> SAI FIFO -> wav byte-checked |
-| MICFIL PDM capture | A | HARNESS | real PDM samples to userspace |
+| LVDS (LDB) display output | A | HARNESS (operator-run) | dpu95 binds LVDS-1, panel scanout |
+| SAI3 + WM8962 playback | A | ✗ BROKEN (model) · HARNESS (operator-run) | ✗ **any rate other than 48 kHz - run-playback.sh fails its 16 kHz leg:** a non-default rate never reaches the SAI: the guest opens the PCM at an exact 16000 (ALSA rejects an inexact rate, and the frame count is delivered) and the codec still announces ADDITIONAL_CONTROL_3=0x0010 -> 48000, so TX is enabled on a rate no codec ever announced and the 2 s stream does not take 2 s to drain. At 48 kHz the SAI's hardcoded fallback EQUALS the right answer, so the passing leg proves less than it looks (see Known broken, `tests/audio/README.md#a-non-default-rate-never-reaches-the-sai`); otherwise: square wave -> eDMA -> SAI FIFO -> wav byte-checked at 48 kHz |
+| MICFIL PDM capture | A | HARNESS (operator-run) | real PDM samples to userspace |
 | SPDIF / XCVR (playback) | A | PASS (boot) | audio transceiver playback datapath |
-| MIPI CSI-2 -> ISI (capture) | A | HARNESS | 5 byte-checked UYVY frames off /dev/video0 |
-| Virtual camera (host-frame source) | A | HARNESS | ISI scans real host frames into V4L2 buffers |
-| NeoISP (camera ISP) debayer | A | HARNESS | ⚑ bilinear debayer + OB_WB0 black level/white balance are applied; gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; raw Bayer in, developed image out via the stock V4L2 mem2mem path; per-channel r = 0.995/0.998/1.000 |
-| Camera -> LCD (capture to panel) | A | HARNESS | smart-camera frame in over CSI-2, out on the LVDS panel; capture hash == host hash, panel screendump r=1.0000 |
-| Camera -> ISP chain (CSI-2 -> ISI -> DRAM -> NeoISP) | A | HARNESS | ⚑ there is no ISI->ISP wire in the models and none on silicon - the ISI writes DRAM and the NeoISP, a V4L2 mem2mem device, reads DRAM; the join is memory. The NeoISP stage caveat applies: gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; the functional vision path in one boot: raw Bayer over CSI-2, ISI DMA into a V4L2 capture buffer in DRAM, that buffer exported with VIDIOC_EXPBUF and queued as neoisp-input0 (no memcpy - the ISP reads the ISI's own buffer), developed out; 1280x720 RGGB, weakest-channel r = 0.9970/0.9969, and each developed frame matched to its own source by captured-mosaic hash (2 distinct sources) |
-| NeoISP batch develop (many distinct frames) | A | HARNESS | NFRAMES deliberately-distinct raw frames developed in one boot over a 9p share (default 6; measured in=6 ok=6 rejected=0); the receipt must show as many distinct INPUT hashes as frames staged AND as many distinct OUTPUT hashes, so a runner that develops one frame and re-serves it cannot pass; the input share is verified to have stayed read-only |
-| PCIe RC pcie0 + pcie1 (DWC) | A | HARNESS | link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA |
+| MIPI CSI-2 -> ISI (capture) | A | HARNESS (operator-run) | 5 byte-checked UYVY frames off /dev/video0 |
+| Virtual camera (host-frame source) | A | HARNESS (operator-run) | ISI scans real host frames into V4L2 buffers |
+| NeoISP (camera ISP) debayer | A | HARNESS (operator-run) | ⚑ bilinear debayer + OB_WB0 black level/white balance are applied; gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; raw Bayer in, developed image out via the stock V4L2 mem2mem path; per-channel r = 0.995/0.998/1.000 |
+| Camera -> LCD (capture to panel) | A | HARNESS (operator-run) | smart-camera frame in over CSI-2, out on the LVDS panel; capture hash == host hash, panel screendump r=1.0000 |
+| Camera -> ISP chain (CSI-2 -> ISI -> DRAM -> NeoISP) | A | HARNESS (operator-run) | ⚑ there is no ISI->ISP wire in the models and none on silicon - the ISI writes DRAM and the NeoISP, a V4L2 mem2mem device, reads DRAM; the join is memory. The NeoISP stage caveat applies: gamma, colour matrix, denoise and tone mapping are accepted and announced, not applied; the functional vision path in one boot: raw Bayer over CSI-2, ISI DMA into a V4L2 capture buffer in DRAM, that buffer exported with VIDIOC_EXPBUF and queued as neoisp-input0 (no memcpy - the ISP reads the ISI's own buffer), developed out; 1280x720 RGGB, weakest-channel r = 0.9970/0.9969, and each developed frame matched to its own source by captured-mosaic hash (2 distinct sources) |
+| NeoISP batch develop (many distinct frames) | A | HARNESS (operator-run) | NFRAMES deliberately-distinct raw frames developed in one boot over a 9p share (default 6; measured in=6 ok=6 rejected=0); the receipt must show as many distinct INPUT hashes as frames staged AND as many distinct OUTPUT hashes, so a runner that develops one frame and re-serves it cannot pass; the input share is verified to have stayed read-only |
+| PCIe RC pcie0 + pcie1 (DWC) | A | HARNESS (operator-run) | link up + enumeration; arbitrary endpoint bind + MSI-X via ITS + DMA |
 | HW JPEG codecs (enc + dec) | A | PASS (qtest) | mxc-jpeg /dev/video2,3; libjpeg encode/decode or honest error |
 | LPI2C x8 + slaves | A | PASS (boot) | codec/PMIC/expander answer; master IRQ path |
 | LPSPI x8 | A | PASS (qtest) | per-bus SSI master; JEDEC byte-exact; eDMA-driven; board-to-board SPI |
 | I3C x2 (Silvaco) | A | PASS (boot) | I3C master bridges to legacy I2C |
 | FlexCAN x5 | A | PASS (qtest) | can0 up; frame round-trip; board-to-board CAN |
-| RGPIO x5 | A | HARNESS | line get/set; card-detect via GPIO3 |
+| RGPIO x5 | A | HARNESS (operator-run) | line get/set; card-detect via GPIO3 |
 | TPM PWM | A | PASS (boot) | both TPM PWM blocks drive duty/period |
-| ADC | A | HARNESS | operator-settable adc-chN QOM props; injection verified (was silent-wrong, fixed) |
+| ADC | A | HARNESS (operator-run) | operator-settable adc-chN QOM props; injection verified (was silent-wrong, fixed) |
 | Watchdog (WDOG3) | A | PASS (boot) | i.MX7ULP-style wdog; SDCLK auto-gate quirk |
-| virtio-mmio + 9p host share | A | HARNESS | 4 virtio-mmio transports; 9p host share mounts e2e |
-| ChipIdea USB2 host (usb-kbd) | B | HARNESS | usb-kbd enumerates as HID; VBUS expander on lpi2c7 |
+| virtio-mmio + 9p host share | A | HARNESS (operator-run) | 4 virtio-mmio transports; 9p host share mounts e2e |
+| ChipIdea USB2 host (usb-kbd) | B | HARNESS (operator-run) | usb-kbd enumerates as HID; VBUS expander on lpi2c7 |
 | USB3 SuperSpeed (DWC3) | B | PASS (boot) | snps,dwc3 core binds |
 | MIPI-DSI display output | B | PASS (boot) | dw-mipi-dsi -> rm67191 panel; card0-DSI-1 comes up |
 | DDR PMU | B | PASS (boot) | perf PMU driver binds |
@@ -71,5 +74,17 @@ Tiers: **A** data-path-verified · **B** driver-bring-up · **C** registration �
 | PXP 2D engine | N/A | i.MX 95 2D acceleration is the DPU blit engine, not PXP |
 | Ethos-U65 NPU | N/A | the i.MX 95 NPU is the NXP Neutron, not Arm Ethos-U65 (that is the i.MX 93) |
 
-Summary: 48 present (28 PASS / 0 FAIL observed this run), 5 N/A-absent.
+## Known broken — modelled, tested, and failing
+
+Not gaps: each of these is a capability this model carries, with a reproducer that runs and does not pass. **`owner`** says whether real hardware has the same defect — `model` means it works on silicon and not here, and `unattributed` means that has not been measured yet and must not be assumed either way.
+
+| Capability | Broken when | Owner | Defect | Reproducer | Measurement |
+|---|---|---|---|---|---|
+| A55 CPU hotplug (offline + online a secondary) | under the vendor EL3 firmware chain (el3-firmware=on) - uniform across cpu1-cpu5 `EL3=on` | `unattributed` — located, but NOT yet measured on silicon - do not read this as either a hardware or a model defect | the core really stops - it halts at EL3 inside BL31's own 'wfi; b .' loop - but BL31 never publishes AFF_STATE_OFF for it, so Linux's AFFINITY_INFO poll times out (-110) and the later CPU_ON is refused ALREADY_ON (-22); offlining all five leaves the board on one CPU with no way back. Traced across the CPU_OFF window: no CORTEXMIX_COREn reset-line write, no CA55_CPUWAIT write, nothing in the GPC and no SCMI CPU_STOP on either channel - BL31 parks the core itself rather than asking the hardware. Whether silicon behaves the same is NOT measured, which is why this is unattributed: it needs TF-A's imx95 pwr_domain_off, or ten seconds on a real board | `tests/hotplug/run.sh` must fail with `FAIL: A55 hotplug is broken under the EL3 chain` | [`tests/hotplug/README.md`](../../tests/hotplug/README.md) _(measured 2026-11-15)_ |
+| U-Boot boot chain + network boot | the DRAM size U-Boot reports, on the released-image path (BSP imx-boot, soc-rev=0xb0, el3-firmware=on, vendor SM) | `model` — ours: works on silicon, broken here | SPL and U-Boot both get 'Failed to get ddr cfg, scmi_err = -131' (SM_ERR_POWER) from the vendor SM, so board_phys_sdram_size() falls back to its compile-time size and U-Boot prints the EVK's 15.8 GiB whatever -m said - a confident wrong number, not a failure. The SM powers the DDR domain off early in its own init and never powers it back on; the SM's own OEI test and the DRAM PLL rate are both ruled out by measurement, and the remaining caller is inside the released SM binary. At -m 2G the first bank still ends at the top of real memory so U-Boot relocates and runs; a smaller -m would not be safe ☠ **silent-wrong** | `tests/uboot/run-vendor-image.sh` must fail with `scmi_err = -131` | [`docs/system/arm/imx95-evk.rst`](../../docs/system/arm/imx95-evk.rst) |
+| SAI3 + WM8962 playback | any rate other than 48 kHz - run-playback.sh fails its 16 kHz leg | `model` — ours: works on silicon, broken here | a non-default rate never reaches the SAI: the guest opens the PCM at an exact 16000 (ALSA rejects an inexact rate, and the frame count is delivered) and the codec still announces ADDITIONAL_CONTROL_3=0x0010 -> 48000, so TX is enabled on a rate no codec ever announced and the 2 s stream does not take 2 s to drain. At 48 kHz the SAI's hardcoded fallback EQUALS the right answer, so the passing leg proves less than it looks | `tests/audio/run-playback.sh` must fail with `FAIL(rate=16000)` | [`tests/audio/README.md#a-non-default-rate-never-reaches-the-sai`](../../tests/audio/README.md#a-non-default-rate-never-reaches-the-sai) _(measured 2026-11-15)_ |
+
+A record here is gated both ways: the drift check rejects an incomplete record, a dangling `ref`, or a reproducer that cannot run, and `tests/gen-test-matrix.py --check-broken` **fails if one of these reproducers passes, or fails for a reason other than its own `expect` string** — so a record can outlive neither the defect nor the evidence for it.
+
+Summary: 49 present (28 PASS / 0 FAIL observed this run, 3 declared broken), 5 N/A-absent.
 
