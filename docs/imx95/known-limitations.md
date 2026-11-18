@@ -56,7 +56,7 @@ exercised because most QEMU arm64 setups don't enable such idle states.
 CPU on a pending, distributor/redist-enabled interrupt even when the CPU
 interface is quiesced; the guest's cpuidle-exit path re-enables the interface
 and takes the interrupt. This wants upstream-grade care (avoid spurious-wake
-loops) and is filed as a follow-up to qemu-devel
+loops); the proper fix is QEMU-core work
 (`docs/reviews/deferred-community-writeups.md`).
 
 **Workaround.** `cpuidle.off=1`. Linux then uses shallow `arch_cpu_idle` WFI on
@@ -86,40 +86,45 @@ community writeup.
 
 ---
 
-## 3. Hardware accelerators (GPU / VPU / NPU) are probe-time stubs only
+## 3. Accelerator COMPUTE (GPU / VPU / NPU) is out of scope
 
-The Mali-G310 (GPU), Amphion (VPU), and Neutron (NPU) blocks are logging
-stubs: their MMIO is mapped and accesses are absorbed, but **no rendering,
-codec, or inference occurs**. The precise failure mode for each driver is
-characterized below from a Tier-3.4 live test with a glibc Mesa userspace
-(see `docs/imx95/validation-report.md` for the full evidence):
+> Rewritten 2026-11-18. This section described the state before the display,
+> camera, ISP and NPU work landed, and contradicted the README for months. What
+> remains out of scope is the *proprietary compute* of three blocks -- not the
+> display and camera paths, which are functional.
 
-- **Mali GPU.** The driver fails probe with `-22` (EINVAL) at the product-ID
-  check: it reads the stub's GPU-ID register, sees `Unknown GPU Product ID 0`,
-  logs "Early device initialization failed" and unbinds. No `/dev/dri/cardN`
-  is registered by Mali, and no Vulkan ICD is installed. `vulkaninfo` reports
-  `Found no drivers! ERROR_INCOMPATIBLE_DRIVER`. `glmark2-es2` and other
-  GL/Vulkan tools have nothing to attach to.
-- **DPU (display controller, `4b400000`).** Probes cleanly
-  (`hw/misc/imx95_dpu.c` reports the command sequencer idle with FIFO space)
-  and registers `/dev/dri/card0` + `renderD128` — so a DRM card *does* appear
-  in `/dev`, but it has no connectors and no scanout. `modetest` (which probes
-  by hardcoded driver-name list — i915/amdgpu/radeon/nouveau/vmwgfx — and
-  doesn't match the i.MX stub) fails to attach; `kmscube` errors with
-  `no connected connector! failed to initialize legacy DRM`.
-- **Amphion VPU / Neutron NPU.** Logging-stub MMIO, no V4L2 stream/inference.
-- **Display interfaces (MIPI DSI `4acf0000`, LVDS/LDB `4b0c0000`) and camera
-  (MIPI CSI0/1 `4ad30000`/`4ad40000`, ISI `4ad50000`, NEO ISP `4ae00000`).**
-  Unimplemented stubs (read-as-0) — present so enabling the DT nodes degrades
-  gracefully instead of faulting, but there is no panel/scanout output and no
-  camera capture. The display-mix CSRs and the DPU command-sequencer stub let
-  the `dpu95`/DRM stack probe, but nothing reaches a connector. A real display
-  path (DPU scanout + a fixed connected output surfaced to a QEMU window) and
-  camera capture (a V4L2 source) are **roadmap items**, after NETC networking.
+The **compute** of the Mali-G310 (GPU), the Wave6 (VPU) video codec and the
+Neutron (NPU) is not modelled: no GPU rendering, no VPU codec, no on-NPU
+inference. Linux nonetheless sees all three, and each fails honestly rather than
+fabricating a result:
 
-Userspace requiring hardware acceleration (glmark2, `ffmpeg` hwaccel, NPU
-inference, anything wanting a working Mali ICD) will not work; nor will
-on-screen display output or live camera capture.
+- **Mali GPU.** The model reports the real Mali-G310 `GPU_ID` (read back from
+  FRDM silicon), so kbase **identifies** the part -- `GPU identified as 0x4 arch
+  10.12.7` -- and then fails the un-modelled CSF bring-up **cleanly** with
+  `-EIO`. No hang, and no fake `/dev/mali0`. A fully-bound GPU could not render
+  here anyway: kbase's userspace is Arm's proprietary libmali, not Mesa.
+- **VPU.** The i.MX 95 codec is **Wave6** (`cnm633c`), not the Amphion of the
+  i.MX 8M line. The drivers bind on the stub and register `/dev/video*`; the
+  firmware-driven compute engine is not modelled. The two CAST `mxc-jpeg`
+  blocks are a *separate* IP and are fully functional (libjpeg-backed encode +
+  decode, decode validated through GStreamer).
+- **Neutron NPU.** Brings up end to end: `remoteproc` loads
+  `NeutronFirmware.elf`, the compute driver binds `/dev/neutron0`, and the LiteRT
+  delegate runs `benchmark_model`. A converted model's `NeutronGraph` node is
+  claimed and the mailbox `RUN` -> `DONE` round-trip completes
+  (`tests/neutron/run-converted.sh`); what is absent is the **numerical** result.
+  Two things that are easy to misread: the 0 offloaded nodes reported by
+  `run.sh` is a property of its *stock, unconverted* model -- which offloads 0 on
+  silicon too -- and NXP's eIQ `neutron-converter` ships x86-64-only, so model
+  compilation is a host step on hardware exactly as it is here.
+- **Display and camera are NOT in this section any more.** The DPU scans out and
+  composites (multi-plane, both pixel pipelines, a Weston desktop), the 2D blit
+  engine computes, MIPI-DSI and LVDS bring up panels, and the CSI-2 -> ISI ->
+  NeoISP camera chain captures and develops real frames. See the README's
+  capability table for the per-block tier and evidence.
+
+Userspace that needs a working Mali ICD (glmark2, Vulkan), `ffmpeg` hwaccel
+through the VPU, or real NPU inference will not work here.
 
 This is universal across SoC software emulators: no public software emulator of
 any modern SoC's GPU/VPU/NPU exists (Snapdragon, Apple Silicon, Tegra, Exynos,
@@ -150,7 +155,7 @@ storms — one root cause, two symptoms.)
 
 ---
 
-## 5. Cortex-M7 — in-progress across v1.x
+## 5. Cortex-M7 — the v1.x milestone (COMPLETE)
 
 The i.MX 95 SoC has a heterogeneous CPU topology of 6× Cortex-A55,
 1× Cortex-M33, and 1× Cortex-M7. The M33 has been modelled since v0.6
@@ -299,7 +304,7 @@ Step 4 wires this end-to-end; Step 5 adds SM-driven M7 fault recovery
 
 ---
 
-## 6. Networking — two 1G ENETC ports (v2.0.0 + second port)
+## 6. Networking — three ENETC ports (two 1G + one 10G)
 
 The NETC block is modelled end to end: a functional GICv3 ITS + an
 integrated-ECAM PCIe host + a from-scratch ENETC v4 Ethernet PF
@@ -503,11 +508,14 @@ recorded here so the scope is explicit rather than surprising.
   passthrough/copy path for zero observable gain. Left at passthrough on
   purpose.
 
-- **DPU 2D blit — `g2d` userspace end-to-end (proprietary ceiling).** The blit
-  is exposed as a DRM render node and validated by qtest. A full
-  userspace-`g2d`-library 2D op requires NXP's proprietary `libg2d` stack — the
-  same ceiling as the Mali GPU and Amphion VPU (section 3): Linux sees the
-  device, full userspace acceleration is not emulatable.
+- **DPU 2D blit — `g2d` userspace end-to-end: DONE (this entry is kept for the
+  one remaining gap).** No longer a ceiling: stock NXP `g2d_basic_test` drives
+  `libg2d-dpu` over `/dev/dri/renderD128` and its `g2d_copy`, `g2d_cache_op` and
+  Porter-Duff self-checks pass against the modelled blit engine
+  (`tests/blit/run.sh`), with 2x-upscale+rotate, RGBA<->YUYV and RGBA<->NV12
+  exercisers alongside. What is still absent is the `linux-dmabuf` import the GL
+  renderer needs (no GPU), so the Wayland `g2d` test must use the `wl_shm` path;
+  and the non-NV12 YUV formats (I420/YV12/...) are not modelled.
 
 - **OCOTP fuse nvmem — MAC via DT workaround (ELE-gated).** The FSB fuse shadow
   is seeded with real NXP-OUI MACs, but the `fsl,imx95-ocotp` nvmem driver
