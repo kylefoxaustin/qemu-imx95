@@ -8,17 +8,17 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 > named `imx95-netc`), from its tip back to the upstream branch point
 > `edcc429e9e`; the vast majority of the ~129k-commit history is inherited from
 > upstream QEMU. `main` is the full series — from v1 (the A55/M33/M7 complement) through
-> the NETC networking, multimedia, storage/Weston, 10G real-PHY, silicon-validated
+> the NETC networking, multimedia, storage/Weston, 10G real-PHY, silicon-diffed
 > fidelity and U-Boot boot-chain work that followed (see the
 > [Roadmap](#roadmap--milestone-history)) — in one linear history. The older
 > `imx95-scaffold` branch is the pure-v1 line, kept for reference and without
 > NETC. The upstream QEMU README is preserved at [`README.rst`](README.rst) —
 > this file describes the i.MX 95-specific work.
 
-qemu-imx95 is the **first publicly available QEMU model of the i.MX 95** we are aware of, and one node in a fleet of
-NXP QEMU ports (i.MX 91 / 93 / 95 and the MCXN947 microcontroller) that share
-device models and a validation standard. The i.MX 95 sits at the **top of the
-A55 line**: **six Cortex-A55** application cores, a **Cortex-M33** running NXP's
+qemu-imx95 is one node in a fleet of NXP QEMU ports (i.MX 91 / 93 / 95 and
+the MCXN947 microcontroller) that share device models and a validation
+standard. The i.MX 95 sits at the **top of the A55 line**: **six Cortex-A55**
+application cores, a **Cortex-M33** running NXP's
 **System Manager** (SM) firmware, and a **Cortex-M7** real-time core. Its
 defining trait — unlike the i.MX 91 / 93 — is that the SM firmware on the M33 is
 the **only SCMI provider**: Linux's clock, power, reset and sensor operations are
@@ -47,8 +47,7 @@ no GPU rendering, no VPU codec — while the HW JPEG codecs are functional; and 
 (see [Known limitations](#known-limitations)).
 
 Structural and stylistic conventions follow the upstream i.MX 8MP code
-(`hw/arm/fsl-imx8mp.{c,h}`, `hw/arm/imx8mp-evk.c`); the long-term aim is to be
-upstream-mergeable into QEMU mainline.
+(`hw/arm/fsl-imx8mp.c`, `include/hw/arm/fsl-imx8mp.h`, `hw/arm/imx8mp-evk.c`).
 
 **Maintainer:** Kyle Fox ([@kylefoxaustin](https://github.com/kylefoxaustin))
 (see [`MAINTAINERS`](MAINTAINERS) for the canonical entry).
@@ -126,8 +125,7 @@ For the M7's SM-managed lifecycle (boot, rpmsg, fault recovery), see
 ### Scope — what's modelled, what's deferred
 
 
-This machine models the **full i.MX 95 CPU complement** — all three CPU types,
-not a partial SoC. The headline: it boots **real Linux on the A55 cluster, with
+This machine models the **full i.MX 95 CPU complement** — all three CPU types. The headline: it boots **real Linux on the A55 cluster, with
 SCMI served by the real NXP System Manager firmware** — not a software stub.
 
 - **6× Cortex-A55 — application cluster (the headline).** Boots stock NXP BSP
@@ -159,7 +157,8 @@ functional; USB comes up at the registration bar** — the five FlexCAN controll
 display path (boot logo on screen) and the 2D blit engine (proven through the
 real NXP G2D stack) run end to end, while the usb2 ChipIdea host (`usb-kbd`
 input) binds and enumerates against stock Linux. Audio playback (WM8962/SAI3)
-and PDM capture (MICFIL) run end to end; BT-SCO and SAI RX capture bind without
+and PDM capture (MICFIL) run end to end at 48 kHz (any other playback rate
+never reaches the SAI - a known-broken record, below); BT-SCO and SAI RX capture bind without
 a codec-driven ADC route (see
 "What runs today" for the per-device **functional** / **brings up** split).
 VPU decode and other customer-specific real-time peripherals (TSN, DSP) remain
@@ -204,14 +203,17 @@ Run /init as init process
   it boots its own bootloader, drives its own storage and network, and
   network-boots an OS.
 - **Reproducible from a clean clone** — including a clean `ubuntu:24.04`
-  container as a different user with only the README-documented dependencies.
+  container as a different user with only the README-documented dependencies
+  (the in-tree `tests/docker-repro/` harness uses `ubuntu:22.04`).
 - **24 h+ stability soak** (A55 + M33 path) — ran past its 24 h target to
   ~36 h: stable memory, data-integrity md5 unchanged across 4274 heartbeats,
   no panics or SCMI timeouts.
 - **24 h "everything-soak"** (`tests/soak-everything/`) — every modelled
   datapath exercised concurrently (NETC ×3, audio, JPEG, USB-HID, DPU, FlexCAN,
-  virtio-9p, camera, both PCIe RCs, M33 SM + M7) for a full day: 0 anomalies,
-  flat RSS, 1368 in-guest roll-call heartbeats clean.
+  virtio-9p, camera, both PCIe RCs, M33 SM + M7) for a full day: flat RSS, 1368
+  in-guest roll-call heartbeats clean, and 0 anomalies **of the kinds it checks
+  for** - the three known-broken records below were live throughout and are
+  outside what it exercises.
 - **Two independent third-party robotics stacks ran to convergence** in the
   Linux userspace — built and run from a separate working session, with the
   recipes and logs in their own repositories (not reproducible from this tree):
@@ -220,8 +222,8 @@ Run /init as init process
   OpenCV + g2o + DBoW2, 139 MB vocabulary) and **VINS-Fusion**
   ([`vins-fusion-imx95`](https://github.com/kylefoxaustin/vins-fusion-imx95) —
   stereo-inertial VIO + Ceres). Real SLAM/VIO applications on a full
-  glibc-dynamic userspace, ~21× TCG slowdown (functional portability, not a
-  silicon timing estimate). The ORB-SLAM3 run surfaced the SDHCI shutdown bug;
+  glibc-dynamic userspace, ~21× TCG slowdown `[DERIVED - median per-frame; the
+  mean is ~25×]` (functional portability, not a silicon timing estimate). The ORB-SLAM3 run surfaced the SDHCI shutdown bug;
   the VINS-Fusion run, on the fixed build, confirmed a clean guest poweroff.
 
 **On the real-time (Cortex-M7) side** — the SM-managed M7 (the `imx95-v1.x`
@@ -231,8 +233,9 @@ milestone in Scope, above), validated end to end:
   the A-cluster; Linux attaches to the SM-managed core over MU7.
 - **100-message `imx_rpmsg_pingpong`** round-trip over MU7 — env-gated
   `m7_rpmsg_pingpong` functional test (harness + recipe in `tests/m7-rpmsg/`).
-- **SM cold-reset fault recovery** (`SYSRESETREQ` → `lm_reset`), exactly as on
-  silicon — `tests/m7-fault-recovery/`.
+- **SM cold-reset fault recovery** (`SYSRESETREQ` → `lm_reset`), the path the SM
+  source takes on silicon `[SOURCED - not observed on a board]` —
+  `tests/m7-fault-recovery/`.
 - **Four soaks on the M7 path** — 36 h parallel-boot (Step 2), 36 h SM-driven
   release (Step 3), 21 h SM-managed (Step 5), and a full **24 h** clean run on
   the SDHCI-shutdown-fix build (2769 heartbeats, +1.3 % RSS, `SRC.SCR` bit 12
@@ -255,7 +258,9 @@ is broken". A capability that is modelled, has a test, and does not pass it
 therefore carries a **✗ known-broken** record instead — scoped to the
 configuration it fails in and attributed to an owner (`model` = works on
 silicon, broken here; `vendor-fw` = the shipped firmware is broken the same way
-on real hardware; `qemu-core` = the gap is outside this machine). They are
+on real hardware; `qemu-core` = the gap is outside this machine; and
+`unattributed` = the locus is found but silicon has **not** been measured, so it
+must not be read as either a hardware or a model defect). They are
 listed in full under the table, and `tests/gen-test-matrix.py --check-broken`
 fails if one of them starts passing, so a record cannot outlive its defect.
 
@@ -435,7 +440,8 @@ working host data path yet):
     **eDMA** channel refills it from the ALSA ring (ring → SAI3 `TDR0`), and the
     clocked-out samples are handed to the QEMU audio backend. A real
     `snd_pcm_writei()` of a square wave plays the whole stream paced at the
-    audio rate (`tests/audio/run-playback.sh`).
+    48 kHz audio rate (`tests/audio/run-playback.sh`). Any other rate never
+    reaches the SAI — a known-broken record, in the table above.
   - **MICFIL capture** — the MICFIL model synthesises a PDM sample stream into
     its FIFO and a cyclic eDMA channel reads `DATACH0` into the ALSA ring, so
     `snd_pcm_readi()` returns non-silent **S32_LE** samples
@@ -460,10 +466,22 @@ working host data path yet):
 - **Neutron NPU — brings up.** The NXP Neutron NPU comes up end to end:
   `remoteproc` loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the
   compute driver binds (`/dev/neutron0`), and the **LiteRT Neutron delegate runs
-  `benchmark_model`** against it (`tests/neutron/`). The proprietary on-NPU
-  compute is out of scope — the delegate offloads 0 nodes and inference falls
-  back to the CPU — but the full firmware / remoteproc / driver / delegate stack
-  is exercised, not a probe-time stub.
+  `benchmark_model`** against it (`tests/neutron/`) — the full firmware /
+  remoteproc / driver / delegate stack, not a probe-time stub. Two things to read
+  carefully:
+  - **The 0 offloaded nodes is the input model, not the emulator.**
+    `tests/neutron/run.sh` boots a **stock, unconverted** model; the delegate
+    only claims a `NeutronGraph` op that NXP's converter inserts, so a stock
+    `.tflite` offloads 0 nodes on silicon too. `run-converted.sh` drives a
+    converted model, where the delegate *does* claim the node and the mailbox
+    `RUN`→`DONE` round-trip completes. What stays out of scope is the
+    **numerical** result: the proprietary on-NPU compute.
+  - **The compile step is host-side everywhere.** NXP's eIQ `neutron-converter`
+    (and the quantize/profile flow around it) ships **x86-64-only** — there is no
+    aarch64 build on NXP's package index — while only the runtime, delegate plus
+    driver, is aarch64. So a model is compiled on an x86 host whether the target
+    is this emulator or a real board; `tests/neutron/run-corpus.sh` runs the
+    converter on the host for exactly that reason.
 - **GPIO — functional.** The five SoC RGPIO controllers (`hw/gpio/imx95_gpio.c`,
   `fsl,imx95-gpio`) bind under `gpio-vf610`; output drives and input reads round
   trip (PDOR/PDDR ↔ PDIR), exercised by a devmem loopback in `tests/gpio/`.
@@ -698,9 +716,7 @@ working host data path yet):
   i2c-dev helper then runs a SMBus config write/read round-trip to the sensor
   over the I3C master, confirming a real transfer traverses the bus end to end.
 
-Audio playback (WM8962/SAI3) and MICFIL PDM capture are now functional (see the
-Audio entry above); the remaining datapath gaps (BT-SCO, SAI RX capture) are
-tracked in
+The remaining audio datapath gaps (BT-SCO, SAI RX capture) are tracked in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
 **CAN — functional.** All five **FlexCAN** controllers are modelled
@@ -748,12 +764,14 @@ the port.
 See [`tests/netc/`](tests/netc/) for the bring-up, two-port, 10G, and soak
 recipes.
 
-Other Tier-3 limitations (GPU/VPU stub-only, the Neutron
+Other limitations (GPU/VPU stub-only, the Neutron
 NPU brings up but does not compute) are
 characterized with precise failure points — see
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
 
-The campaign found and fixed two real bugs in the artifact before any
+The pre-release validation campaign
+([`docs/imx95/validation-report.md`](docs/imx95/validation-report.md)) found and
+fixed two real bugs in the artifact before any
 external user would have hit them: an LPUART FIFO read-only-bit storm
 and an undocumented `file` host-package dependency in a
 test script.
@@ -810,7 +828,7 @@ blind to it, however many nodes it uses.
 Correctness rests on **several independent gates**, not one:
 
 1. **Kernel-free qtests** on the `imx95-19x19-evk` machine (2D blit, eDMA, ENETC,
-   LPSPI, FlexCAN, JPEG, Mali GPU-ID, Neutron, ISI) — the matrix is assembled by
+   LPSPI, FlexCAN, JPEG, Mali GPU-ID, Neutron, NeoISP) — the matrix is assembled by
    [`tests/gen-test-matrix.py`](tests/gen-test-matrix.py), which reads Tier from
    [`docs/validation/test-matrix.yaml`](docs/validation/test-matrix.yaml) and
    fills the result from the run; a companion anti-drift gate
@@ -826,7 +844,8 @@ Correctness rests on **several independent gates**, not one:
    (zero anomalies, flat RSS).
 4. **Functional boot test** — Linux to userspace on the real NXP System Manager
    ([`tests/functional/aarch64/test_imx95_evk.py`](tests/functional/aarch64/test_imx95_evk.py)),
-   plus mainline-kernel boot.
+   plus the mainline-kernel boot recorded in
+   [`docs/imx95/validation-report.md`](docs/imx95/validation-report.md).
 5. **Interconnect + cross-SoC** — byte-exact board-to-board over eth/UART/SPI/CAN,
    cross-validated against the i.MX 91 / 93 / MCXN947 nodes (above).
 
@@ -924,10 +943,10 @@ To boot Linux to userspace you need four artifacts, all built from the NXP BSP:
 
 | Artifact | Where from |
 | --- | --- |
-| Kernel `Image`              | `references/linux-imx`, imx defconfig |
+| Kernel `Image`              | an NXP `linux-imx` checkout you supply, imx defconfig |
 | `imx95-19x19-evk.dtb`       | same kernel build |
 | initramfs (`*.cpio.gz`)     | any aarch64 rootfs with `/init` |
-| SM firmware `m33_image.elf` | `references/imx-sm`, `make config=mx95evk` |
+| SM firmware `m33_image.elf` | an `imx-sm` checkout you supply (`git clone https://github.com/nxp-imx/imx-sm.git`), `make config=mx95evk` |
 
 **Where the test scripts look for them.** Every artifact path is overridable by
 an env var (`SM_ELF`, `KERNEL`, `DTB`, `INITRD`), so you can point the scripts
@@ -1035,6 +1054,13 @@ addresses and IRQ numbers.
 
 ## Known limitations
 
+Three capabilities are **modelled, tested and failing** rather than missing or
+stubbed — A55 hotplug under the vendor EL3 chain, the DRAM size U-Boot reports on
+the released-image path (silent-wrong), and SAI playback at any rate but 48 kHz.
+Each has a reproducer and is recorded under
+[Known broken](#known-broken--modelled-tested-and-failing) above; this section
+covers what is *absent or deferred*, which is a different thing.
+
 **Deep cpuidle requires `cpuidle.off=1`.** Without it, Linux hangs shortly
 after `SCMI Notifications - Core Enabled`. The mechanism is fully
 characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
@@ -1048,10 +1074,10 @@ characterized, and the gap is in QEMU core, **not** the i.MX 95 machine model:
 3. **QEMU's GICv3 model does not implement the architectural WakeRequest** — it
    never wakes a halted CPU on a pending interrupt once the CPU interface is
    quiesced. So a cross-CPU wake (e.g. a `stop_machine` IPI) can't reach the
-   idle core, and the boot hangs. This affects all GICv3 QEMU machines.
+   idle core, and the boot hangs. This affects any GICv3 guest whose idle state
+   quiesces the CPU interface; it was observed here, not surveyed across machines.
 4. With `cpuidle.off=1`, Linux uses shallow WFI on the still-running per-CPU
-   arch timer and boots cleanly. The proper fix is QEMU-core work, filed as a
-   follow-up to qemu-devel.
+   arch timer and boots cleanly. The proper fix is QEMU-core work.
 
 **The Arm SMMU-v3 is not modelled, so all DMA is identity-mapped.** The window
 at `iommu@490d0000` reads as zero. That is enough for U-Boot SPL's
@@ -1098,9 +1124,12 @@ couldn't render anyway: kbase's userspace is Arm's proprietary libmali, not
 Mesa.) The **Neutron NPU brings up end to end**: the remoteproc
 loads `NeutronFirmware.elf` into the modelled DTCM/ITCM, the compute driver binds
 (`/dev/neutron0`), and the LiteRT Neutron delegate + `benchmark_model` run
-(`tests/neutron/`) — but the NPU itself does not compute (the delegate offloads 0
-nodes and inference falls back to CPU), since the proprietary firmware's inference
-is out of scope.
+(`tests/neutron/`) — but the NPU itself does not compute: the proprietary
+firmware's inference is out of scope. (The 0 offloaded nodes that `run.sh`
+reports is a property of its **stock, unconverted** model, which offloads 0 on
+silicon too, not of this emulator — see the Neutron entry under "What runs
+today". NXP's eIQ `neutron-converter` is x86-64-only, so model compilation is a
+host step here and on hardware alike.)
 
 Full diagnoses, including the icount × multi-CPU finding, are in
 [`docs/imx95/known-limitations.md`](docs/imx95/known-limitations.md).
@@ -1108,14 +1137,15 @@ Full diagnoses, including the icount × multi-CPU finding, are in
 ## Roadmap & milestone history
 
 
-Near-term focus is **landing this machine upstream** — the series plus its
-three generic-QEMU prereq patches (`target/arm/ptw.c`,
-`target/arm/tcg/tlb_helper.c`, `hw/sd/sdhci.c`) to qemu-devel.
+Near-term focus is **landing this machine upstream** — the series plus the
+generic-QEMU changes it depends on, in `target/arm` (the ARMv7-M PMSAv7 fix in
+`ptw.c`, and `tcg/tlb_helper.c`) and `hw/sd` (`sdhci.c`, `sd.c`) — to qemu-devel.
 
 **NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five
 controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
 host (`usb-kbd` input), **audio** (all three ASoC cards), the **functional HW
-JPEG** codecs (encode + decode via libjpeg, GStreamer-validated), and the
+JPEG** codecs (encode + decode via libjpeg; decode additionally validated
+through the real GStreamer stack), and the
 functional **GPIO / TPM PWM / ADC / I²C** peripherals are **done** and described
 under "What runs today" above. **Linux block storage** is now functional too —
 read/write **eMMC + SD** over the uSDHC/ADMA datapath, enough to mount an ext4
@@ -1126,9 +1156,9 @@ remains is forward-looking:
 
 | Feature | What | Target |
 |---|---|---|
-| **Functional display** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
+| **Display — bridge timing + deeper KMS** | DSI/HDMI bridge timing and deeper KMS coverage — multi-plane compositing (RGB + NV12 planes, alpha-blend, scaling), the boot-logo scanout, a real vblank/irqsteer and **both pixel pipelines** (CRTC 0 + CRTC 1) already work today over the LayerBlend chain | next |
 | **Camera ISP** | **Done for debayer (v2.6.0):** raw Bayer in, developed colour out through the stock V4L2 mem2mem path; the harness gates per-channel correlation at r ≥ 0.95 and measures 0.995 / 0.998 / 1.000. Black level and white balance (`OB_WB0`) are live. What remains is the rest of the `params` pipeline — gamma, colour matrix, denoise, tone mapping — which the model accepts and announces rather than silently applying. Design note: `docs/design/neoisp-model.md` | tuning next |
-| **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode, validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
+| **Functional codec** | The VPU (Wave6) encode-decode datapath — the **JPEG codecs are now functional** (libjpeg-backed encode + decode; decode validated through the real GStreamer media stack); the firmware-driven Wave6 compute engine is not modelled | deferred |
 | BT-SCO audio + SAI capture | A real sample path for the BT-SCO (dummy-codec) card and SAI RX capture (**WM8962 playback + MICFIL PDM capture are already functional**) | deferred |
 | GPU / VPU / NPU compute | Functional Mali / Wave-VPU models, and actual NPU inference (the Neutron driver/firmware/delegate stack already brings up end to end; the proprietary NPU compute itself is out of scope) | deferred |
 | Real-time peripherals | TSN, DSP for M7 / mixed-criticality workloads (FlexCAN + audio SAI already done) | deferred |
@@ -1172,15 +1202,15 @@ fidelity compromise in the modelled hardware.
   NXP `imx_rpmsg_pingpong` 100-message exchange + a generic ARMv7-M PMSAv7 fix
   in `target/arm/ptw.c` (Step 4); SM-driven M7 fault recovery via
   `CM7_SYSRESETREQ_IRQn` → `lm_reset` (Step 5); methodology + validation docs
-  (Step 6). Tagged `imx95-v1.x` at commit `42d3e4ef7b`.
+  (Step 6). Tagged `imx95-v1.x` (commit `179debec9c1`).
 - **v1.1** — accumulated v1-line work on top of v1.x: a from-scratch **FlexCAN**
   controller (`hw/net/can/flexcan.c`, all 5 instances) validated end-to-end with
   the real Linux `flexcan` driver (`tests/flexcan/` + a model qtest); the
   **SDHCI shutdown fix** so guest `poweroff` exits cleanly
   (`SDHCI_QUIRK_SDCLK_AUTO_GATE`), banked by a clean 24 h stability soak;
   graceful display/camera interface stubs; and an M7 rpmsg ping/pong functional
-  test. Tagged `imx95-v1.1` at commit `442cbcf3a0`.
-- **v2.0.0** — NETC networking, the current upstream candidate. NETC was
+  test. Tagged `imx95-v1.1` (commit `1136cb4c17b`).
+- **v2.0.0** — NETC networking. NETC was
   developed on this branch (`main`) on top of the v1 line, so the series is
   one linear history; `main` is the repository default. (The
   `imx95-scaffold` branch remains the pure-v1 line, without NETC.) A functional
@@ -1310,9 +1340,11 @@ fidelity compromise in the modelled hardware.
   ignored `RBPIR` writes) and the **EMDIO clause-22 PHY** — so U-Boot **writes
   eMMC and network-boots a Linux kernel over Ethernet to userspace**
   (`tests/uboot/run.sh`, `tests/uboot/run-linux.sh`); the **NETC 1588 PHC**
-  (`ptp_netc`); a missing **ENETC TX-checksum offload**, without which TCP had
-  never worked and only ping had (surfaced by a failing interconnect gate
-  between two emulated boards, not by silicon); and a **host-seeded BBNSM RTC**
+  (`ptp_netc`); a missing **ENETC TX-checksum offload**, without which TCP to a
+  *real peer* had never worked and only ping had — slirp does not verify L4
+  checksums, which is why the iperf soak over slirp passed while board-to-board
+  TCP was dead (surfaced by a failing interconnect gate between two emulated
+  boards, not by silicon); and a **host-seeded BBNSM RTC**
   (the guest wall-clock was stuck at 1970 — the SM RTC → SCMI BBM → Linux
   `hctosys` chain now yields real host time, so guest `date` is correct).
 
@@ -1330,7 +1362,8 @@ i.MX 95 Reference Manual, and the result was reviewed, built, executed and valid
 emulation and against an FRDM-IMX95-PRO board (same SoC; the machine modelled is the 19x19 EVK).
 
 Licence, derivation and validation checks were run on the **13-patch upstream-candidate subset**
-— branch `imx95-v2-compliance` at `3d82d068f32`, 21 added files and 18 modified — **not** on the
+— the local branch `imx95-v2-compliance` at `3d82d068f32` (not published; the per-file
+manifest below is the reproducible record), 21 added files and 18 modified — **not** on the
 whole `main` branch, which adds roughly 350 files. Results:
 
 - **21 of 21** added files carry `SPDX-License-Identifier: GPL-2.0-or-later`; every added
@@ -1363,6 +1396,6 @@ renamed-variable derivation; and four corpora are not a commercial database.
 ---
 
 **Created and maintained by Kyle Fox — [@kylefoxaustin](https://github.com/kylefoxaustin).**
-The first public QEMU port of the NXP i.MX 95 known to the maintainer — the full CPU complement
+A QEMU port of the NXP i.MX 95 with the full CPU complement
 (6× Cortex-A55 + the Cortex-M33 System Manager + the Cortex-M7), booting real
 Linux on the real NXP System Manager firmware.
