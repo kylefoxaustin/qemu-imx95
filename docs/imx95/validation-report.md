@@ -235,6 +235,13 @@ remain as honest follow-ups (1.2-physical, 3.3, 3.4-extended, 3.5).
 
 ## Trajectory: upstream submission gated on v1.x (Cortex-M7 integration)
 
+> **Superseded 2026-11-18.** The v1.x M7 work completed, but the upstream
+> submission this section is built around is no longer planned: QEMU's
+> `docs/devel/code-provenance.rst` declines contributions produced with an AI
+> coding assistant. The section is kept as the v1.0-era record of why the M7
+> was modelled before release; read the README's *Licence, provenance &
+> compliance* for where the project actually stands.
+
 v1.0 represents the M33 + Linux integration story on the imx95-19x19-evk
 machine, validated above against three kernels, two userspaces, and a 24h+
 stability run. **Upstream submission to qemu-arm@ is planned for v1.x, after

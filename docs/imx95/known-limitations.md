@@ -160,11 +160,12 @@ storms — one root cause, two symptoms.)
 The i.MX 95 SoC has a heterogeneous CPU topology of 6× Cortex-A55,
 1× Cortex-M33, and 1× Cortex-M7. The M33 has been modelled since v0.6
 (it runs the real NXP System Manager firmware and is Linux's sole SCMI
-provider). The Cortex-M7 real-time domain is being added across the v1.x
-milestone; **completion of all v1.x M7 work is the gating milestone for
-upstream submission to qemu-arm@**, so the artifact submitted to the
-QEMU community represents the full i.MX 95 CPU complement honestly,
-not a partial SoC.
+provider). The Cortex-M7 real-time domain was added across the v1.x
+milestone, completing the CPU complement. That completion used to be framed
+as the gate for an upstream submission to qemu-arm@; **as of 2026-11-18 there
+is no planned qemu-devel submission** (see the README's *Licence, provenance
+& compliance*), so the milestone stands on its own: the model represents the
+full i.MX 95 CPU complement rather than a partial SoC.
 
 The v1.x execution plan has six steps; what's modelled today vs. still
 ahead:

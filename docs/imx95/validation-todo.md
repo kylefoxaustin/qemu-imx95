@@ -1,5 +1,12 @@
 # qemu-imx95 — validation TODO (pre-submission shakeout)
 
+> **Premise updated 2026-11-18.** This document was written to prepare an
+> upstream submission to qemu-arm@, which is no longer planned (QEMU's
+> `docs/devel/code-provenance.rst` declines AI-assisted contributions). The
+> campaign itself ran and its results are in `validation-report.md`; read every
+> "before submission" below as "before broader release", which is what the work
+> was actually for.
+
 **Audience:** project maintainer (Kyle), future contributors, anyone
 preparing the project for broader release.
 

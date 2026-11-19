@@ -4,7 +4,7 @@ A QEMU machine type for the NXP **i.MX 95** SoC, targeting the **19x19 EVK**
 (LPDDR5) variant.
 
 > **This is a fork of QEMU mainline.** The i.MX 95 work lives on the
-> `main` branch (the repository default and the upstream candidate; formerly
+> `main` branch (the repository default; formerly
 > named `imx95-netc`), from its tip back to the upstream branch point
 > `edcc429e9e`; the vast majority of the ~129k-commit history is inherited from
 > upstream QEMU. `main` is the full series — from v1 (the A55/M33/M7 complement) through
@@ -38,8 +38,12 @@ engine** (real NXP G2D), **HW JPEG** encode/decode, **FlexCAN**, **USB** HID
 keyboard, **three ASoC audio cards**, the **Neutron NPU** stack, all eight
 **LPI2C** (`-device`-attachable), and the **Cortex-M33** plus a **Cortex-M7** with
 A55↔M7 RPMsg. Intended use: BSP and System-Manager-firmware development,
-peripheral-driver development, and CI; the long-term aim is
-upstream-mergeability into QEMU mainline.
+peripheral-driver development, and CI. The code follows QEMU's own
+conventions and is kept rebasable on mainline, but it is **not** headed for
+qemu-devel: QEMU's contribution policy
+([`docs/devel/code-provenance.rst`](docs/devel/code-provenance.rst)) declines
+contributions produced with an AI coding assistant, and this one was (see
+[Licence, provenance & compliance](#licence-provenance--compliance)).
 
 The **GPU** and the **VPU** (Wave6) video codec are stubbed at probe time only —
 no GPU rendering, no VPU codec — while the HW JPEG codecs are functional; and the
@@ -919,12 +923,13 @@ wall is a hypothesis"), and the working mode itself are written up in
 discipline (the GitHub render-cache pitfall) is in
 [`docs/imx95/reviewer-discipline.md`](docs/imx95/reviewer-discipline.md).
 
-The full **pre-upstream validation pipeline** — the readiness review, the
+The full **release validation pipeline** — the readiness review, the
 security and prompt-injection sweeps, the GitHub secret/dependency checks, the
 cppcheck / clang-analyzer / sparse static analysis (each proven against a planted
 bug), and the QEMU-specific gates (checkpatch, bisectability, docs build, patch
 fidelity) — is written up as a reusable, fleet-ratified playbook in
 [`docs/imx95/upstream-submission-playbook.md`](docs/imx95/upstream-submission-playbook.md).
+It was written as a pre-upstream pipeline; it is run here as the release gate.
 
 Per-milestone design and review notes are kept in `docs/reviews/` as local
 working artifacts — they are not committed to the repo (the directory is
@@ -1047,7 +1052,7 @@ addresses and IRQ numbers.
 | `tests/netc/`, `tests/qtest/fsl-enetc-test.c` | NETC bring-up (DT patch + boot), iperf throughput load-soak, + RX-scatter/wraparound qtests |
 | `tests/functional/aarch64/test_imx95_evk.py` | env-gated functional test (Linux boot + M7 fault recovery) |
 | `scripts/probe_stall.py`    | A55-hang frame-pointer debugger ([scripts/README.md](scripts/README.md)) |
-| `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation (upstream prep) |
+| `docs/system/arm/imx95-evk.rst`   | QEMU-conventions machine documentation |
 | `docs/imx95/methodology.md`       | debugging methodology + the project's working mode |
 | `docs/imx95/known-limitations.md` | full limitation diagnoses |
 | `docs/imx95/smmu-not-modelled.md` | decision record: why the Arm SMMU-v3 is not modelled |
@@ -1137,9 +1142,11 @@ Full diagnoses, including the icount × multi-CPU finding, are in
 ## Roadmap & milestone history
 
 
-Near-term focus is **landing this machine upstream** — the series plus the
-generic-QEMU changes it depends on, in `target/arm` (the ARMv7-M PMSAv7 fix in
-`ptw.c`, and `tcg/tlb_helper.c`) and `hw/sd` (`sdhci.c`, `sd.c`) — to qemu-devel.
+Near-term focus is the **display** and **camera ISP** rows in the table below.
+The generic-QEMU changes this machine depends on — in `target/arm` (the ARMv7-M
+PMSAv7 fix in `ptw.c`, and `tcg/tlb_helper.c`) and `hw/sd` (`sdhci.c`, `sd.c`)
+— are carried in this fork rather than submitted; see
+[Licence, provenance & compliance](#licence-provenance--compliance).
 
 **NETC networking** (all three ENETC ports, incl. 10G), **FlexCAN** (all five
 controllers), the **DPU display** (boot logo on screen), the **usb2 ChipIdea**
@@ -1348,23 +1355,22 @@ fidelity compromise in the modelled hardware.
   (the guest wall-clock was stuck at 1970 — the SM RTC → SCMI BBM → Linux
   `hctosys` chain now yields real host time, so guest `date` is correct).
 
-## License & credits
-
-GPL-2.0-or-later, same as QEMU. Based on upstream QEMU; see
-[`README.rst`](README.rst) and `LICENSE` for QEMU's own authorship and
-licensing.
-
 ## Licence, provenance & compliance
 
-GPL-2.0-or-later, the same as QEMU. The implementation was written by the maintainer working
+GPL-2.0-or-later, the same as QEMU. Based on upstream QEMU; see
+[`README.rst`](README.rst) and `LICENSE` for QEMU's own authorship and
+licensing. The implementation was written by the maintainer working
 with an AI coding assistant (Anthropic's Claude); hardware behaviour was specified from the NXP
 i.MX 95 Reference Manual, and the result was reviewed, built, executed and validated on
 emulation and against an FRDM-IMX95-PRO board (same SoC; the machine modelled is the 19x19 EVK).
 
-Licence, derivation and validation checks were run on the **13-patch upstream-candidate subset**
-— the local branch `imx95-v2-compliance` at `3d82d068f32` (not published; the per-file
-manifest below is the reproducible record), 21 added files and 18 modified — **not** on the
-whole `main` branch, which adds roughly 350 files. Results:
+Licence, derivation and validation checks were run on the **13-patch subset that was
+prepared as an upstream candidate** — the local branch `imx95-v2-compliance` at
+`3d82d068f32` (not published; the per-file manifest below is the reproducible record),
+21 added files and 18 modified — **not** on the whole `main` branch, which adds roughly
+350 files. These checks are kept even though the series is not being submitted to
+qemu-devel: this is a public fork of a GPL project, and clean provenance is what makes
+it reusable. Results:
 
 - **21 of 21** added files carry `SPDX-License-Identifier: GPL-2.0-or-later`; every added
   `.c`/`.h` file on `main` carries one too.

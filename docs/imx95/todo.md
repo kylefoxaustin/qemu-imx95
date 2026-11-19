@@ -5,10 +5,12 @@ milestone groups that used to organise this file are gone: those milestones
 shipped, and their items were either implemented (deleted here) or recorded
 in `known-limitations.md`. See *How items leave this list* at the bottom.
 
-## Before any qemu-devel upstream submission
+## Register values still to cross-check against the RM / real silicon
 
-A few register values to cross-check against the RM / real silicon before
-submission. None break current functionality.
+A few register values to cross-check against the RM / real silicon. None break
+current functionality. (This section used to be headed "before any qemu-devel
+upstream submission"; there is no planned submission as of 2026-11-18, but a
+fabricated reset value is a fidelity defect either way.)
 
 > RESOLVED 2026-08-02 (shakeout): the SDHCI SDMA-boundary detection is *already*
 > the idiomatic `SDHCI_QUIRK_NO_SDMA_BOUNDARY` quirk flag (`hw/sd/sdhci.c` +
