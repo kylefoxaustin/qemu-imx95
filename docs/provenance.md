@@ -3,8 +3,10 @@
 A record of the checks run on this work and what they returned. It states results, methods and
 limits, and nothing else.
 
-**Revision covered.** Upstream-candidate series at commit `3d82d068f32` (branch
-`imx95-v2-compliance`), 21 added files and 18 modified pre-existing upstream files, based on
+**Revision covered.** The series prepared as an upstream candidate, at commit `3d82d068f32`,
+published as tag `imx95-compliance-13p` so it can be fetched and the checks re-run (it was
+developed on the local branch `imx95-v2-compliance`); 21 added files and 18 modified
+pre-existing upstream files, based on
 upstream QEMU `origin/master`. Results below describe that series unless a section states
 otherwise. Section 8 records what is known about the wider fork. Later revisions are not covered.
 

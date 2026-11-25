@@ -1365,8 +1365,9 @@ i.MX 95 Reference Manual, and the result was reviewed, built, executed and valid
 emulation and against an FRDM-IMX95-PRO board (same SoC; the machine modelled is the 19x19 EVK).
 
 Licence, derivation and validation checks were run on the **13-patch subset that was
-prepared as an upstream candidate** — the local branch `imx95-v2-compliance` at
-`3d82d068f32` (not published; the per-file manifest below is the reproducible record),
+prepared as an upstream candidate** — tag
+[`imx95-compliance-13p`](https://github.com/kylefoxaustin/qemu-imx95/tree/imx95-compliance-13p)
+at `3d82d068f32`, so the tree the numbers describe can be fetched and the checks re-run —
 21 added files and 18 modified — **not** on the whole `main` branch, which adds roughly
 350 files. These checks are kept even though the series is not being submitted to
 qemu-devel: this is a public fork of a GPL project, and clean provenance is what makes
