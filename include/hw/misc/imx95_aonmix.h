@@ -25,4 +25,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(IMX95AonmixState, IMX95_AONMIX)
  */
 uint64_t imx95_aonmix_a55_rvbar(IMX95AonmixState *s, unsigned core);
 
+/* Whether A55 core @core's CA55_CPUWAIT bit is set (the core is held). */
+bool imx95_aonmix_a55_held(IMX95AonmixState *s, unsigned core);
+
 #endif

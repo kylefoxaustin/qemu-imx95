@@ -62,6 +62,19 @@ loops); the proper fix is QEMU-core work
 **Workaround.** `cpuidle.off=1`. Linux then uses shallow `arch_cpu_idle` WFI on
 the still-running per-CPU arch timer and boots cleanly to userspace.
 
+**Under the EL3 firmware chain (`el3-firmware=on`) there is a second gap, in
+the machine model.** There PSCI `CPU_SUSPEND` and `CPU_OFF` are answered by
+TF-A BL31, which asks the SM for a GPC sleep mode and relies on the GPC to
+power the core down at its WFI and back up on a wakeup. The GPC CMC A55
+low-power state machine is not modelled, so a core that enters that state is
+not woken. Until the Cortex-A55 IMPLEMENTATION DEFINED registers were added
+to the CPU model, BL31 did not get that far: `cortex_a55_core_pwr_dwn` took
+an UNDEF at EL3 on `CPUPWRCTLR_EL1`, and the core ended in BL31's panic loop
+holding the PSCI lock, which hung the system. The same gap breaks CPU hotplug
+under TF-A: CPU_OFF now completes, but the core does not come back online
+(`tests/hotplug/README.md`). Keep `cpuidle.off=1`, and do not offline CPUs
+under TF-A.
+
 ---
 
 ## 2. `-icount` inflates the boot ~9× (do not use it for normal boots)

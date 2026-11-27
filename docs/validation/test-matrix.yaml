@@ -24,13 +24,13 @@ present:
   - { block: "A55 CPU hotplug (offline + online a secondary)", tier: A, test: "harness:hotplug",
       evidence: "all five secondaries go offline and come back, 12/12, on QEMU's own PSCI (EL3=off): 'psci: CPUn killed (polled 0 ms)', and userspace still sees 6 CPUs afterwards. That arm doubles as the control showing the model's own core start/stop machinery is sound",
       broken: { when: "under the vendor EL3 firmware chain (el3-firmware=on) - uniform across cpu1-cpu5",
-                owner: unattributed,
-                why: "the core really stops - it halts at EL3 inside BL31's own 'wfi; b .' loop - but BL31 never publishes AFF_STATE_OFF for it, so Linux's AFFINITY_INFO poll times out (-110) and the later CPU_ON is refused ALREADY_ON (-22); offlining all five leaves the board on one CPU with no way back. Traced across the CPU_OFF window: no CORTEXMIX_COREn reset-line write, no CA55_CPUWAIT write, nothing in the GPC and no SCMI CPU_STOP on either channel - BL31 parks the core itself rather than asking the hardware. Whether silicon behaves the same is NOT measured, which is why this is unattributed: it needs TF-A's imx95 pwr_domain_off, or ten seconds on a real board",
+                owner: model,
+                why: "CPU_OFF completes ('psci: CPUn killed'), but the core never comes back: the later online fails with 'CPUn: failed to come online'. BL31 asks the SM over SCMI for the GPC SUSPEND sleep mode, and on silicon the GPC then powers the core down at its WFI, and the SM's CPU_START powers it back up and resets it at its RVBAR. The GPC CMC A55 low-power state machine is not modelled, so the core stays powered in BL31's power-down WFI and the SM's CPU_START finds it running and does nothing. PSCI CPU_SUSPEND wake-up has the same gap, so keep cpuidle.off=1. The earlier failure recorded here (AFFINITY_INFO -110, CPU_ON -22, the core halted in BL31's 'wfi; b .' loop) was BL31's panic handler after an UNDEF at EL3 on the A55 IMPLEMENTATION DEFINED register CPUPWRCTLR_EL1, which the CPU model now provides",
                 script: "tests/hotplug/run.sh",
                 expect: "FAIL: A55 hotplug is broken under the EL3 chain",
                 env: { EL3: "on" },
                 ref: "tests/hotplug/README.md",
-                since: "2026-11-15" } }
+                since: "2026-11-27" } }
   - { block: "Cortex-M33 System Manager (real SM fw)", tier: A, test: boot,                  evidence: "Runs real NXP SM firmware; Linux's sole SCMI provider over MU" }
   - { block: "Cortex-M7 (real-time domain)",       tier: A, test: "harness:m7-rpmsg",        evidence: "SM boots/manages/fault-recovers it; imx_rpmsg_pingpong 100-msg round-trip" }
   - { block: "GICv3 + ITS",                        tier: A, test: boot,                       evidence: "Underpins boot + MSI-X for NETC/PCIe" }

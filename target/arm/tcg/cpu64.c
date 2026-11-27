@@ -200,6 +200,8 @@ static void cpu_max_get_l0gptsz(Object *obj, Visitor *v, const char *name,
 static const Property arm_cpu_lpa2_property =
     DEFINE_PROP_BOOL("lpa2", ARMCPU, prop_lpa2, true);
 
+static void define_cortex_a55_cp_reginfo(ARMCPU *cpu);
+
 static void aarch64_a55_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
@@ -271,6 +273,8 @@ static void aarch64_a55_initfn(Object *obj)
 
     /* From D5.4 AArch64 PMU register summary */
     cpu->isar.reset_pmcr_el0 = 0x410b3000;
+
+    define_cortex_a55_cp_reginfo(cpu);
 }
 
 static void aarch64_a72_initfn(Object *obj)
@@ -652,6 +656,118 @@ static void define_neoverse_v1_cp_reginfo(ARMCPU *cpu)
      */
     define_arm_cp_regs(cpu, neoverse_n1_cp_reginfo);
     define_arm_cp_regs(cpu, neoverse_v1_cp_reginfo);
+}
+
+/*
+ * Cortex-A55 IMPLEMENTATION DEFINED registers (A55 TRM r2p0, 3.2.3 table
+ * "AArch64 IMPLEMENTATION DEFINED registers"). None of their controls is
+ * modelled: they read as constant and ignore writes, like the Neoverse N1
+ * set above. Firmware does touch them - TF-A's cortex_a55_core_pwr_dwn sets
+ * CPUPWRCTLR_EL1.CORE_PWRDN_EN before the power-down WFI of every PSCI
+ * CPU_SUSPEND/CPU_OFF, and its errata code read-modify-writes CPUACTLR_EL1
+ * and CPUECTLR_EL1 - so without them those paths take an UNDEF at EL3.
+ * Providing them only removes the UNDEFs; the power-down itself is not
+ * modelled (see CPUPWRCTLR_EL1 below).
+ *
+ * The DSU is not modelled either. Of its CLUSTER*_EL1 registers (DSU TRM
+ * 11.3, also listed in A55 TRM 3.2.3) only CLUSTERPWRDN_EL1 is provided,
+ * because TF-A's i.MX 9 platform code writes it on every CPU_OFF and on
+ * every cluster-level CPU_SUSPEND without checking CPUCFR_EL1.SCU. A DEBUG
+ * build of TF-A also reads CLUSTERIDR_EL1 and CLUSTERCFR_EL1 in its errata
+ * report; those are not provided, so such a build still takes an UNDEF.
+ */
+static const ARMCPRegInfo cortex_a55_cp_reginfo[] = {
+    { .name = "ATCR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 7, .opc2 = 0,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      /* Traps and enables are the same as for TCR_EL1. */
+      .accessfn = access_tvm_trvm, .fgt = FGT_TCR_EL1, },
+    { .name = "ATCR_EL2", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 4, .crn = 15, .crm = 7, .opc2 = 0,
+      .access = PL2_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "ATCR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 7, .opc2 = 0,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "ATCR_EL12", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 5, .crn = 15, .crm = 7, .opc2 = 0,
+      .access = PL2_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "AVTCR_EL2", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 4, .crn = 15, .crm = 7, .opc2 = 1,
+      .access = PL2_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    /*
+     * CLUSTERPWRDN_EL1 (DSU TRM 11.14): MEMRET [1] and PWRDN [0] are only
+     * advisory hints to the power controller on CLUSTERPACTIVE, and there
+     * is no cluster power controller in the model, so this reads as its
+     * reset value 0 and ignores writes. Lower-EL writes need
+     * ACTLR_EL3.PWREN/ACTLR_EL2.PWREN (A55 TRM 3.2.6, 3.2.7), which are 0.
+     */
+    { .name = "CLUSTERPWRDN_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 6,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    { .name = "CPUACTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 1, .opc2 = 0,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    /*
+     * CPUCFR_EL1 (A55 TRM 3.2.29): SCU [2] = 0 means "SCU present" and is
+     * the only value the TRM lists, but, as for the Neoverse cores, report
+     * SCU as 1 because the DSU is not modelled: of its CLUSTER*_EL1
+     * registers only CLUSTERPWRDN_EL1 exists, as a constant. Software
+     * cannot rely on this bit alone: TF-A checks it only in its Neoverse
+     * DSU errata code, not in its Cortex-A55 code or the i.MX 9 platform
+     * code (hence CLUSTERPWRDN_EL1 above). ECC [1:0] = 0, as the model has
+     * no ECC.
+     */
+    { .name = "CPUCFR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 0, .opc2 = 0,
+      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 4 },
+    { .name = "CPUECTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 1, .opc2 = 4,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    { .name = "CPUPCR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 8, .opc2 = 1,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CPUPMR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 8, .opc2 = 3,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CPUPOR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 8, .opc2 = 2,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    { .name = "CPUPSELR_EL3", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 6, .crn = 15, .crm = 8, .opc2 = 0,
+      .access = PL3_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    /*
+     * CPUPWRCTLR_EL1.CORE_PWRDN_EN is accepted but has no effect: a
+     * power-down WFI is an ordinary WFI, so the core never loses state
+     * and simply resumes on the next wakeup event.
+     */
+    { .name = "CPUPWRCTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 2, .opc2 = 7,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    { .name = "ERXPFGCDN_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 2, .opc2 = 2,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    { .name = "ERXPFGCTL_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 2, .opc2 = 1,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
+    /*
+     * ERXPFGF_EL1 is read-only (A55 TRM 3.2.49, 3.3.9), so ERXPFGEN does
+     * not apply. It reads as 0 (no pseudo fault generation) rather than
+     * the hardware's 0xC000006A, because none is modelled.
+     */
+    { .name = "ERXPFGF_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 2, .opc2 = 0,
+      .access = PL1_R, .type = ARM_CP_CONST, .resetvalue = 0 },
+};
+
+static void define_cortex_a55_cp_reginfo(ARMCPU *cpu)
+{
+    define_arm_cp_regs(cpu, cortex_a55_cp_reginfo);
 }
 
 static void aarch64_neoverse_n1_initfn(Object *obj)

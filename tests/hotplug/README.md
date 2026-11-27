@@ -2,61 +2,73 @@ A55 CPU hotplug under the EL3 firmware chain
 ============================================
 
 run.sh offlines each A55 secondary and brings it back. It FAILS by default,
-where PSCI is answered by TF-A BL31 (el3-firmware=on):
+where PSCI is answered by TF-A BL31 (el3-firmware=on). The offline itself now
+completes:
+
+    psci: CPU1 killed (polled 32 ms)
+
+but bringing the core back does not:
+
+    CPU1: failed to come online
+    CPU1: failed in unknown state : 0x0
+
+`EL3=off ./run.sh` runs the same sweep on the same U-Boot chain with QEMU's own
+PSCI and PASSES all twelve checks (`psci: CPUn killed (polled 0 ms)`). That is
+the control: the sweep and this script can go green, so a permanently-red test
+is not being mistaken for an unpassable one.
+
+
+What the old failure was
+------------------------
+
+Before the Cortex-A55 IMPLEMENTATION DEFINED registers were added to the CPU
+model (target/arm/tcg/cpu64.c), the offline failed earlier:
 
     psci: CPU1 may not have shut down cleanly (AFFINITY_INFO reports 0)
     CPU1 may not have shut down cleanly: -110
     psci: failed to boot CPU1 (-22)
 
-Uniform across cpu1..cpu5, so it is not one core's MPIDR or index. Offlining
-all five leaves the board on one CPU with no way back.
+This file used to call that a BL31 gap, because CPU1 ended up halted at EL3
+in a "wfi; b ." loop with no SRC, GPC, CA55_CPUWAIT or SCMI traffic in the
+CPU_OFF window. That loop was BL31's panic handler, not a park. With -d int
+the core takes an UNDEF at EL3 on its first instruction of the power-down
+sequence:
 
-`EL3=off ./run.sh` runs the same sweep on the same U-Boot chain with QEMU's own
-PSCI and PASSES all twelve checks (`psci: CPUn killed (polled 0 ms)`). That is
-the control, and it carries two loads: the sweep and this script can go green,
-so a permanently-red test is not being mistaken for an unpassable one; and the
-model's own core start/stop machinery is sound, so the defect is confined to
-the BL31 path.
+    0x8a2076e4: d538f2e1  mrs x1, s3_0_c15_c2_7      (CPUPWRCTLR_EL1)
 
+in TF-A's cortex_a55_core_pwr_dwn, which runs before the platform's
+pwr_domain_off, and then panics while holding the PSCI locks. That is why
+nothing reached the hardware, why AFFINITY_INFO stayed ON, and why the later
+CPU_ON was refused. It was a model gap: QEMU's cortex-a55 had none of the
+core's IMPLEMENTATION DEFINED registers, and TF-A's i.MX 9 platform code also
+writes the DSU's CLUSTERPWRDN_EL1 on the same path. Both are now provided.
 
-What this is NOT
-----------------
-
-It is not a missing SRC or GPC wire in this model, which is what the model's
-own comment in fsl_imx95_a55_run_handler() used to assert: that an A55 is
-stopped through its SRC per-core reset line, which the model ignores. That was
-inference, and it is wrong. Measured, with the markers and controls below:
-
-  * no write to any CORTEXMIX_COREn SLICE_SW_CTRL reset line (RST_RSTR_0),
-  * no write to CA55_CPUWAIT,
-  * no write anywhere in the GPC,
-  * no SCMI CPU_STOP (protocol 0x82, message 0x05) - not in the CPU_OFF
-    window, not anywhere in the whole run,
-  * and no reads of any of it either, beyond the System Manager's own
-    background polling, whose rate is indistinguishable from the control.
-
-BL31 does not ask the hardware to stop an A55. It parks the core itself: CPU1
-ends up halted at EL3 inside BL31's "wfi; b ." loop, which is what a stopped
-core looks like on silicon too. The core really does stop. So there is no
-reset line to wire here, and wiring one would be modelling a transaction that
-no firmware in this chain performs.
+With them, the CPU_OFF window shows what BL31's imx_pwr_domain_off asks for:
+three SCMI messages to the SM on MU1 for CPU 3 (A55 core 1) - LPM_MODE_SET
+(0x82/0x0a), IRQ_WAKE_SET (0x82/0x08) and SLEEP_MODE_SET (0x82/0x07, SUSPEND)
+- and the SM programming that core's GPC CMC_MODE_CTRL (cpu_ctrl 3, offset
+0x10) for SUSPEND. BL31 then reports the core OFF and Linux logs "CPU1
+killed".
 
 
 What IS broken
 --------------
 
-BL31 never publishes AFF_STATE_OFF for the core it just parked. Linux polls
-AFFINITY_INFO ten times at 10 ms (hence -110 after ~100 ms), always gets ON,
-and the later CPU_ON is refused with -22 - ALREADY_ON, decided by BL31 locally
-without a single MMIO access or SCMI message. Waiting longer does not help:
-45 s after the offline the state is still ON.
+The core is meant to be powered down by the GPC when it executes WFI in
+SUSPEND sleep mode, and powered back up, and reset at its RVBAR, when the SM
+wakes it. The GPC CMC A55 low-power state machine (CMC_MODE_CTRL /
+CMC_MODE_STAT driving the SRC power switch) is not modelled - a model gap,
+not a firmware one - so the core just
+stays in BL31's power-down WFI with its power domain still on. For the
+re-online BL31 sends CPU_RESET_VECTOR_SET (0x82/0x06) and CPU_START
+(0x82/0x04); the SM's CPU_RunModeSet() then sees a powered core with
+CA55_CPUWAIT clear, reads that as already running, and does nothing. The core
+never comes back.
 
-That is inside BL31 (v2.14.1, lf-6.18.20-2.0.0-rc1, built Jun 8 2026), whose
-source is not in this tree, so the next step needs TF-A's imx95 platform code
-- specifically its pwr_domain_off - and not more work on this model. Note that
-CPU_ON at boot *does* go through the SM: five SCMI CPU_START messages
-(0x82/0x04) and six CPU_RESET_VECTOR_SET (0x82/0x06) are visible at SMP
-bringup. So BL31 uses the SM to start a core and not to stop one.
+PSCI CPU_SUSPEND (cpuidle) has the same gap: it no longer takes an UNDEF at
+EL3, but waking a core from the GPC suspend state is not modelled either. So
+keep `cpuidle.off=1` and do not offline CPUs under TF-A until the GPC
+state machine is modelled.
 
 
 How it was measured, so it can be re-measured
@@ -92,13 +104,19 @@ Two things make the result readable:
 imx_mu_scmi_request also had to be extended to see this at all: scmi_trace_buf
 was set only on sm_mu, Linux's channel, so BL31's own secure agent on
 ap_s_mu was invisible and every operation BL31 handles itself read as "the
-firmware did nothing". It is now set on both; that change is what made the 45
-CPU-protocol messages above visible.
+firmware did nothing". It is now set on both, and the event prints each
+request's shared-memory address (shmem=0x44221000 for BL31 on MU1,
+shmem=0x445b1000 for Linux on MU2), so the two agents can be told apart.
+
+An UNDEF at EL3 does not show up in any of these traces; add `-d int` and
+look for "Undefined Instruction ... from EL3 to EL3".
 
 Finally, QEMU itself is the only vantage that can say where a stopped core is:
 
     (qmp) human-monitor-command "info registers -a"
     CPU#1  PC=000000008a207b9c  PSTATE=...3cd ---- EL3h
 
-0x8a207b9c is the instruction after the wfi in BL31's park loop, which is
-where a core halted in WFI sits. X30=0x8a207288 names the call site.
+0x8a207b9c was the instruction after the wfi in BL31's panic loop, which is
+where a core halted in WFI sits; X30 names the call site. Before reading such
+a loop as a deliberate park, disassemble it and check `-d int` for the
+exception that led there.
