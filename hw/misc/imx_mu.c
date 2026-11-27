@@ -366,13 +366,16 @@ static void imx_mu_write(void *opaque, hwaddr offset,
                  * protocol_id[17:10], token[27:18]. Guarded by the trace
                  * event's enabled state so the buffer read only happens when
                  * the event is actually turned on (-trace imx_mu_scmi_request).
+                 * The shared-memory address identifies the agent's channel:
+                 * on the i.MX 95 both Linux (MU2) and TF-A (MU1) talk SCMI.
                  */
                 uint8_t b[8];
                 cpu_physical_memory_read(s->scmi_trace_buf + 0x18,
                                          b, sizeof(b));
                 uint32_t hdr = ldl_le_p(b);
                 uint32_t res0 = ldl_le_p(b + 4);
-                trace_imx_mu_scmi_request((hdr >> 10) & 0xff, hdr & 0xff,
+                trace_imx_mu_scmi_request(s->scmi_trace_buf,
+                                          (hdr >> 10) & 0xff, hdr & 0xff,
                                           (hdr >> 8) & 0x3, (hdr >> 18) & 0x3ff,
                                           res0);
             }
