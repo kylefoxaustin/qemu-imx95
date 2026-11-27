@@ -1858,6 +1858,17 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
                        current_accel_name());
             return;
         }
+        /*
+         * mpidr-mt only takes effect in TCG's MPIDR read path
+         * (mpidr_read_val()); KVM and HVF supply MPIDR themselves and
+         * would silently ignore it.
+         */
+        if (cpu->mp_mt) {
+            error_setg(errp,
+                       "Cannot enable %s when guest CPU has mpidr-mt enabled",
+                       current_accel_name());
+            return;
+        }
     }
 #endif
 
