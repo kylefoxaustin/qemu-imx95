@@ -97,6 +97,12 @@ uint64_t imx95_aonmix_a55_rvbar(IMX95AonmixState *s, unsigned core)
     return words << AONMIX_CA55_RVBAR_SHIFT;
 }
 
+bool imx95_aonmix_a55_held(IMX95AonmixState *s, unsigned core)
+{
+    return core < IMX95_AONMIX_A55_CORES &&
+           (s->regs[AONMIX_CA55_CPUWAIT / 4] & (1u << core));
+}
+
 static uint64_t imx95_aonmix_read(void *opaque, hwaddr offset, unsigned size)
 {
     IMX95AonmixState *s = opaque;

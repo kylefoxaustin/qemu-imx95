@@ -1250,6 +1250,20 @@ static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
 }
 
 /*
+ * A release reaches the core two deferrals after the CA55_CPUWAIT write that
+ * asked for it (a bottom half, then run_on_cpu work), and a system reset can
+ * come in between - a watchdog reset requested in the same TCG block, say.
+ * The reset puts every CPUWAIT bit back to held, so each stage re-reads the
+ * gate and drops a release whose core is held again by the time it lands;
+ * otherwise the stale release would start the core after the reset, with
+ * the RVBARADDR registers back at zero.
+ */
+static bool fsl_imx95_a55_held(FslImx95State *s, unsigned core)
+{
+    return s->aonmix && imx95_aonmix_a55_held(IMX95_AONMIX(s->aonmix), core);
+}
+
+/*
  * Release an A55 core, driven by the SM clearing that core's CA55_CPUWAIT bit
  * - or, for core 0 with no SM firmware staged, directly by the machine.
  * Idempotent: the SM writes CPUWAIT more than once during CpuStart.
@@ -1267,12 +1281,15 @@ static void fsl_imx95_set_cpu_run(CPUState *cs, bool run)
  */
 static void fsl_imx95_a55_release_work(CPUState *cs, run_on_cpu_data data)
 {
-    uint64_t rvbar = data.target_ptr;
+    FslImx95State *s = data.host_ptr;
+    unsigned core = ARM_CPU(cs) - s->cpu;
+    uint64_t rvbar;
 
-    if (ARM_CPU(cs)->power_state != PSCI_OFF) {
+    if (ARM_CPU(cs)->power_state != PSCI_OFF || fsl_imx95_a55_held(s, core)) {
         return;
     }
 
+    rvbar = imx95_aonmix_a55_rvbar(IMX95_AONMIX(s->aonmix), core);
     if (rvbar) {
         /*
          * Through the property, as hw/misc/xlnx-zynqmp-apu-ctrl.c does from
@@ -1319,8 +1336,7 @@ static void fsl_imx95_a55_release(FslImx95State *s, unsigned core)
      * happened in the M33's TCG block - a different CPU. Same shape as the M7
      * run gate.
      */
-    async_run_on_cpu(cs, fsl_imx95_a55_release_work,
-                     RUN_ON_CPU_TARGET_PTR(rvbar));
+    async_run_on_cpu(cs, fsl_imx95_a55_release_work, RUN_ON_CPU_HOST_PTR(s));
 }
 
 static void fsl_imx95_m33_start_bh(void *opaque)
@@ -1521,7 +1537,10 @@ static void fsl_imx95_a55_run_bh(void *opaque)
 {
     Imx95A55Release *r = opaque;
 
-    fsl_imx95_a55_release(r->s, r->core);
+    /* Not if a system reset has held the core again since; see above. */
+    if (!fsl_imx95_a55_held(r->s, r->core)) {
+        fsl_imx95_a55_release(r->s, r->core);
+    }
     g_free(r);
 }
 
@@ -1530,24 +1549,25 @@ static void fsl_imx95_a55_run_handler(void *opaque, int n, int level)
     Imx95A55Release *r;
 
     /*
-     * Only the release edge is acted on. The SM does re-assert these bits -
-     * it sets every one of them, core 0's included, when it tears the AP
-     * logical machine down - and honouring that would stop the boot CPU from
-     * inside the M33's own TCG block, during a shutdown that is already
-     * underway.
+     * Only the release edge is acted on; a hold (a bit going back to 1) is
+     * ignored. CPUWAIT gates a core coming out of reset and is not how a
+     * running core is stopped, and the System Manager uses it that way
+     * (imx-sm devices/MIMX95/drivers/fsl_cpu.c): it sets the bits only in
+     * CPU_ResetSet(), after asserting the cores' reset lines, and clears
+     * them in CPU_RunModeSet(START) for a core that is held in reset or that
+     * it has just powered up. It does set every bit, core 0's included, when
+     * it tears the AP logical machine down; honouring that would stop the
+     * boot CPU from inside the M33's own TCG block.
      *
-     * This used to say that the consequence was a PSCI CPU_OFF leaving its
-     * core running, because the SM's single-core stop went through the SRC
-     * per-core reset line instead, which the model does not act on. Both
-     * halves of that are wrong, and traced: across a CPU_OFF (and a later
-     * CPU_ON) on the EL3 chain, nothing writes a CORTEXMIX_COREn reset line,
-     * nothing writes CA55_CPUWAIT, nothing writes the GPC, and no CPU_STOP
-     * reaches the SM on either SCMI channel - BL31 does not ask the hardware
-     * at all. It parks the core itself, in its own "wfi; b ." loop at EL3,
-     * which QEMU halts on exactly as silicon would. So this register is not
-     * how an A55 stops, and no reset line needs wiring here. See
-     * tests/hotplug/README.md for the measurement and for what IS still broken
-     * (BL31 never publishes AFF_STATE_OFF, so the later CPU_ON is refused).
+     * PSCI CPU_OFF and CPU_SUSPEND do not use this register either: TF-A
+     * asks the SM for a GPC sleep mode, and the GPC powers the core down at
+     * its next WFI and powers it back up on a wakeup. That GPC state machine
+     * (and the SRC power-down behind it) is not modelled, so such a core
+     * stays in BL31's power-down WFI with power_state still on; the SM then
+     * sees it as running (powered, CPUWAIT clear) and a later CPU_START
+     * does nothing (tests/hotplug/README.md). A stop/start pair that
+     * reached this register as a hold and a release would likewise need
+     * that power-down to restart the core.
      *
      * Defer like the M7 path does.
      */
