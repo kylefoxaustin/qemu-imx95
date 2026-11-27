@@ -4,20 +4,16 @@
 # A55 CPU hotplug under the EL3 firmware chain.
 #
 # Linux offlines a secondary and brings it back. With QEMU's own PSCI that
-# works; with el3-firmware=on, PSCI is answered by TF-A BL31 instead, and it
-# does not: the offline reports
+# works; with el3-firmware=on, PSCI is answered by TF-A BL31 instead. The
+# offline completes ("psci: CPUn killed"), but the matching online fails
 #
-#   psci: CPUn may not have shut down cleanly (AFFINITY_INFO reports 0)   -110
+#   CPUn: failed to come online
 #
-# and the matching online is then refused
-#
-#   psci: failed to boot CPUn (-22)
-#
-# because BL31 still believes the core is ON and so treats CPU_ON as
-# ALREADY_ON. This harness asserts the behaviour we want, so IT CURRENTLY
-# FAILS. That is deliberate: see README.md for the measurement that located the
-# fault, and in particular for why it is NOT a gap in this model's SRC/GPC
-# wiring - the one thing the machine is routinely blamed for here.
+# because the GPC A55 low-power state machine that should power the core
+# down at its WFI and back up on CPU_START is not modelled. This harness
+# asserts the behaviour we want, so IT CURRENTLY FAILS. See README.md for
+# the measurement, and for the earlier failure (an UNDEF at EL3 on the A55
+# IMPLEMENTATION DEFINED registers, which the CPU model now provides).
 #
 # PASS = every secondary offlines cleanly (no AFFINITY_INFO warning) and comes
 #        back online, leaving the full complement of CPUs.
@@ -145,8 +141,9 @@ for c in 1 2 3 4 5; do
     else
         ok "cpu$c offlined cleanly"
     fi
-    if grep -aq "failed to boot CPU$c" "$LOG"; then
-        note "cpu$c: CPU_ON refused after the offline"
+    if grep -aqE "failed to boot CPU$c|CPU$c: failed to come online" \
+            "$LOG"; then
+        note "cpu$c: did not come back after the offline"
     else
         ok "cpu$c came back online"
     fi

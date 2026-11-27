@@ -347,22 +347,29 @@ real firmware asked:
   and it does boot real boards. Reading ``MPIDR_EL1`` on an FRDM board would
   settle it.
 
-Taking a core back out again does not work, though. Offlining one from Linux
-(``echo 0 > /sys/devices/system/cpu/cpu1/online``) reports it down but warns
-that it "may not have shut down cleanly (AFFINITY_INFO reports 0)", and
-bringing it back fails with ``psci: failed to boot CPU1 (-22)`` - BL31
-refusing a core it still believes is on.
+Taking a core back out again only half works. Offlining one from Linux
+(``echo 0 > /sys/devices/system/cpu/cpu1/online``) completes - Linux logs
+``psci: CPU1 killed`` - but bringing it back fails with ``CPU1: failed to
+come online``.
 
-The model is not asked to do anything for it. Traced with
-``-trace imx_mu_scmi_request -trace imx95_aonmix_cpuwait``, the offline
-produces exactly one request to the SM, ``COMMAND_CPU_INFO_GET``
-(protocol 0x82 message 0xc) for CPU 1, and no ``CA55_CPUWAIT`` write at all;
-``COMMAND_CPU_STOP`` is never sent. Nor could the SM act on one if it were:
-its ``CPU_ResetSet()`` has cases for the M7 and for the A55 cluster as a
-whole, and an individual A55 index falls through to a ``default`` that
-returns false, so ``DEV_SM_CpuStop()`` would answer ``SM_ERR_NOT_FOUND``.
-Whatever stalls is inside BL31's own CPU_OFF path, which cannot be read from
-here. Nothing on a boot path needs it, so none of it is modelled.
+For the offline, BL31 asks the SM to put the core in the GPC's SUSPEND
+sleep mode (``COMMAND_CPU_LPM_MODE_SET``, ``COMMAND_CPU_IRQ_WAKE_SET`` and
+``COMMAND_CPU_SLEEP_MODE_SET``, protocol 0x82 messages 0xa, 0x8 and 0x7).
+On silicon the GPC then powers the core down at its WFI, and the SM's
+``COMMAND_CPU_START`` powers it back up and resets it at its reset vector.
+The GPC CMC A55 low-power state machine is not modelled, so the core stays
+powered in BL31's power-down WFI, and for the CPU_START the SM finds it
+running (powered, ``CA55_CPUWAIT`` clear) and does nothing. PSCI idle
+wake-up needs the same state machine, so keep ``cpuidle.off=1`` and do not
+offline CPUs under TF-A.
+
+This section used to place the fault inside BL31, because the offline then
+ended with the core in a ``wfi; b .`` loop at EL3, with no SCMI request
+other than ``COMMAND_CPU_INFO_GET`` and no ``CA55_CPUWAIT`` write. That loop
+was BL31's panic handler: TF-A's ``cortex_a55_core_pwr_dwn`` reads
+``CPUPWRCTLR_EL1``, one of the Cortex-A55 IMPLEMENTATION DEFINED registers
+the CPU model did not provide, and the UNDEF at EL3 came before BL31 asked
+the SM for anything. The CPU model now provides them.
 
 System Manager standalone
 '''''''''''''''''''''''''
@@ -455,7 +462,9 @@ Caveats
   path, so a halted CPU is not woken by a pending interrupt while its
   interface is disabled. The kernel-command-line workaround is the
   v1.0 recommendation; the deeper fix needs upstream QEMU work in
-  ``hw/intc/arm_gicv3_cpuif.c``.
+  ``hw/intc/arm_gicv3_cpuif.c``. Under ``el3-firmware=on`` there is a
+  second reason: TF-A's PSCI idle states rely on the GPC A55 suspend/wake
+  state machine, which is not modelled.
 
 * **No hardware-accelerated rendering, codec, or inference.** The Mali-G310
   GPU, Wave6 VPU and Neutron NPU are modelled far enough to be seen and
