@@ -31,7 +31,9 @@
  * is wired to that core's RVBAR input, so the core fetches its first
  * instruction from there; imx95_aonmix_a55_rvbar() surfaces the value for
  * the SoC to apply. The SM writes them shifted right by two (vectorShift in
- * its own fsl_cpu.c), so the register pair holds a word address.
+ * its own fsl_cpu.c), so the register pair holds a word address: _L is
+ * address bits [33:2] and _H implements only bits [5:0], address bits
+ * [39:34]; its bits [31:6] are reserved and read as zero (RM 32.5.1).
  *
  * INITVTOR (0x108) - the M7 boot vector the SM programs - is stored but
  * unused: our M7 boots from its ITCM reset vector (init-svtor = 0).
@@ -59,6 +61,7 @@
 #define AONMIX_CA55_RVBAR_L(n)  (0x164 + (n) * 8)
 #define AONMIX_CA55_RVBAR_H(n)  (0x168 + (n) * 8)
 #define AONMIX_CA55_RVBAR_SHIFT 2           /* the SM's vectorShift */
+#define AONMIX_CA55_RVBAR_H_MASK 0x3f       /* address bits [39:34] */
 
 struct IMX95AonmixState {
     SysBusDevice    parent_obj;
@@ -88,7 +91,8 @@ uint64_t imx95_aonmix_a55_rvbar(IMX95AonmixState *s, unsigned core)
     }
 
     words = s->regs[AONMIX_CA55_RVBAR_L(core) / 4] |
-            ((uint64_t)s->regs[AONMIX_CA55_RVBAR_H(core) / 4] << 32);
+            ((uint64_t)(s->regs[AONMIX_CA55_RVBAR_H(core) / 4] &
+                        AONMIX_CA55_RVBAR_H_MASK) << 32);
 
     return words << AONMIX_CA55_RVBAR_SHIFT;
 }
@@ -149,6 +153,9 @@ static void imx95_aonmix_write(void *opaque, hwaddr offset,
         offset < AONMIX_CA55_RVBAR_L(IMX95_AONMIX_A55_CORES)) {
         unsigned core = (offset - AONMIX_CA55_RVBAR_L(0)) / 8;
 
+        if (offset == AONMIX_CA55_RVBAR_H(core)) {
+            value &= AONMIX_CA55_RVBAR_H_MASK;
+        }
         s->regs[offset / 4] = value;
         trace_imx95_aonmix_rvbar(core, imx95_aonmix_a55_rvbar(s, core));
         return;
