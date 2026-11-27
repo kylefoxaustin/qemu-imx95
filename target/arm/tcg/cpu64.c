@@ -669,8 +669,12 @@ static void define_neoverse_v1_cp_reginfo(ARMCPU *cpu)
  * Providing them only removes the UNDEFs; the power-down itself is not
  * modelled (see CPUPWRCTLR_EL1 below).
  *
- * The DSU is not modelled either, and none of its CLUSTER*_EL1 registers
- * (DSU TRM 11.3, also listed in A55 TRM 3.2.3) is provided.
+ * The DSU is not modelled either. Of its CLUSTER*_EL1 registers (DSU TRM
+ * 11.3, also listed in A55 TRM 3.2.3) only CLUSTERPWRDN_EL1 is provided,
+ * because TF-A's i.MX 9 platform code writes it on every CPU_OFF and on
+ * every cluster-level CPU_SUSPEND without checking CPUCFR_EL1.SCU. A DEBUG
+ * build of TF-A also reads CLUSTERIDR_EL1 and CLUSTERCFR_EL1 in its errata
+ * report; those are not provided, so such a build still takes an UNDEF.
  */
 static const ARMCPRegInfo cortex_a55_cp_reginfo[] = {
     { .name = "ATCR_EL1", .state = ARM_CP_STATE_AA64,
@@ -690,6 +694,17 @@ static const ARMCPRegInfo cortex_a55_cp_reginfo[] = {
     { .name = "AVTCR_EL2", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 4, .crn = 15, .crm = 7, .opc2 = 1,
       .access = PL2_RW, .type = ARM_CP_CONST, .resetvalue = 0 },
+    /*
+     * CLUSTERPWRDN_EL1 (DSU TRM 11.14): MEMRET [1] and PWRDN [0] are only
+     * advisory hints to the power controller on CLUSTERPACTIVE, and there
+     * is no cluster power controller in the model, so this reads as its
+     * reset value 0 and ignores writes. Lower-EL writes need
+     * ACTLR_EL3.PWREN/ACTLR_EL2.PWREN (A55 TRM 3.2.6, 3.2.7), which are 0.
+     */
+    { .name = "CLUSTERPWRDN_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 3, .opc2 = 6,
+      .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
+      .accessfn = access_actlr_w },
     { .name = "CPUACTLR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 1, .opc2 = 0,
       .access = PL1_RW, .type = ARM_CP_CONST, .resetvalue = 0,
@@ -697,9 +712,12 @@ static const ARMCPRegInfo cortex_a55_cp_reginfo[] = {
     /*
      * CPUCFR_EL1 (A55 TRM 3.2.29): SCU [2] = 0 means "SCU present" and is
      * the only value the TRM lists, but, as for the Neoverse cores, report
-     * SCU as 1 because the DSU is not modelled and none of its
-     * CLUSTER*_EL1 registers exists. ECC [1:0] = 0, as the model has no
-     * ECC.
+     * SCU as 1 because the DSU is not modelled: of its CLUSTER*_EL1
+     * registers only CLUSTERPWRDN_EL1 exists, as a constant. Software
+     * cannot rely on this bit alone: TF-A checks it only in its Neoverse
+     * DSU errata code, not in its Cortex-A55 code or the i.MX 9 platform
+     * code (hence CLUSTERPWRDN_EL1 above). ECC [1:0] = 0, as the model has
+     * no ECC.
      */
     { .name = "CPUCFR_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 15, .crm = 0, .opc2 = 0,
